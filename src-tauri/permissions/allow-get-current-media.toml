@@ -1,0 +1,5 @@
+# Application permission: expose manual fetch of OS now-playing metadata (phase 1).
+[[permission]]
+identifier = "allow-get-current-media"
+description = "Allows the get_current_media command for Windows Global System Media Transport session snapshot."
+commands.allow = ["get_current_media"]

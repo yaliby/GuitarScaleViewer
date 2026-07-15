@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-get-detected-key"
+description = "Allows fetching the latest detected key snapshot from the native key engine."
+commands.allow = ["get_detected_key"]

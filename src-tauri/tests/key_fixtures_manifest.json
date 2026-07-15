@@ -1,0 +1,69 @@
+[
+  {
+    "id": "clear_major_loop",
+    "class": "easy_stable_major",
+    "path": "tests/fixtures/clear_major_loop.wav",
+    "expectedPrimary": { "key": "D", "scale": "major" },
+    "acceptableAlternatives": [
+      { "key": "B", "scale": "minor" }
+    ],
+    "expectedAmbiguous": false,
+    "expectedNotReady": false
+  },
+  {
+    "id": "clear_minor_loop",
+    "class": "easy_stable_minor",
+    "path": "tests/fixtures/clear_minor_loop.wav",
+    "expectedPrimary": { "key": "E", "scale": "minor" },
+    "acceptableAlternatives": [
+      { "key": "G", "scale": "major" }
+    ],
+    "expectedAmbiguous": false,
+    "expectedNotReady": false
+  },
+  {
+    "id": "relative_ambiguous_excerpt",
+    "class": "relative_major_minor_ambiguity",
+    "path": "tests/fixtures/relative_ambiguous_excerpt.wav",
+    "expectedPrimary": { "key": "A", "scale": "minor" },
+    "acceptableAlternatives": [
+      { "key": "C", "scale": "major" }
+    ],
+    "expectedAmbiguous": true,
+    "expectedNotReady": true
+  },
+  {
+    "id": "edm_mixed_excerpt",
+    "class": "contradiction_prone",
+    "path": "tests/fixtures/edm_mixed_excerpt.wav",
+    "expectedPrimary": { "key": "A", "scale": "minor" },
+    "acceptableAlternatives": [
+      { "key": "C", "scale": "major" },
+      { "key": "D", "scale": "minor" }
+    ],
+    "expectedAmbiguous": false,
+    "expectedNotReady": true
+  },
+  {
+    "id": "guitar_rock_intro_then_hook",
+    "class": "dominant_bias_failure_case",
+    "path": "tests/fixtures/guitar_rock_intro_then_hook.wav",
+    "expectedPrimary": { "key": "E", "scale": "minor" },
+    "acceptableAlternatives": [
+      { "key": "G", "scale": "major" }
+    ],
+    "expectedAmbiguous": false,
+    "expectedNotReady": true
+  },
+  {
+    "id": "relative_pair_ground_truth_e_minor",
+    "class": "relative_ground_truth_minor_center",
+    "path": "tests/fixtures/guitar_rock_intro_then_hook.wav",
+    "expectedPrimary": { "key": "E", "scale": "minor" },
+    "acceptableAlternatives": [
+      { "key": "G", "scale": "major" }
+    ],
+    "expectedAmbiguous": false,
+    "expectedNotReady": true
+  }
+]

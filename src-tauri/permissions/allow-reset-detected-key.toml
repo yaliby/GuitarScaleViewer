@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-reset-detected-key"
+description = "Allows resetting the key detection engine warmup/state."
+commands.allow = ["reset_detected_key"]

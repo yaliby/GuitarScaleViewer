@@ -1,0 +1,393 @@
+{
+  "generatedAtEpochMs": 1777161912401,
+  "repeatCount": 3,
+  "elapsedMs": 26190.78,
+  "currentReady": {
+    "ready": true,
+    "essentiaAvailable": true,
+    "numpyAvailable": true,
+    "librosaAvailable": false,
+    "numpyError": null,
+    "librosaError": null,
+    "essentiaError": null
+  },
+  "libkeyfinderCli": "/home/rdpuser/.gsv-libkeyfinder-spike/gsv-libkeyfinder-cli",
+  "results": [
+    {
+      "id": "clear_major_loop",
+      "class": "easy_stable_major",
+      "expectedPrimary": {
+        "key": "D",
+        "scale": "major"
+      },
+      "acceptableAlternatives": [
+        {
+          "key": "B",
+          "scale": "minor"
+        }
+      ],
+      "currentRuns": [
+        {
+          "key": "G",
+          "scale": "minor",
+          "share": 1.0,
+          "backendUsed": "essentia",
+          "fallbackReason": null,
+          "latencyMs": 204.79,
+          "windowCount": 30
+        },
+        {
+          "key": "G",
+          "scale": "minor",
+          "share": 1.0,
+          "backendUsed": "essentia",
+          "fallbackReason": null,
+          "latencyMs": 194.57,
+          "windowCount": 30
+        },
+        {
+          "key": "G",
+          "scale": "minor",
+          "share": 1.0,
+          "backendUsed": "essentia",
+          "fallbackReason": null,
+          "latencyMs": 193.2,
+          "windowCount": 30
+        }
+      ],
+      "libkeyfinderRuns": [
+        {
+          "key": "D",
+          "scale": "major",
+          "latencyMs": 1018.71
+        },
+        {
+          "key": "D",
+          "scale": "major",
+          "latencyMs": 1013.66
+        },
+        {
+          "key": "D",
+          "scale": "major",
+          "latencyMs": 1013.93
+        }
+      ],
+      "currentOscillation": false,
+      "libkeyfinderOscillation": false
+    },
+    {
+      "id": "clear_minor_loop",
+      "class": "easy_stable_minor",
+      "expectedPrimary": {
+        "key": "E",
+        "scale": "minor"
+      },
+      "acceptableAlternatives": [
+        {
+          "key": "G",
+          "scale": "major"
+        }
+      ],
+      "currentRuns": [
+        {
+          "key": "E",
+          "scale": "minor",
+          "share": 1.0,
+          "backendUsed": "essentia",
+          "fallbackReason": null,
+          "latencyMs": 169.33,
+          "windowCount": 20
+        },
+        {
+          "key": "E",
+          "scale": "minor",
+          "share": 1.0,
+          "backendUsed": "essentia",
+          "fallbackReason": null,
+          "latencyMs": 140.71,
+          "windowCount": 20
+        },
+        {
+          "key": "E",
+          "scale": "minor",
+          "share": 1.0,
+          "backendUsed": "essentia",
+          "fallbackReason": null,
+          "latencyMs": 155.69,
+          "windowCount": 20
+        }
+      ],
+      "libkeyfinderRuns": [
+        {
+          "key": "E",
+          "scale": "minor",
+          "latencyMs": 792.42
+        },
+        {
+          "key": "E",
+          "scale": "minor",
+          "latencyMs": 745.01
+        },
+        {
+          "key": "E",
+          "scale": "minor",
+          "latencyMs": 747.8
+        }
+      ],
+      "currentOscillation": false,
+      "libkeyfinderOscillation": false
+    },
+    {
+      "id": "relative_ambiguous_excerpt",
+      "class": "relative_major_minor_ambiguity",
+      "expectedPrimary": {
+        "key": "A",
+        "scale": "minor"
+      },
+      "acceptableAlternatives": [
+        {
+          "key": "C",
+          "scale": "major"
+        }
+      ],
+      "currentRuns": [
+        {
+          "key": "C",
+          "scale": "major",
+          "share": 1.0,
+          "backendUsed": "essentia",
+          "fallbackReason": null,
+          "latencyMs": 261.77,
+          "windowCount": 40
+        },
+        {
+          "key": "C",
+          "scale": "major",
+          "share": 1.0,
+          "backendUsed": "essentia",
+          "fallbackReason": null,
+          "latencyMs": 255.61,
+          "windowCount": 40
+        },
+        {
+          "key": "C",
+          "scale": "major",
+          "share": 1.0,
+          "backendUsed": "essentia",
+          "fallbackReason": null,
+          "latencyMs": 239.14,
+          "windowCount": 40
+        }
+      ],
+      "libkeyfinderRuns": [
+        {
+          "key": "C",
+          "scale": "major",
+          "latencyMs": 1305.57
+        },
+        {
+          "key": "C",
+          "scale": "major",
+          "latencyMs": 1191.85
+        },
+        {
+          "key": "C",
+          "scale": "major",
+          "latencyMs": 1666.0
+        }
+      ],
+      "currentOscillation": false,
+      "libkeyfinderOscillation": false
+    },
+    {
+      "id": "edm_mixed_excerpt",
+      "class": "contradiction_prone",
+      "expectedPrimary": {
+        "key": "A",
+        "scale": "minor"
+      },
+      "acceptableAlternatives": [
+        {
+          "key": "C",
+          "scale": "major"
+        },
+        {
+          "key": "D",
+          "scale": "minor"
+        }
+      ],
+      "currentRuns": [
+        {
+          "key": "G",
+          "scale": "minor",
+          "share": 0.6035941664107092,
+          "backendUsed": "essentia",
+          "fallbackReason": null,
+          "latencyMs": 419.38,
+          "windowCount": 65
+        },
+        {
+          "key": "G",
+          "scale": "minor",
+          "share": 0.6035941664107092,
+          "backendUsed": "essentia",
+          "fallbackReason": null,
+          "latencyMs": 388.67,
+          "windowCount": 65
+        },
+        {
+          "key": "G",
+          "scale": "minor",
+          "share": 0.6035941664107092,
+          "backendUsed": "essentia",
+          "fallbackReason": null,
+          "latencyMs": 397.14,
+          "windowCount": 65
+        }
+      ],
+      "libkeyfinderRuns": [
+        {
+          "key": "E",
+          "scale": "minor",
+          "latencyMs": 2095.57
+        },
+        {
+          "key": "E",
+          "scale": "minor",
+          "latencyMs": 1827.56
+        },
+        {
+          "key": "E",
+          "scale": "minor",
+          "latencyMs": 2064.59
+        }
+      ],
+      "currentOscillation": false,
+      "libkeyfinderOscillation": false
+    },
+    {
+      "id": "guitar_rock_intro_then_hook",
+      "class": "dominant_bias_failure_case",
+      "expectedPrimary": {
+        "key": "E",
+        "scale": "minor"
+      },
+      "acceptableAlternatives": [
+        {
+          "key": "G",
+          "scale": "major"
+        }
+      ],
+      "currentRuns": [
+        {
+          "key": "C",
+          "scale": "major",
+          "share": 0.5247625086018713,
+          "backendUsed": "essentia",
+          "fallbackReason": null,
+          "latencyMs": 215.04,
+          "windowCount": 30
+        },
+        {
+          "key": "C",
+          "scale": "major",
+          "share": 0.5247625086018713,
+          "backendUsed": "essentia",
+          "fallbackReason": null,
+          "latencyMs": 196.79,
+          "windowCount": 30
+        },
+        {
+          "key": "C",
+          "scale": "major",
+          "share": 0.5247625086018713,
+          "backendUsed": "essentia",
+          "fallbackReason": null,
+          "latencyMs": 189.64,
+          "windowCount": 30
+        }
+      ],
+      "libkeyfinderRuns": [
+        {
+          "key": "G",
+          "scale": "major",
+          "latencyMs": 991.65
+        },
+        {
+          "key": "G",
+          "scale": "major",
+          "latencyMs": 993.2
+        },
+        {
+          "key": "G",
+          "scale": "major",
+          "latencyMs": 981.98
+        }
+      ],
+      "currentOscillation": false,
+      "libkeyfinderOscillation": false
+    },
+    {
+      "id": "relative_pair_ground_truth_e_minor",
+      "class": "relative_ground_truth_minor_center",
+      "expectedPrimary": {
+        "key": "E",
+        "scale": "minor"
+      },
+      "acceptableAlternatives": [
+        {
+          "key": "G",
+          "scale": "major"
+        }
+      ],
+      "currentRuns": [
+        {
+          "key": "C",
+          "scale": "major",
+          "share": 0.5247625086018713,
+          "backendUsed": "essentia",
+          "fallbackReason": null,
+          "latencyMs": 188.17,
+          "windowCount": 30
+        },
+        {
+          "key": "C",
+          "scale": "major",
+          "share": 0.5247625086018713,
+          "backendUsed": "essentia",
+          "fallbackReason": null,
+          "latencyMs": 191.63,
+          "windowCount": 30
+        },
+        {
+          "key": "C",
+          "scale": "major",
+          "share": 0.5247625086018713,
+          "backendUsed": "essentia",
+          "fallbackReason": null,
+          "latencyMs": 191.5,
+          "windowCount": 30
+        }
+      ],
+      "libkeyfinderRuns": [
+        {
+          "key": "G",
+          "scale": "major",
+          "latencyMs": 1184.89
+        },
+        {
+          "key": "G",
+          "scale": "major",
+          "latencyMs": 1188.76
+        },
+        {
+          "key": "G",
+          "scale": "major",
+          "latencyMs": 1172.99
+        }
+      ],
+      "currentOscillation": false,
+      "libkeyfinderOscillation": false
+    }
+  ]
+}
