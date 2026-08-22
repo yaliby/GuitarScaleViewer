@@ -49,8 +49,9 @@ export function parseKeyAndMode(raw: string): ParsedKey | null {
 
   const lower = compact.toLowerCase();
   const modeMatch = lower.match(/\b(major|minor|maj|min)\b/);
-  const mode: 'major' | 'minor' | null = modeMatch
-    ? modeMatch[1].startsWith('maj')
+  const matchedMode = modeMatch?.[1];
+  const mode: 'major' | 'minor' | null = matchedMode
+    ? matchedMode.startsWith('maj')
       ? 'major'
       : 'minor'
     : /(?:^|[^a-z])m$/.test(lower.replace(/\s+/g, ''))
@@ -62,15 +63,17 @@ export function parseKeyAndMode(raw: string): ParsedKey | null {
     .replace(/[-,]/g, ' ')
     .trim();
   const tonicMatch = tonicChunk.match(/^([A-Ga-g])\s*(#|b|sharp|flat)?/i);
-  if (!tonicMatch || !mode) {
+  const tonicLetter = tonicMatch?.[1];
+  if (!tonicLetter || !mode) {
     const short = compact.replace(/\s+/g, '');
     const shortMatch = short.match(/^([A-Ga-g])(#|b)?m$/i);
-    if (shortMatch) {
-      return { key: normalizeTonic(shortMatch[1], shortMatch[2] ?? ''), mode: 'minor' };
+    const shortLetter = shortMatch?.[1];
+    if (!shortLetter) {
+      return null;
     }
-    return null;
+    return { key: normalizeTonic(shortLetter, shortMatch?.[2] ?? ''), mode: 'minor' };
   }
-  return { key: normalizeTonic(tonicMatch[1], tonicMatch[2] ?? ''), mode };
+  return { key: normalizeTonic(tonicLetter, tonicMatch?.[2] ?? ''), mode };
 }
 
 function normalizeTonic(letter: string, accidental: string): string {
