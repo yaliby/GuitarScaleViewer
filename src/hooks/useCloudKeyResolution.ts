@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import type { DetectedKeyState } from './useDetectedKey';
 import type { MediaSessionUiState } from './useMediaSession';
-import { lookupSongKey, submitSongKeySuggestion } from '../services/songKeyApi';
+import { lookupSongKey, submitSongKeySuggestion, type KeyLookupSource } from '../services/songKeyApi';
 import { buildTrackIdentity } from '../services/trackIdentity';
 
 type CloudState = 'idle' | 'lookup_pending' | 'hit' | 'miss' | 'error';
@@ -11,6 +11,7 @@ type ResolutionState =
   | 'paused'
   | 'cloud_lookup'
   | 'cloud_hit'
+  | 'catalog_hit'
   | 'cloud_miss_local_detecting'
   | 'local_detecting'
   | 'ready'
@@ -21,10 +22,21 @@ type CloudHit = {
   key: string;
   mode: 'major' | 'minor';
   displayName: string;
+  verified: boolean;
+  source: KeyLookupSource;
+  sourceLabel: string;
 };
 
 type CacheEntry =
-  | { state: 'hit'; expiresAt: number; key: string; mode: 'major' | 'minor' }
+  | {
+      state: 'hit';
+      expiresAt: number;
+      key: string;
+      mode: 'major' | 'minor';
+      verified: boolean;
+      source: KeyLookupSource;
+      sourceLabel: string;
+    }
   | { state: 'miss'; expiresAt: number };
 
 type CloudControlWire = {
@@ -148,10 +160,13 @@ export function useCloudKeyResolution(media: MediaSessionUiState, detectedKey: D
           key: cached.key,
           mode: cached.mode,
           displayName: `${cached.key} ${cached.mode}`,
+          verified: cached.verified,
+          source: cached.source,
+          sourceLabel: cached.sourceLabel,
         };
         setCloudState('hit');
         setCloudHit(hit);
-        setResolutionState('cloud_hit');
+        setResolutionState(cached.verified ? 'cloud_hit' : 'catalog_hit');
         void syncCloudControl({
           track_identity: trackIdentity,
           state: 'hit',
@@ -204,13 +219,23 @@ export function useCloudKeyResolution(media: MediaSessionUiState, detectedKey: D
             state: 'hit',
             key,
             mode,
+            verified: result.song.verified,
+            source: result.song.source,
+            sourceLabel: result.song.sourceLabel,
             expiresAt: Date.now() + 30 * 60_000,
           });
-          const hit: CloudHit = { key, mode, displayName: `${key} ${mode}` };
+          const hit: CloudHit = {
+            key,
+            mode,
+            displayName: `${key} ${mode}`,
+            verified: result.song.verified,
+            source: result.song.source,
+            sourceLabel: result.song.sourceLabel,
+          };
           setCloudState('hit');
           setCloudHit(hit);
           setCloudError(null);
-          setResolutionState('cloud_hit');
+          setResolutionState(result.song.verified ? 'cloud_hit' : 'catalog_hit');
           void syncCloudControl({
             track_identity: trackIdentity,
             state: 'hit',
@@ -218,7 +243,13 @@ export function useCloudKeyResolution(media: MediaSessionUiState, detectedKey: D
             mode,
             error: null,
           });
-          console.info('key_resolution: cloud lookup hit', { trackIdentity, key, mode });
+          console.info('key_resolution: catalog lookup hit', {
+            trackIdentity,
+            key,
+            mode,
+            source: result.song.source,
+            verified: result.song.verified,
+          });
         } else {
           cacheRef.current.set(trackIdentity, {
             state: 'miss',
@@ -268,7 +299,7 @@ export function useCloudKeyResolution(media: MediaSessionUiState, detectedKey: D
 
   useEffect(() => {
     if (cloudState === 'hit') {
-      setResolutionState('cloud_hit');
+      setResolutionState(cloudHit?.verified ? 'cloud_hit' : 'catalog_hit');
       return;
     }
     if (cloudState === 'lookup_pending') {
@@ -282,11 +313,11 @@ export function useCloudKeyResolution(media: MediaSessionUiState, detectedKey: D
         setResolutionState(cloudState === 'miss' ? 'cloud_miss_local_detecting' : 'local_detecting');
       }
     }
-  }, [cloudState, detectedKey.ambiguous, detectedKey.primaryKey, detectedKey.primaryScale]);
+  }, [cloudHit?.verified, cloudState, detectedKey.ambiguous, detectedKey.primaryKey, detectedKey.primaryScale]);
 
-  const source = useMemo<'cloud_verified' | 'local_detected' | 'none'>(() => {
+  const source = useMemo<'cloud_verified' | 'catalog' | 'local_detected' | 'none'>(() => {
     if (cloudState === 'hit' && cloudHit) {
-      return 'cloud_verified';
+      return cloudHit.verified ? 'cloud_verified' : 'catalog';
     }
     if (detectedKey.primaryKey && detectedKey.primaryScale) {
       return 'local_detected';
@@ -298,11 +329,14 @@ export function useCloudKeyResolution(media: MediaSessionUiState, detectedKey: D
     if (source === 'cloud_verified') {
       return 'Verified cloud key';
     }
+    if (source === 'catalog' && cloudHit) {
+      return `Catalog key (${cloudHit.sourceLabel})`;
+    }
     if (source === 'local_detected') {
       return 'Local audio detection';
     }
     return 'No key yet';
-  }, [source]);
+  }, [source, cloudHit]);
 
   const submitSuggestion = useCallback(
     async (key: string, mode: 'major' | 'minor') => {
