@@ -43,9 +43,7 @@ pub fn run() {
 
         log::info!("log file reset at '{}'", log_file.display());
       }
-      #[cfg(windows)]
       media_session::spawn_media_session_poller(app.handle().clone());
-      #[cfg(windows)]
       key_engine::spawn_key_engine(app.handle().clone());
       Ok(())
     })

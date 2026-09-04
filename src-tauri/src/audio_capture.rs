@@ -2,10 +2,21 @@ use crate::audio_models::CaptureMode;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
+#[cfg(any(windows, target_os = "linux"))]
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(any(windows, target_os = "linux"))]
+use std::sync::mpsc::{Receiver, TryRecvError};
+#[cfg(any(windows, target_os = "linux"))]
+use std::sync::Arc;
+#[cfg(any(windows, target_os = "linux"))]
+use std::thread::JoinHandle;
+
 const ANALYZER_SAMPLE_RATE_HZ: u32 = 44_100;
 const ROLLING_BUFFER_SECONDS: usize = 60;
+#[cfg_attr(not(windows), allow(dead_code))]
 const PROCESS_FALLBACK_FAILURE_THRESHOLD: u32 = 3;
 const ENDPOINT_UNAVAILABLE_FAILURE_THRESHOLD: u32 = 3;
+#[cfg_attr(not(windows), allow(dead_code))]
 const PROCESS_REACQUIRE_COOLDOWN: Duration = Duration::from_secs(20);
 const DISCONNECT_GRACE_PERIOD: Duration = Duration::from_millis(2500);
 const RECENT_SILENCE_BLOCK_WINDOW: Duration = Duration::from_secs(14);
@@ -21,16 +32,69 @@ pub struct CaptureSnapshot {
     pub recent_silence: bool,
 }
 
+#[cfg(any(windows, target_os = "linux"))]
+const CAPTURE_CHANNEL_CAPACITY: usize = 256;
+
+#[cfg(any(windows, target_os = "linux"))]
+#[derive(Debug)]
+struct CapturePacket {
+    sample_rate_hz: u32,
+    mono_samples: Vec<f32>,
+}
+
+#[cfg(any(windows, target_os = "linux"))]
+struct CaptureWorkerHandle {
+    stop: Arc<AtomicBool>,
+    #[allow(dead_code)]
+    join: JoinHandle<()>,
+}
+
+#[cfg(any(windows, target_os = "linux"))]
+impl CaptureWorkerHandle {
+    fn request_stop(&self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
+}
+
+#[cfg(any(windows, target_os = "linux"))]
+fn drain_capture_channel(
+    receiver: &Receiver<CapturePacket>,
+    mut on_packet: impl FnMut(CapturePacket),
+) -> (bool, bool) {
+    let mut received_any = false;
+    let mut disconnected = false;
+    loop {
+        match receiver.try_recv() {
+            Ok(packet) => {
+                received_any = true;
+                on_packet(packet);
+            }
+            Err(TryRecvError::Empty) => break,
+            Err(TryRecvError::Disconnected) => {
+                disconnected = true;
+                break;
+            }
+        }
+    }
+    (received_any, disconnected)
+}
+
+fn native_loopback_supported() -> bool {
+    cfg!(any(windows, target_os = "linux"))
+}
+
 #[cfg(windows)]
 mod win {
     use std::collections::VecDeque;
     use std::ffi::OsStr;
     use std::path::Path;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
+    use std::sync::mpsc::{self, Receiver, SyncSender};
     use std::sync::Arc;
     use std::thread::{self, JoinHandle};
     use std::time::Duration;
+
+    use super::{CapturePacket, CaptureWorkerHandle, CAPTURE_CHANNEL_CAPACITY};
 
     use sysinfo::{ProcessRefreshKind, RefreshKind, System};
     use wasapi::{
@@ -39,29 +103,9 @@ mod win {
     };
 
     const CAPTURE_CHUNK_FRAMES: usize = 4096;
-    const CAPTURE_CHANNEL_CAPACITY: usize = 256;
     /// Default when mix format cannot be read (e.g. process loopback).
     const CAPTURE_SAMPLE_RATE_HZ: usize = 48_000;
     const CAPTURE_CHANNELS: usize = 2;
-
-    #[derive(Debug)]
-    pub struct CapturePacket {
-        pub sample_rate_hz: u32,
-        pub mono_samples: Vec<f32>,
-    }
-
-    #[derive(Debug)]
-    pub struct CaptureWorkerHandle {
-        stop: Arc<AtomicBool>,
-        #[allow(dead_code)]
-        join: JoinHandle<()>,
-    }
-
-    impl CaptureWorkerHandle {
-        pub fn request_stop(&self) {
-            self.stop.store(true, Ordering::Relaxed);
-        }
-    }
 
     /// Decode one WASAPI packet using the **actual** stream format (channels / PCM vs float / bit depth).
     fn decode_frames_to_mono(bytes: &[u8], wf: &WaveFormat) -> Vec<f32> {
@@ -442,27 +486,119 @@ mod win {
             .ok_or_else(|| format!("no process resolved for source app {source_app}"))?;
         spawn_worker(CaptureSource::ProcessLoopback { pid })
     }
+}
 
-    pub fn drain_capture_channel(
-        receiver: &Receiver<CapturePacket>,
-        mut on_packet: impl FnMut(CapturePacket),
-    ) -> (bool, bool) {
-        let mut received_any = false;
-        let mut disconnected = false;
-        loop {
-            match receiver.try_recv() {
-                Ok(packet) => {
-                    received_any = true;
-                    on_packet(packet);
-                }
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => {
-                    disconnected = true;
-                    break;
-                }
+#[cfg(target_os = "linux")]
+mod linux {
+    use super::{CapturePacket, CaptureWorkerHandle, CAPTURE_CHANNEL_CAPACITY, ANALYZER_SAMPLE_RATE_HZ};
+    use libpulse_binding::sample::{Format, Spec};
+    use libpulse_binding::stream::Direction;
+    use libpulse_simple_binding::Simple;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc::{self, Receiver};
+    use std::sync::Arc;
+    use std::thread;
+    use std::time::Duration;
+
+    const CAPTURE_CHUNK_FRAMES: usize = 4096;
+    const CAPTURE_CHANNELS: u8 = 1;
+
+    fn open_monitor_stream() -> Result<Simple, String> {
+        let spec = Spec {
+            format: Format::F32le,
+            channels: CAPTURE_CHANNELS,
+            rate: ANALYZER_SAMPLE_RATE_HZ,
+        };
+        if !spec.is_valid() {
+            return Err("pulse sample spec invalid".to_string());
+        }
+
+        // `@DEFAULT_MONITOR@` is the Pulse/PipeWire equivalent of WASAPI endpoint loopback.
+        let first = Simple::new(
+            None,
+            "guitar-scale-viewer",
+            Direction::Record,
+            Some("@DEFAULT_MONITOR@"),
+            "system-audio-capture",
+            &spec,
+            None,
+            None,
+        );
+        match first {
+            Ok(simple) => Ok(simple),
+            Err(err) => {
+                log::warn!(
+                    "audio_capture: pulse @DEFAULT_MONITOR@ failed ({err}); trying default source"
+                );
+                Simple::new(
+                    None,
+                    "guitar-scale-viewer",
+                    Direction::Record,
+                    None,
+                    "system-audio-capture",
+                    &spec,
+                    None,
+                    None,
+                )
+                .map_err(|e| format!("pulse simple record: {e}"))
             }
         }
-        (received_any, disconnected)
+    }
+
+    fn f32le_mono(bytes: &[u8]) -> Vec<f32> {
+        let mut out = Vec::with_capacity(bytes.len() / 4);
+        let mut i = 0;
+        while i + 4 <= bytes.len() {
+            let sample = f32::from_le_bytes([bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]);
+            out.push(sample.clamp(-1.0, 1.0));
+            i += 4;
+        }
+        out
+    }
+
+    pub fn start_endpoint_loopback_capture(
+    ) -> Result<(CaptureWorkerHandle, Receiver<CapturePacket>), String> {
+        // Open once on the caller thread so start failures surface immediately.
+        let _probe = open_monitor_stream()?;
+        drop(_probe);
+
+        let (tx, rx) = mpsc::sync_channel::<CapturePacket>(CAPTURE_CHANNEL_CAPACITY);
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_for_thread = stop.clone();
+        let join = thread::Builder::new()
+            .name("audio-capture-worker".into())
+            .spawn(move || {
+                let simple = match open_monitor_stream() {
+                    Ok(s) => s,
+                    Err(e) => {
+                        log::warn!("audio_capture: pulse monitor open failed: {e}");
+                        return;
+                    }
+                };
+                let mut buf = vec![0u8; CAPTURE_CHUNK_FRAMES * 4];
+                while !stop_for_thread.load(Ordering::Relaxed) {
+                    if let Err(e) = simple.read(&mut buf) {
+                        log::warn!("audio_capture: pulse read failed: {e}");
+                        thread::sleep(Duration::from_millis(20));
+                        continue;
+                    }
+                    let mono = f32le_mono(&buf);
+                    if mono.is_empty() {
+                        continue;
+                    }
+                    if tx
+                        .send(CapturePacket {
+                            sample_rate_hz: ANALYZER_SAMPLE_RATE_HZ,
+                            mono_samples: mono,
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            })
+            .map_err(|e| format!("spawn pulse capture worker: {e}"))?;
+        Ok((CaptureWorkerHandle { stop, join }, rx))
     }
 }
 
@@ -477,23 +613,25 @@ pub struct AudioCaptureManager {
     requested_mode: CaptureMode,
     mode_reason: Option<String>,
     last_ingest: Instant,
+    #[cfg_attr(not(windows), allow(dead_code))]
     process_start_failures: u32,
     endpoint_start_failures: u32,
     disconnected_since: Option<Instant>,
+    #[cfg_attr(not(windows), allow(dead_code))]
     last_process_attempt: Option<Instant>,
     last_silent_capture_log: Option<Instant>,
     recent_silence_until: Option<Instant>,
-    #[cfg(windows)]
-    receiver: Option<std::sync::mpsc::Receiver<win::CapturePacket>>,
-    #[cfg(windows)]
-    worker: Option<win::CaptureWorkerHandle>,
+    #[cfg(any(windows, target_os = "linux"))]
+    receiver: Option<Receiver<CapturePacket>>,
+    #[cfg(any(windows, target_os = "linux"))]
+    worker: Option<CaptureWorkerHandle>,
 }
 
 impl AudioCaptureManager {
     pub fn new() -> Self {
         let max_samples = ANALYZER_SAMPLE_RATE_HZ as usize * ROLLING_BUFFER_SECONDS;
         Self {
-            capture_mode: if cfg!(windows) {
+            capture_mode: if native_loopback_supported() {
                 CaptureMode::EndpointLoopback
             } else {
                 CaptureMode::Unavailable
@@ -505,6 +643,8 @@ impl AudioCaptureManager {
             has_live_capture: false,
             requested_mode: if cfg!(windows) {
                 CaptureMode::ProcessLoopback
+            } else if cfg!(target_os = "linux") {
+                CaptureMode::EndpointLoopback
             } else {
                 CaptureMode::Unavailable
             },
@@ -516,9 +656,9 @@ impl AudioCaptureManager {
             last_process_attempt: None,
             last_silent_capture_log: None,
             recent_silence_until: None,
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             receiver: None,
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             worker: None,
         }
     }
@@ -540,7 +680,7 @@ impl AudioCaptureManager {
     }
 
     fn stop_worker(&mut self) {
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         {
             if let Some(worker) = &self.worker {
                 worker.request_stop();
@@ -552,7 +692,7 @@ impl AudioCaptureManager {
     }
 
     pub fn stop_capture(&mut self, reason: &str) {
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         {
             if self.worker.is_some() || self.receiver.is_some() {
                 log::info!(
@@ -568,11 +708,72 @@ impl AudioCaptureManager {
             self.mode_reason = Some(format!("capture_stopped:{reason}"));
             self.reset();
         }
+        #[cfg(not(any(windows, target_os = "linux")))]
+        {
+            let _ = reason;
+            self.requested_mode = CaptureMode::Unavailable;
+            self.capture_mode = CaptureMode::Unavailable;
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn start_linux_monitor(&mut self, preserve_buffer: bool) {
+        self.requested_mode = CaptureMode::EndpointLoopback;
+        match linux::start_endpoint_loopback_capture() {
+            Ok((worker, rx)) => {
+                self.capture_mode = CaptureMode::EndpointLoopback;
+                self.mode_reason = Some("endpoint_loopback_active".to_string());
+                self.worker = Some(worker);
+                self.receiver = Some(rx);
+                self.endpoint_start_failures = 0;
+                if !preserve_buffer {
+                    self.reset();
+                }
+                log::info!(
+                    "audio_capture: capture started mode=EndpointLoopback target={:?}",
+                    self.target_app
+                );
+            }
+            Err(err) => {
+                self.endpoint_start_failures = self.endpoint_start_failures.saturating_add(1);
+                log::warn!(
+                    "audio_capture: pulse monitor start failed attempt {} ({err})",
+                    self.endpoint_start_failures
+                );
+                if self.endpoint_start_failures >= ENDPOINT_UNAVAILABLE_FAILURE_THRESHOLD {
+                    self.capture_mode = CaptureMode::Unavailable;
+                    self.mode_reason = Some("endpoint_unavailable".to_string());
+                    self.worker = None;
+                    self.receiver = None;
+                    log::error!("audio_capture: sustained pulse monitor failures; mode set to unavailable");
+                }
+            }
+        }
     }
 
     pub fn ensure_capture_running_for_target(&mut self, target_app: Option<String>) {
-        if !cfg!(windows) {
+        if !native_loopback_supported() {
             self.capture_mode = CaptureMode::Unavailable;
+            return;
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            let target_changed = self.target_app != target_app;
+            let needs_boot = self.worker.is_none();
+            if !target_changed && !needs_boot {
+                return;
+            }
+            let preserve_buffer = !target_changed;
+            if target_changed {
+                self.stop_worker();
+                self.target_app = target_app;
+                self.endpoint_start_failures = 0;
+                self.reset();
+            } else {
+                self.stop_worker();
+            }
+            self.start_linux_monitor(preserve_buffer);
             return;
         }
 
@@ -729,15 +930,36 @@ impl AudioCaptureManager {
                 }
             }
         }
+        #[cfg(target_os = "linux")]
+        {
+            log::warn!(
+                "audio_capture: restarting pulse monitor reason={} previous_mode={:?} target={:?}",
+                reason,
+                self.capture_mode,
+                self.target_app
+            );
+            self.stop_worker();
+            self.endpoint_start_failures = 0;
+            self.start_linux_monitor(false);
+            if self.capture_mode == CaptureMode::EndpointLoopback {
+                self.mode_reason = Some(format!("forced_endpoint_fallback:{reason}"));
+            } else {
+                self.mode_reason = Some(format!("forced_endpoint_fallback_failed:{reason}"));
+            }
+        }
+        #[cfg(not(any(windows, target_os = "linux")))]
+        {
+            let _ = reason;
+        }
     }
 
     pub fn poll_capture_samples(&mut self) {
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         {
-            let mut packets: Vec<win::CapturePacket> = Vec::new();
+            let mut packets: Vec<CapturePacket> = Vec::new();
             let mut packet_peak_max: f32 = 0.0;
             let (received_any, disconnected) = if let Some(rx) = self.receiver.as_ref() {
-                win::drain_capture_channel(rx, |packet| packets.push(packet))
+                drain_capture_channel(rx, |packet| packets.push(packet))
             } else {
                 (false, false)
             };
