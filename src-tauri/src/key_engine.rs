@@ -1056,6 +1056,42 @@ fn relative_pair_from_payload(payload: &DetectedKeyPayload) -> (bool, Option<Str
     (false, None, 0.0)
 }
 
+fn default_python_command() -> String {
+    std::env::var("KEY_ANALYZER_PYTHON")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| {
+            if cfg!(windows) {
+                "py".to_string()
+            } else {
+                "python3".to_string()
+            }
+        })
+}
+
+fn analyzer_executable_candidates(cwd: &std::path::Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if cfg!(windows) {
+        out.push(cwd.join("sidecars").join("key_analyzer").join("key_analyzer.exe"));
+        out.push(
+            cwd.join("src-tauri")
+                .join("sidecars")
+                .join("key_analyzer")
+                .join("key_analyzer.exe"),
+        );
+    } else {
+        out.push(cwd.join("sidecars").join("key_analyzer").join("key_analyzer"));
+        out.push(
+            cwd.join("src-tauri")
+                .join("sidecars")
+                .join("key_analyzer")
+                .join("key_analyzer"),
+        );
+    }
+    out
+}
+
 fn build_current_detector() -> Box<dyn KeyDetector> {
     if let Ok(wsl_sidecar) = std::env::var("KEY_ANALYZER_WSL_SIDECAR") {
         let wsl_sidecar = wsl_sidecar.trim().to_string();
@@ -1075,24 +1111,14 @@ fn build_current_detector() -> Box<dyn KeyDetector> {
     if let Ok(configured) = std::env::var("KEY_ANALYZER_SIDECAR") {
         let path = PathBuf::from(&configured);
         if configured.to_ascii_lowercase().ends_with(".py") {
-            let python = std::env::var("KEY_ANALYZER_PYTHON")
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-                .unwrap_or_else(|| "py".to_string());
+            let python = default_python_command();
             return Box::new(SidecarKeyDetector::from_python_script(&python, path));
         }
         return Box::new(SidecarKeyDetector::from_executable(path));
     }
 
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let exe_candidates = [
-        cwd.join("sidecars").join("key_analyzer").join("key_analyzer.exe"),
-        cwd.join("src-tauri")
-            .join("sidecars")
-            .join("key_analyzer")
-            .join("key_analyzer.exe"),
-    ];
-    if let Some(exe) = find_existing_path(&exe_candidates) {
+    if let Some(exe) = find_existing_path(&analyzer_executable_candidates(&cwd)) {
         return Box::new(SidecarKeyDetector::from_executable(exe));
     }
 
@@ -1104,12 +1130,16 @@ fn build_current_detector() -> Box<dyn KeyDetector> {
             .join("key_analyzer.py"),
     ];
     if let Some(py_script) = find_existing_path(&py_candidates) {
-        return Box::new(SidecarKeyDetector::from_python_script("py", py_script));
+        let python = default_python_command();
+        return Box::new(SidecarKeyDetector::from_python_script(&python, py_script));
     }
 
-    Box::new(SidecarKeyDetector::from_executable(PathBuf::from(
-        "sidecars/key_analyzer/key_analyzer.exe",
-    )))
+    let fallback = if cfg!(windows) {
+        PathBuf::from("sidecars/key_analyzer/key_analyzer.exe")
+    } else {
+        PathBuf::from("sidecars/key_analyzer/key_analyzer")
+    };
+    Box::new(SidecarKeyDetector::from_executable(fallback))
 }
 
 fn build_libkeyfinder_detector() -> Option<Box<dyn KeyDetector>> {

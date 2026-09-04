@@ -47,7 +47,8 @@ function wireToUi(w: MediaSessionWire): MediaSessionUiState {
 
 /**
  * Subscribes to Tauri `media-session-update` (no React-side polling).
- * Phase 2 may extend this path with key lookup / audio analysis → scale UI.
+ * Windows uses GSMTC; Linux uses MPRIS. Phase 2 may extend this path with
+ * key lookup / audio analysis → scale UI.
  */
 export function useMediaSession(): MediaSessionUiState {
   const [state, setState] = useState<MediaSessionUiState>(() =>
