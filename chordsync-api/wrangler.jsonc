@@ -15,6 +15,11 @@
 		"nodejs_compat"
 	]
 	/**
+	 * Secrets (wrangler secret put):
+	 * SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, ADMIN_SECRET
+	 * FREQBLOG_API_KEY, GETSONGBPM_API_KEY — optional catalog fallbacks after the verified DB
+	 */
+	/**
 	 * Smart Placement
 	 * https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement
 	 */

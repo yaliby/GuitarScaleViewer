@@ -20,7 +20,14 @@ import { TUNING_PRESETS } from './tunings';
 import { useMediaSession } from './hooks/useMediaSession';
 import { useDetectedKey, type DetectedKeyAbState, type DetectedKeyState } from './hooks/useDetectedKey';
 import { useCloudKeyResolution } from './hooks/useCloudKeyResolution';
-import { getSongKeyApiBaseForDev, setSongKeyApiBaseForDev } from './services/songKeyApi';
+import {
+  getFreqblogApiKeyForDev,
+  getGetSongBpmApiKeyForDev,
+  getSongKeyApiBaseForDev,
+  setFreqblogApiKeyForDev,
+  setGetSongBpmApiKeyForDev,
+  setSongKeyApiBaseForDev,
+} from './services/songKeyApi';
 
 /** Open + 24 fretted positions (extend via props later). */
 const DEFAULT_NUM_FRETS = 24;
@@ -107,9 +114,10 @@ function resolutionStateLabel(state: string): string {
   const labels: Record<string, string> = {
     no_session: 'No active session',
     paused: 'Paused',
-    cloud_lookup: 'Checking cloud database',
+    cloud_lookup: 'Checking cloud database and catalogs',
     cloud_hit: 'Verified key found',
-    cloud_miss_local_detecting: 'No cloud key, detecting locally',
+    catalog_hit: 'Catalog key found',
+    cloud_miss_local_detecting: 'No catalog key, detecting locally',
     local_detecting: 'Local detection fallback',
     ready: 'Ready',
     ambiguous: 'Ambiguous',
@@ -623,6 +631,8 @@ export default function GuitarScaleView({
   const [devMockTitle, setDevMockTitle] = useState('Numb');
   const [devMockArtist, setDevMockArtist] = useState('Linkin Park');
   const [devApiBaseInput, setDevApiBaseInput] = useState(getSongKeyApiBaseForDev());
+  const [devFreqblogKeyInput, setDevFreqblogKeyInput] = useState(getFreqblogApiKeyForDev());
+  const [devGetSongBpmKeyInput, setDevGetSongBpmKeyInput] = useState(getGetSongBpmApiKeyForDev());
   const lastAutoAppliedSignatureRef = useRef<string | null>(null);
   const mediaSession = useMediaSession();
   const { detectedKey, detectedKeyAb, resetDetection } = useDetectedKey();
@@ -1279,13 +1289,15 @@ export default function GuitarScaleView({
               Cloud lookup:{' '}
               <span className="text-zinc-300">
                 {cloudResolution.cloudState === 'lookup_pending'
-                  ? 'Checking verified database...'
+                  ? 'Checking verified database, then catalogs...'
                   : cloudResolution.cloudState === 'hit'
-                    ? 'Verified key found'
+                    ? cloudResolution.cloudHit?.verified
+                      ? 'Verified key found'
+                      : `Catalog key found (${cloudResolution.cloudHit?.sourceLabel ?? 'external'})`
                     : cloudResolution.cloudState === 'miss'
-                      ? 'No verified key found; using local fallback'
+                      ? 'No catalog key found; using local fallback'
                       : cloudResolution.cloudState === 'error'
-                        ? 'Cloud lookup failed; using local fallback'
+                        ? 'Cloud lookup failed; trying catalogs then local fallback'
                         : 'Idle'}
               </span>
             </p>
@@ -1450,9 +1462,55 @@ export default function GuitarScaleView({
                     Reset API base
                   </motion.button>
                 </div>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <input
+                    value={devFreqblogKeyInput}
+                    onChange={(e) => setDevFreqblogKeyInput(e.target.value)}
+                    placeholder="FreqBlog API key (optional)"
+                    className="min-w-[18rem] rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs text-zinc-200"
+                  />
+                  <motion.button
+                    type="button"
+                    whileTap={{ scale: 0.97 }}
+                    transition={{ type: 'spring', stiffness: 520, damping: 32 }}
+                    onClick={() => {
+                      setFreqblogApiKeyForDev(devFreqblogKeyInput);
+                      setDevFreqblogKeyInput(getFreqblogApiKeyForDev());
+                    }}
+                    className="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs text-zinc-200"
+                  >
+                    Save FreqBlog key
+                  </motion.button>
+                  <input
+                    value={devGetSongBpmKeyInput}
+                    onChange={(e) => setDevGetSongBpmKeyInput(e.target.value)}
+                    placeholder="GetSongBPM API key (optional)"
+                    className="min-w-[18rem] rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs text-zinc-200"
+                  />
+                  <motion.button
+                    type="button"
+                    whileTap={{ scale: 0.97 }}
+                    transition={{ type: 'spring', stiffness: 520, damping: 32 }}
+                    onClick={() => {
+                      setGetSongBpmApiKeyForDev(devGetSongBpmKeyInput);
+                      setDevGetSongBpmKeyInput(getGetSongBpmApiKeyForDev());
+                    }}
+                    className="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs text-zinc-200"
+                  >
+                    Save GetSongBPM key
+                  </motion.button>
+                </div>
                 <p className="mt-1 text-[11px] text-sky-200/80">
                   Mock track identity: {cloudResolution.trackIdentity ?? '<none>'}
                 </p>
+                {cloudResolution.cloudHit?.source === 'getsongbpm' ? (
+                  <p className="mt-1 text-[11px] text-zinc-500">
+                    Key data from{' '}
+                    <a className="underline decoration-zinc-600" href="https://getsongbpm.com" target="_blank" rel="noreferrer">
+                      GetSongBPM.com
+                    </a>
+                  </p>
+                ) : null}
               </div>
             ) : null}
             {!canApplyDetected ? (
