@@ -8,7 +8,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 const REQUIRED_AUDIO_SECONDS: f32 = 45.0;
 const ANALYSIS_WINDOW_SECONDS: usize = 12;
@@ -39,6 +39,64 @@ const COMPETING_TONIC_MIN_SHARE: f32 = 0.15;
 static LATEST_DETECTED_KEY: OnceLock<Arc<Mutex<DetectedKeyPayload>>> = OnceLock::new();
 static RESET_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static CLOUD_RESOLUTION: OnceLock<Arc<Mutex<CloudResolutionControl>>> = OnceLock::new();
+static ANALYZER_RESOURCE_DIR: OnceLock<PathBuf> = OnceLock::new();
+static ENGINE_STOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static ENGINE_THREAD: OnceLock<Mutex<Option<std::thread::JoinHandle<()>>>> = OnceLock::new();
+
+#[derive(Default)]
+struct AnalysisEvidence {
+    windows: Vec<WindowAnalysisResult>,
+    last_window_end_ms: u64,
+    last_analyzed_endpoint: u64,
+    revision: u64,
+}
+
+impl AnalysisEvidence {
+    fn reset(&mut self) {
+        self.windows.clear();
+        self.last_window_end_ms = 0;
+        self.last_analyzed_endpoint = 0;
+        // Revisions remain monotonic across track/capture resets.
+    }
+
+    fn accept(&mut self, windows: &[WindowAnalysisResult], start_ms: u64, endpoint: u64) -> bool {
+        self.last_analyzed_endpoint = endpoint;
+        let previous_end = self.last_window_end_ms;
+        let mut fresh = false;
+        for window in windows {
+            let mut absolute = window.clone();
+            absolute.window_start_ms += start_ms;
+            absolute.window_end_ms += start_ms;
+            if absolute.window_end_ms <= previous_end { continue; }
+            self.last_window_end_ms = self.last_window_end_ms.max(absolute.window_end_ms);
+            self.windows.push(absolute);
+            fresh = true;
+        }
+        if fresh {
+            self.revision = self.revision.saturating_add(1);
+            let cutoff = self.last_window_end_ms.saturating_sub((HISTORY_HORIZON * ANALYSIS_HOP_SECONDS * 1000) as u64);
+            self.windows.retain(|window| window.window_end_ms > cutoff);
+        }
+        fresh
+    }
+}
+
+fn should_run_local_capture(has_session: bool, playing: bool, _cloud_hit: bool) -> bool {
+    has_session && playing
+}
+
+fn aligned_analysis_samples(mut samples: Vec<f32>, endpoint: u64, rate: u32) -> (Vec<f32>, u64, u64) {
+    let hop = ANALYSIS_HOP_SECONDS as u64 * rate as u64;
+    let aligned = endpoint / hop * hop;
+    let tail = (endpoint-aligned) as usize;
+    samples.truncate(samples.len().saturating_sub(tail));
+    // Keep an integral number of hops, ending on the absolute sample grid.
+    let available = samples.len() / hop as usize * hop as usize;
+    let count = available.min(44 * rate as usize);
+    let samples = samples[samples.len().saturating_sub(count)..].to_vec();
+    let start_ms = (aligned.saturating_sub(samples.len() as u64)) * 1000 / rate as u64;
+    (samples, start_ms, aligned)
+}
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -86,6 +144,10 @@ fn cloud_control_cell() -> Arc<Mutex<CloudResolutionControl>> {
 
 #[tauri::command]
 pub fn set_cloud_resolution(control: CloudResolutionControl) -> bool {
+    if control.state == "hit" && (control.key.as_deref().and_then(tonic_to_pc).is_none()
+        || !matches!(control.mode.as_deref(), Some("major" | "minor"))) {
+        return false;
+    }
     if let Ok(mut lock) = cloud_control_cell().lock() {
         *lock = control.clone();
         log::info!(
@@ -151,7 +213,7 @@ fn normalize_track_field(value: Option<&str>) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
-        .to_ascii_lowercase()
+        .to_lowercase()
 }
 
 fn track_identity(media: &MediaSessionPayload) -> Option<String> {
@@ -176,7 +238,6 @@ fn find_existing_path(candidates: &[PathBuf]) -> Option<PathBuf> {
 
 fn apply_capture_degrade(mut payload: DetectedKeyPayload) -> DetectedKeyPayload {
     if payload.capture_mode == CaptureMode::EndpointLoopback {
-        payload.confidence *= 0.85;
         payload.reason = Some(
             payload
                 .reason
@@ -508,6 +569,32 @@ fn window_winners_from_results(results: &[WindowAnalysisResult]) -> Vec<WindowWi
     by_window.into_values().collect()
 }
 
+// Scores are correlation fits, not probabilities. Convert relative support with
+// a fixed, mode-neutral temperature, then average profiles within one window.
+// Several profiles describing the same audio never count as extra time evidence.
+fn candidate_support_for_window(results: &[WindowAnalysisResult], start_ms: u64) -> BTreeMap<(String, String), f32> {
+    let mut support = BTreeMap::new();
+    let mut profiles = 0;
+    for result in results.iter().filter(|r| r.window_start_ms == start_ms) {
+        let Some(candidates) = result.candidates.as_ref().filter(|c| !c.is_empty()) else { continue; };
+        let valid: Vec<_> = candidates.iter().filter(|c| c.score.is_finite()
+            && (0.0..=1.0).contains(&c.score) && tonic_to_pc(&c.key).is_some()
+            && matches!(c.scale.as_str(), "major" | "minor")).collect();
+        if valid.is_empty() { continue; }
+        let top = valid.iter().map(|c| c.score).fold(0.0_f32, f32::max);
+        let total: f32 = valid.iter().map(|c| ((c.score-top)/0.04).exp()).sum();
+        for candidate in valid {
+            *support.entry((candidate.key.clone(),candidate.scale.clone())).or_insert(0.0)
+                += ((candidate.score-top)/0.04).exp() / total;
+        }
+        profiles += 1;
+    }
+    if profiles > 0 {
+        for value in support.values_mut() { *value /= profiles as f32; }
+    }
+    support
+}
+
 fn recent_window_horizon(winners: &[WindowWinner], recent_count: usize) -> Vec<WindowWinner> {
     if winners.len() <= recent_count {
         return winners.to_vec();
@@ -640,6 +727,8 @@ fn aggregate_results(
             ambiguous: true,
             reason: Some("no_analysis_windows".to_string()),
             state: "warming_up".to_string(),
+            evidence_id: None,
+            track_identity: None,
             ready_to_apply: false,
         };
     }
@@ -654,6 +743,21 @@ fn aggregate_results(
         } else {
             0.45 + 0.55 * (idx as f32 / (denom - 1.0))
         };
+        // Blend the recent three windows with the longer nine-window context.
+        // Recent evidence can eventually replace an earlier tonal center.
+        let recency_weight = recency_weight * if idx + 3 >= winners.len() { 2.0 } else { 1.0 };
+        let support = candidate_support_for_window(results, window.window_start_ms);
+        if !support.is_empty() {
+            for ((key,scale), share) in support {
+                let entry = vote_map.entry((key.clone(),scale.clone(),format!("{key} {scale}"))).or_insert((0.0,0,0.0));
+                entry.0 += share * recency_weight;
+                if key == window.key && scale == window.scale {
+                    entry.1 += 1;
+                    entry.2 += window.rel;
+                }
+            }
+            continue;
+        }
         let score = window.score * recency_weight;
         let entry = vote_map
             .entry((
@@ -674,102 +778,15 @@ fn aggregate_results(
     ranked.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal));
 
     let mut relative_pair_unresolved = false;
-    let mut relative_pair_selected_minor = false;
-    let mut relative_pair_label_value: Option<String> = None;
-    let mut relative_pair_margin = 0.0f32;
-    let mut relative_pair_minor_score = 0.0f32;
+    let mut relative_pair_label_value = None;
+    let mut relative_pair_margin = 0.0;
     if ranked.len() >= 2 {
-        let first = ranked[0].clone();
-        let second = ranked[1].clone();
+        let first = &ranked[0];
+        let second = &ranked[1];
         if is_relative_major_minor(&first.0, &first.1, &second.0, &second.1) {
-            relative_pair_label_value =
-                Some(relative_pair_label(&first.0, &first.1, &second.0, &second.1));
-            let pair_total = (first.3 + second.3).max(1e-6);
-            let first_share = first.3 / pair_total;
-            let second_share = second.3 / pair_total;
-            relative_pair_margin = (first_share - second_share).abs();
-            let (minor_choice, top_is_major) = if first.1 == "minor" {
-                (format!("{}:{}", first.0, first.1), false)
-            } else if second.1 == "minor" {
-                (format!("{}:{}", second.0, second.1), true)
-            } else {
-                (format!("{}:{}", second.0, second.1), false)
-            };
-            let winner_choices: Vec<String> = winners
-                .iter()
-                .map(|w| format!("{}:{}", w.key, w.scale))
-                .collect();
-            let winner_total = winner_choices.len().max(1);
-            let third = (winner_total / 3).max(1);
-            let early_end = third.min(winner_choices.len());
-            let late_start = winner_choices.len().saturating_sub(third);
-            let share = |slice: &[String], choice: &str| -> f32 {
-                if slice.is_empty() {
-                    return 0.0;
-                }
-                let hits = slice.iter().filter(|c| c.as_str() == choice).count();
-                hits as f32 / slice.len() as f32
-            };
-            let minor_total_share = share(&winner_choices, &minor_choice);
-            let minor_early_share = share(&winner_choices[..early_end], &minor_choice);
-            let minor_late_share = share(&winner_choices[late_start..], &minor_choice);
-            let mut pair_raw_total = 0usize;
-            let mut pair_minor_raw = 0usize;
-            let mut pair_minor_rel_sum = 0.0f32;
-            for r in results {
-                let choice = format!("{}:{}", r.key, r.scale);
-                if choice == format!("{}:{}", first.0, first.1)
-                    || choice == format!("{}:{}", second.0, second.1)
-                {
-                    pair_raw_total += 1;
-                    if choice == minor_choice {
-                        pair_minor_raw += 1;
-                        pair_minor_rel_sum += r.first_to_second_relative_strength.unwrap_or(0.0).max(0.0);
-                    }
-                }
-            }
-            let minor_profile_share = if pair_raw_total > 0 {
-                pair_minor_raw as f32 / pair_raw_total as f32
-            } else {
-                0.0
-            };
-            let minor_margin_avg = if pair_minor_raw > 0 {
-                (pair_minor_rel_sum / pair_minor_raw as f32).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-            relative_pair_minor_score = (minor_profile_share * 0.30)
-                + (minor_early_share * 0.35)
-                + (minor_late_share * 0.20)
-                + (minor_margin_avg * 0.15);
-            // Conservative rule: if major only wins by relative-pair vote advantage and minor center remains meaningful,
-            // avoid promoting the relative major as if it were clean.
-            if top_is_major
-                && minor_early_share >= 0.55
-                && minor_total_share >= 0.25
-                && relative_pair_minor_score >= 0.46
-            {
-                ranked.swap(0, 1);
-                relative_pair_selected_minor = true;
-            } else {
-                relative_pair_unresolved =
-                    relative_pair_margin <= 0.34 || minor_total_share >= 0.25 || minor_early_share >= 0.50;
-            }
-            log::info!(
-                "key_engine: relative-pair analysis detected={} pair={} pairMargin={:.3} minorChoice={} minorTotalShare={:.3} minorEarlyShare={:.3} minorLateShare={:.3} minorProfileShare={:.3} minorMarginAvg={:.3} minorScore={:.3} selectedMinor={} unresolved={}",
-                true,
-                relative_pair_label_value.clone().unwrap_or_else(|| "<none>".to_string()),
-                relative_pair_margin,
-                minor_choice,
-                minor_total_share,
-                minor_early_share,
-                minor_late_share,
-                minor_profile_share,
-                minor_margin_avg,
-                relative_pair_minor_score,
-                relative_pair_selected_minor,
-                relative_pair_unresolved
-            );
+            relative_pair_label_value = Some(relative_pair_label(&first.0, &first.1, &second.0, &second.1));
+            relative_pair_margin = (first.3-second.3).abs() / (first.3+second.3).max(1e-6);
+            relative_pair_unresolved = relative_pair_margin <= 0.34;
         }
     }
     let total_score: f32 = ranked.iter().map(|x| x.3).sum::<f32>().max(1e-6);
@@ -802,7 +819,7 @@ fn aggregate_results(
         .count() as f32;
     let temporal_stability = history_match_count / history_size;
     let window_repeat_ratio = top_count as f32 / winners.len().max(1) as f32;
-    let profile_margin = (top_rel_sum / top_count as f32).min(1.0);
+    let profile_margin = (top_rel_sum / top_count.max(1) as f32).min(1.0);
     let mut stability =
         ((window_repeat_ratio * 0.55) + (temporal_stability * 0.35) + (profile_margin * 0.10))
             .clamp(0.0, 1.0);
@@ -811,7 +828,18 @@ fn aggregate_results(
     let disagreement_penalty = disagreement.contradiction_score;
     confidence = (confidence * (1.0 - 0.55 * disagreement_penalty)).clamp(0.0, 1.0);
     stability = (stability * (1.0 - 0.60 * disagreement_penalty)).clamp(0.0, 1.0);
+    let candidate_fits: Vec<f32> = results.iter()
+        .filter(|r| winners.iter().any(|w| w.window_start_ms == r.window_start_ms))
+        .filter_map(|r| r.candidates.as_ref())
+        .filter_map(|c| c.iter().find(|c| c.key == top_key && c.scale == top_scale))
+        .map(|c| c.score).collect();
+    // Relative separation alone can make even noise look decisive. Require
+    // absolute tonal fit as well; this is an evidence gate, not accuracy calibration.
+    let weak_fit = !candidate_fits.is_empty()
+        && candidate_fits.iter().sum::<f32>() / (candidate_fits.len() as f32) < 0.65;
+    if weak_fit { confidence = confidence.min(0.69); }
     let ambiguous = !enough_audio
+        || weak_fit
         || confidence < 0.70
         || stability < 0.68
         || separation < 0.20
@@ -830,6 +858,8 @@ fn aggregate_results(
     };
     let reason = if !enough_audio {
         Some("warming_up".to_string())
+    } else if weak_fit {
+        Some("weak_absolute_tonal_fit".to_string())
     } else if disagreement.distinct_tonics >= 3 {
         Some("contradiction_detected_multiple_tonics".to_string())
     } else if disagreement.scale_conflict_ratio > 0.35 {
@@ -839,23 +869,8 @@ fn aggregate_results(
     } else if disagreement.family_mixture {
         Some("contradiction_detected_mixed_tonic_family".to_string())
     } else if relative_pair_unresolved {
-        Some(format!(
-            "relative_pair_ambiguity:detected=true pair={} pairMargin={:.3} minorScore={:.3}",
-            relative_pair_label_value
-                .clone()
-                .unwrap_or_else(|| "unknown".to_string()),
-            relative_pair_margin,
-            relative_pair_minor_score
-        ))
-    } else if relative_pair_selected_minor {
-        Some(format!(
-            "relative_pair_minor_center_selected:pair={} pairMargin={:.3} minorScore={:.3}",
-            relative_pair_label_value
-                .clone()
-                .unwrap_or_else(|| "unknown".to_string()),
-            relative_pair_margin,
-            relative_pair_minor_score
-        ))
+        Some(format!("relative_pair_ambiguity:pair={} pairMargin={:.3}",
+            relative_pair_label_value.unwrap_or_else(|| "unknown".into()), relative_pair_margin))
     } else if separation < 0.20 {
         Some("top_candidate_too_close_to_alternative".to_string())
     } else if stability < 0.68 {
@@ -882,6 +897,8 @@ fn aggregate_results(
         ambiguous,
         reason,
         state: state.to_string(),
+        evidence_id: None,
+        track_identity: None,
         ready_to_apply: false,
     })
 }
@@ -907,7 +924,11 @@ fn with_switch_hysteresis(
     if last_key == next_key && last_scale == next_scale {
         return next;
     }
-    if next.confidence < (last.confidence + KEY_SWITCH_HYSTERESIS_CONF_MARGIN) {
+    // A previous near-perfect score must not permanently lock the key. High
+    // stability includes repeated fresh temporal evidence and window agreement.
+    let sustained = next.enough_audio && next.window_count >= 7
+        && next.stability >= 0.90 && next.confidence >= MIN_CONFIDENCE_READY;
+    if !sustained && next.confidence < (last.confidence + KEY_SWITCH_HYSTERESIS_CONF_MARGIN) {
         next.ambiguous = true;
         next.ready_to_apply = false;
         next.state = "ambiguous".to_string();
@@ -923,6 +944,7 @@ fn apply_ready_streak_gate(
     tonic_entropy: f32,
     dominant_share: f32,
 ) -> DetectedKeyPayload {
+    if payload.source == "cloud_verified" { return payload; }
     if payload.state == "likely_key" {
         let (min_conf, min_stab) = if backend_used == "numpy_fallback" {
             (0.80, 0.82)
@@ -952,7 +974,7 @@ fn apply_ready_streak_gate(
         }
         if backend_used == "numpy_fallback" {
             payload.ready_to_apply = false;
-            payload.reason = Some("apply_blocked_numpy_fallback_requires_essentia".to_string());
+            payload.reason = Some("suggestion_only_uncalibrated_analyzer".to_string());
         }
     }
     payload
@@ -972,8 +994,18 @@ fn enforce_apply_gate(
     cm: &ContradictionMetrics,
     likely_streak: usize,
 ) -> DetectedKeyPayload {
+    // A validated database record has no local capture/streak requirement.
+    if payload.source == "cloud_verified" && payload.primary_key.is_some()
+        && matches!(payload.primary_scale.as_deref(), Some("major" | "minor")) {
+        payload.ready_to_apply = !payload.ambiguous;
+        payload.reason = Some("cloud_verified_key".to_string());
+        return payload;
+    }
     let endpoint_conservative_ok = if payload.capture_mode == CaptureMode::EndpointLoopback {
-        payload.confidence >= 0.88 && payload.stability >= 0.86 && window_dominance >= 0.86
+        // Keep the measured evidence score and apply the stricter endpoint gate
+        // explicitly. A separate 0.85 multiplier made this gate unreachable.
+        payload.confidence >= 0.88
+            && payload.stability >= 0.86 && window_dominance >= 0.86
     } else {
         true
     };
@@ -986,11 +1018,11 @@ fn enforce_apply_gate(
         && window_distinct_tonics <= 2;
     let hold_apply_allowed = payload.state == "paused_hold"
         && payload.ready_to_apply
-        && backend_used == "essentia"
+        && matches!(backend_used, "essentia" | "libkeyfinder")
         && payload.confidence >= MIN_CONFIDENCE_READY
         && payload.stability >= MIN_STABILITY_READY;
-    let apply_allowed = hold_apply_allowed || (backend_used == "essentia"
-        && payload.state == "likely_key"
+    let stable_live_evidence = payload.state == "likely_key"
+        && payload.enough_audio
         && !payload.ambiguous
         && payload.confidence >= MIN_CONFIDENCE_READY
         && payload.stability >= MIN_STABILITY_READY
@@ -1003,7 +1035,16 @@ fn enforce_apply_gate(
         && !recent_silence
         && !cm.contradiction_burst
         && endpoint_conservative_ok
-        && stable_horizon);
+        && stable_horizon;
+    let apply_allowed = hold_apply_allowed ||
+        (matches!(backend_used, "essentia" | "libkeyfinder") && stable_live_evidence);
+    // Live Jam may follow a clearly labelled estimate. Keep the stricter practice
+    // auto-apply contract, while sharing all silence/ambiguity/horizon safeguards.
+    if backend_used == "numpy_fallback" && stable_live_evidence {
+        payload.ready_to_apply = false;
+        payload.reason = Some("stable_numpy_estimate".to_string());
+        return payload;
+    }
     if !apply_allowed {
         payload.ready_to_apply = false;
         if payload.reason.is_none() {
@@ -1085,7 +1126,10 @@ fn build_current_detector() -> Box<dyn KeyDetector> {
     }
 
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let resource_dir = ANALYZER_RESOURCE_DIR.get().cloned().unwrap_or_else(|| cwd.clone());
     let exe_candidates = [
+        resource_dir.join("analyzer").join("key_analyzer.exe"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("sidecars/key_analyzer/dist/key_analyzer/key_analyzer.exe"),
         cwd.join("sidecars").join("key_analyzer").join("key_analyzer.exe"),
         cwd.join("src-tauri")
             .join("sidecars")
@@ -1134,7 +1178,7 @@ fn build_detector() -> Box<dyn KeyDetector> {
     let analyzer_backend = std::env::var("KEY_ANALYZER_BACKEND")
         .ok()
         .map(|s| s.trim().to_ascii_lowercase())
-        .unwrap_or_else(|| "libkeyfinder".to_string());
+        .unwrap_or_else(|| "current".to_string());
     if analyzer_backend == "libkeyfinder" {
         if let Some(det) = build_libkeyfinder_detector() {
             return det;
@@ -1152,7 +1196,7 @@ fn top_from_windows(windows: &[WindowAnalysisResult]) -> (Option<String>, Option
     }
     let mut votes: HashMap<(String, String), f32> = HashMap::new();
     for w in windows {
-        let k = w.key.to_ascii_uppercase();
+        let k = w.key.clone();
         let s = w.scale.to_ascii_lowercase();
         *votes.entry((k, s)).or_insert(0.0) += w.strength.max(0.01);
     }
@@ -1232,9 +1276,12 @@ fn hard_reset_engine_state(
 }
 
 pub fn spawn_key_engine(app: AppHandle) {
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        let _ = ANALYZER_RESOURCE_DIR.set(resource_dir);
+    }
     let state = state_cell();
     let app_for_thread = app.clone();
-    std::thread::Builder::new()
+    let handle = std::thread::Builder::new()
         .name("key-engine".to_string())
         .spawn(move || {
             let detector = build_detector();
@@ -1259,6 +1306,8 @@ pub fn spawn_key_engine(app: AppHandle) {
             let mut last_ab_payload: Option<AbComparePayload> = None;
             let mut capture = AudioCaptureManager::new();
             let mut last_payload: Option<DetectedKeyPayload> = None;
+            let mut evidence = AnalysisEvidence::default();
+            let mut cloud_seeded_track: Option<String> = None;
             let mut last_track_identity: Option<String> = None;
             let mut last_session_available = false;
             let mut last_playback_status = String::new();
@@ -1296,10 +1345,12 @@ pub fn spawn_key_engine(app: AppHandle) {
                 .build()
                 .expect("key-engine runtime");
 
-            loop {
+            while !ENGINE_STOP.load(std::sync::atomic::Ordering::Relaxed) {
                 let reset_now = RESET_SEQUENCE.load(std::sync::atomic::Ordering::Relaxed);
                 if reset_now != reset_cursor {
                     reset_cursor = reset_now;
+                    evidence.reset();
+                    cloud_seeded_track = None;
                     hard_reset_engine_state(
                         &mut capture,
                         &mut decision_history,
@@ -1331,6 +1382,7 @@ pub fn spawn_key_engine(app: AppHandle) {
                 }
 
                 let media = rt.block_on(media_session::get_current_media_payload());
+                if ENGINE_STOP.load(std::sync::atomic::Ordering::Relaxed) { break; }
                 let playback_status = media.playback_status.clone();
                 let has_session = playback_status != "none" && playback_status != "media_session_unavailable";
                 let is_playing = playback_status == "playing";
@@ -1351,7 +1403,6 @@ pub fn spawn_key_engine(app: AppHandle) {
                     });
                 let cloud_track_matches =
                     current_track_identity.is_some() && cloud_control.track_identity == current_track_identity;
-                let cloud_pending = cloud_track_matches && cloud_control.state == "lookup_pending";
                 let cloud_hit = cloud_track_matches
                     && cloud_control.state == "hit"
                     && cloud_control.key.is_some()
@@ -1366,7 +1417,9 @@ pub fn spawn_key_engine(app: AppHandle) {
                         );
                     } else {
                         log::info!("key_engine: media session disappeared status={}", playback_status);
-                        hard_reset_engine_state(
+                        evidence.reset();
+                    cloud_seeded_track = None;
+                    hard_reset_engine_state(
                             &mut capture,
                             &mut decision_history,
                             &mut likely_streak,
@@ -1423,6 +1476,8 @@ pub fn spawn_key_engine(app: AppHandle) {
                         last_track_identity,
                         current_track_identity
                     );
+                    evidence.reset();
+                    cloud_seeded_track = None;
                     hard_reset_engine_state(
                         &mut capture,
                         &mut decision_history,
@@ -1471,25 +1526,9 @@ pub fn spawn_key_engine(app: AppHandle) {
                         log::info!("key_engine: analyzer stopped reason=playback_paused_or_stopped");
                     }
                     capture.stop_capture("playback_paused_or_stopped");
-                } else if is_playing {
-                    if cloud_pending {
-                        if analyzer_running {
-                            analyzer_running = false;
-                            log::info!("key_engine: analyzer stopped reason=cloud_lookup_pending");
-                        }
-                        capture.stop_capture("cloud_lookup_pending");
-                        log::info!("key_engine: local detector skipped due cloud lookup pending");
-                    } else if cloud_hit {
-                        if analyzer_running {
-                            analyzer_running = false;
-                            log::info!("key_engine: analyzer stopped reason=cloud_hit");
-                        }
-                        capture.stop_capture("cloud_hit");
-                        log::info!("key_engine: local detector skipped due cloud hit");
-                    } else {
-                        capture.ensure_capture_running_for_target(media.source_app.clone());
-                        capture.poll_capture_samples();
-                    }
+                } else if should_run_local_capture(has_session, is_playing, cloud_hit) {
+                    capture.ensure_capture_running_for_target(media.source_app.clone());
+                    capture.poll_capture_samples();
                 }
 
                 capture.mark_stale_if_inactive(Duration::from_millis(STALE_CAPTURE_TIMEOUT_MS));
@@ -1571,6 +1610,7 @@ pub fn spawn_key_engine(app: AppHandle) {
                     } else {
                         Instant::now()
                     };
+                    evidence.reset();
                     decision_history.clear();
                     likely_streak = 0;
                     primary_key_repeat_streak = 0;
@@ -1582,42 +1622,15 @@ pub fn spawn_key_engine(app: AppHandle) {
                     capture_stable_streak = capture_stable_streak.saturating_add(1);
                 }
 
+                let (samples, sample_start_ms, aligned_endpoint) = aligned_analysis_samples(
+                    capture.latest_samples(60), capture.accepted_samples(), capture.sample_rate_hz());
+                let mut fresh_analysis = false;
                 let mut payload = if !has_session {
                     likely_streak = 0;
                     if media.playback_status == "media_session_unavailable" {
                         DetectedKeyPayload::unavailable("media_session_unavailable")
                     } else {
                         DetectedKeyPayload::unavailable("no_active_session")
-                    }
-                } else if is_playing && cloud_pending {
-                    likely_streak = 0;
-                    DetectedKeyPayload::warming_up(
-                        CaptureMode::Unavailable,
-                        media.source_app.clone(),
-                        "cloud_lookup_pending",
-                    )
-                } else if is_playing && cloud_hit {
-                    likely_streak = 0;
-                    let key = cloud_control.key.clone().unwrap_or_default().to_ascii_uppercase();
-                    let mode = cloud_control.mode.clone().unwrap_or_default().to_ascii_lowercase();
-                    let display_name = format!("{key} {mode}");
-                    DetectedKeyPayload {
-                        primary_key: Some(key),
-                        primary_scale: Some(mode),
-                        display_name: Some(display_name),
-                        confidence: 1.0,
-                        stability: 1.0,
-                        alternatives: Vec::new(),
-                        source: "cloud_verified".to_string(),
-                        capture_mode: CaptureMode::Unavailable,
-                        target_app: media.source_app.clone(),
-                        enough_audio: true,
-                        buffer_seconds: snapshot.buffer_seconds,
-                        window_count: 0,
-                        ambiguous: false,
-                        reason: Some("cloud_verified_key".to_string()),
-                        state: "likely_key".to_string(),
-                        ready_to_apply: true,
                     }
                 } else if !analyzer_health.healthy {
                     if analyzer_running {
@@ -1671,7 +1684,8 @@ pub fn spawn_key_engine(app: AppHandle) {
                         contradiction_clean_streak = 0;
                         contradiction_cooldown_until = Instant::now();
                         last_contradiction_cooldown = false;
-                        decision_history.clear();
+                        evidence.reset();
+                    decision_history.clear();
                         log::info!(
                             "key_engine: contradiction state reset reason=paused_startup_before_first_valid_analysis"
                         );
@@ -1711,7 +1725,7 @@ pub fn spawn_key_engine(app: AppHandle) {
                         snapshot.target_app.clone().or(media.source_app.clone()),
                         "capture_not_ready",
                     ))
-                } else if snapshot.buffer_seconds < ANALYSIS_WINDOW_SECONDS as f32 {
+                } else if samples.len() < ANALYSIS_WINDOW_SECONDS * capture.sample_rate_hz() as usize {
                     // Avoid blaming the analyzer when we simply don't have a full analysis window yet.
                     likely_streak = 0;
                     apply_capture_degrade(DetectedKeyPayload::warming_up(
@@ -1719,6 +1733,9 @@ pub fn spawn_key_engine(app: AppHandle) {
                         snapshot.target_app.clone().or(media.source_app.clone()),
                         "collecting_audio_for_first_window",
                     ))
+                } else if aligned_endpoint <= evidence.last_analyzed_endpoint {
+                    last_payload.clone().unwrap_or_else(|| DetectedKeyPayload::warming_up(
+                        snapshot.capture_mode, media.source_app.clone(), "waiting_for_fresh_audio"))
                 } else {
                     if !analyzer_running {
                         analyzer_running = true;
@@ -1728,7 +1745,6 @@ pub fn spawn_key_engine(app: AppHandle) {
                             current_track_identity
                         );
                     }
-                    let samples = capture.latest_samples(REQUIRED_AUDIO_SECONDS as usize);
                     let analyze_started = Instant::now();
                     log::debug!(
                         "key_engine: running analysis on {:.1}s buffer ({} samples)",
@@ -1747,7 +1763,12 @@ pub fn spawn_key_engine(app: AppHandle) {
                         analyze_elapsed.as_millis()
                     );
                     match analyzed {
-                        Ok(output) => {
+                        Ok(mut output) => {
+                            fresh_analysis = evidence.accept(&output.windows, sample_start_ms, aligned_endpoint);
+                            if fresh_analysis {
+                                let cutoff = evidence.last_window_end_ms.saturating_sub((AGGREGATION_RECENT_WINDOW_COUNT * ANALYSIS_HOP_SECONDS * 1000) as u64);
+                                output.windows = evidence.windows.iter().filter(|w| w.window_end_ms > cutoff).cloned().collect();
+                            }
                             analysis_cycles = analysis_cycles.saturating_add(1);
                             let backend_used = output.backend_used.clone();
 
@@ -1990,7 +2011,9 @@ pub fn spawn_key_engine(app: AppHandle) {
                                 &decision_history,
                             );
                             if backend_used == "numpy_fallback" {
-                                payload.confidence = payload.confidence.min(0.74);
+                                // Preserve the measured consensus score for Live Jam's
+                                // estimate gate. This is evidence, not calibrated accuracy.
+                                // Practice auto-apply remains blocked for this backend.
                                 payload.ready_to_apply = false;
                                 payload.reason = Some(
                                     output
@@ -2000,8 +2023,8 @@ pub fn spawn_key_engine(app: AppHandle) {
                                         .unwrap_or_else(|| "numpy_fallback:essentia_path_unreliable".to_string()),
                                 );
                             }
-                            if let (Some(k), Some(s)) =
-                                (payload.primary_key.clone(), payload.primary_scale.clone())
+                            if let (true, Some(k), Some(s)) =
+                                (fresh_analysis, payload.primary_key.clone(), payload.primary_scale.clone())
                             {
                                 if decision_history.len() == HISTORY_HORIZON {
                                     let _ = decision_history.pop_front();
@@ -2090,6 +2113,35 @@ pub fn spawn_key_engine(app: AppHandle) {
                     }
                 };
 
+                if is_playing && cloud_hit && cloud_seeded_track != current_track_identity {
+                    cloud_seeded_track = current_track_identity.clone();
+                    evidence.revision = evidence.revision.saturating_add(1);
+                    let key = cloud_control.key.clone().unwrap_or_default();
+                    let mode = cloud_control.mode.clone().unwrap_or_default().to_ascii_lowercase();
+                    let display_name = format!("{key} {mode}");
+                    payload = DetectedKeyPayload {
+                        primary_key: Some(key),
+                        primary_scale: Some(mode),
+                        display_name: Some(display_name),
+                        confidence: 0.95,
+                        stability: 1.0,
+                        alternatives: Vec::new(),
+                        source: "cloud_verified".to_string(),
+                        capture_mode: CaptureMode::Unavailable,
+                        target_app: media.source_app.clone(),
+                        enough_audio: true,
+                        buffer_seconds: snapshot.buffer_seconds,
+                        window_count: 0,
+                        ambiguous: false,
+                        reason: Some("cloud_verified_key".to_string()),
+                        state: "likely_key".to_string(),
+                        evidence_id: None,
+                        track_identity: None,
+                        ready_to_apply: true,
+                    };
+                }
+                payload.evidence_id = Some(evidence.revision);
+                payload.track_identity = current_track_identity.clone();
                 if payload.source == "audio_analysis" {
                     let backend_tag = if analyzer_health.healthy {
                         analyzer_health.backend.as_str()
@@ -2098,10 +2150,11 @@ pub fn spawn_key_engine(app: AppHandle) {
                     };
                     payload.source = format!("audio_analysis:{backend_tag}");
                 }
-                let mut payload = with_switch_hysteresis(payload, last_payload.as_ref());
+                let mut payload = if payload.source == "cloud_verified" { payload }
+                    else { with_switch_hysteresis(payload, last_payload.as_ref()) };
                 payload.buffer_seconds = snapshot.buffer_seconds;
-                if let (Some(k), Some(s)) =
-                    (payload.primary_key.as_deref(), payload.primary_scale.as_deref())
+                if let (true, Some(k), Some(s)) =
+                    (fresh_analysis, payload.primary_key.as_deref(), payload.primary_scale.as_deref())
                 {
                     let choice = format!("{k}:{s}");
                     if last_primary_key_choice.as_deref() == Some(choice.as_str()) {
@@ -2110,7 +2163,7 @@ pub fn spawn_key_engine(app: AppHandle) {
                         primary_key_repeat_streak = 1;
                         last_primary_key_choice = Some(choice);
                     }
-                } else {
+                } else if payload.primary_key.is_none() {
                     primary_key_repeat_streak = 0;
                     last_primary_key_choice = None;
                 }
@@ -2167,7 +2220,7 @@ pub fn spawn_key_engine(app: AppHandle) {
                     .map(|t| Instant::now() < t)
                     .unwrap_or(false);
                 let mut contradiction_cooldown_block = contradiction_cooldown;
-                if recent_silence {
+                if recent_silence && payload.source != "cloud_verified" {
                     if hold_active {
                         if let Some(mut held) = last_good_payload.clone() {
                             held.capture_mode = snapshot.capture_mode;
@@ -2189,7 +2242,7 @@ pub fn spawn_key_engine(app: AppHandle) {
                         }
                     }
                 }
-                if payload.state == "likely_key" {
+                if payload.state == "likely_key" && payload.source != "cloud_verified" {
                     let stable_tonics = cm.tonic_entropy <= MAX_TONIC_ENTROPY
                         && cm.dominant_share >= MIN_DOMINANCE_SHARE
                         && cm.competing_tonics <= 2
@@ -2320,9 +2373,9 @@ pub fn spawn_key_engine(app: AppHandle) {
                         );
                     }
                 }
-                if payload.state == "likely_key" && !payload.ambiguous {
+                if fresh_analysis && payload.state == "likely_key" && !payload.ambiguous {
                     likely_streak = likely_streak.saturating_add(1);
-                } else {
+                } else if payload.state != "likely_key" || payload.ambiguous {
                     likely_streak = 0;
                 }
                 payload = apply_ready_streak_gate(
@@ -2390,7 +2443,7 @@ pub fn spawn_key_engine(app: AppHandle) {
                     }
                     last_apply_eligible = apply_eligible;
                 }
-                if payload.state == "likely_key" && is_valid_stable_detection(&payload) {
+                if (fresh_analysis || payload.source == "cloud_verified") && payload.state == "likely_key" && is_valid_stable_detection(&payload) {
                     last_good_payload = Some(payload.clone());
                     last_good_valid_until =
                         Some(Instant::now() + Duration::from_millis(LAST_GOOD_HOLD_MS));
@@ -2444,14 +2497,287 @@ pub fn spawn_key_engine(app: AppHandle) {
                     last_payload = Some(payload);
                 }
 
-                std::thread::sleep(Duration::from_millis(ANALYZE_EVERY_MS));
+                std::thread::park_timeout(Duration::from_millis(ANALYZE_EVERY_MS));
             }
+            capture.stop_capture("engine_shutdown");
         })
         .expect("spawn key-engine thread");
+    let _ = ENGINE_THREAD.set(Mutex::new(Some(handle)));
+}
+
+pub fn shutdown_key_engine() {
+    ENGINE_STOP.store(true, std::sync::atomic::Ordering::Relaxed);
+    if let Some(thread) = ENGINE_THREAD.get() {
+        if let Ok(mut guard) = thread.lock() {
+            if let Some(handle) = guard.take() {
+                handle.thread().unpark();
+                if !join_engine_before_deadline(handle, Duration::from_secs(20)) {
+                    log::warn!("key_engine: shutdown deadline exceeded; continuing application exit");
+                }
+            }
+        }
+    }
+}
+
+fn join_engine_before_deadline(handle: std::thread::JoinHandle<()>, deadline: Duration) -> bool {
+    let started = Instant::now();
+    while !handle.is_finished() {
+        if started.elapsed() >= deadline {
+            // A stuck synchronous OS call must not hold the application open.
+            // Normal media and analyzer operations have shorter deadlines and
+            // reach the orderly capture/sidecar cleanup path above.
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    handle.join().is_ok()
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn actual_relative_modulation_reaches_final_gate_in_both_capture_modes() {
+        let fixture: serde_json::Value=serde_json::from_str(include_str!("../tests/fixtures/generic_candidate_windows.json")).unwrap();
+        let cases=fixture["cases"].as_array().unwrap();
+        for reverse in [false,true] {
+            let (old,new)=if reverse {(("A","minor"),("C","major"))} else {(("C","major"),("A","minor"))};
+            for mode in [CaptureMode::ProcessLoopback,CaptureMode::EndpointLoopback] {
+                let mut evidence=super::AnalysisEvidence::default();
+                let mut history=VecDeque::new();
+                let mut previous=None;
+                let mut previous_choice=String::new();
+                let mut repeats=0;
+                let mut likely=0;
+                let mut cooldown_until=0;
+                for step in 0..60 {
+                    let expected=if step<20 {old} else {new};
+                    let case=cases.iter().find(|c| c["key"].as_str()==Some(expected.0) && c["scale"].as_str()==Some(expected.1)).unwrap();
+                    let windows: Vec<crate::audio_models::WindowAnalysisResult>=serde_json::from_value(case["windows"].clone()).unwrap();
+                    assert!(evidence.accept(&windows,step*4000,step*4000+12000));
+                    let mut result=aggregate_results(&evidence.windows,mode,None,true,&history);
+                    let choice=format!("{}:{}",result.primary_key.as_deref().unwrap(),result.primary_scale.as_deref().unwrap());
+                    if history.len()==super::HISTORY_HORIZON { history.pop_front(); }
+                    history.push_back(choice.clone());
+                    repeats=if choice==previous_choice {repeats+1} else {1};
+                    previous_choice=choice;
+                    let metrics=contradiction_metrics_from_history(&history);
+                    let contradiction=metrics.contradiction_burst;
+                    if contradiction {cooldown_until=step+4;}
+                    result=with_switch_hysteresis(result,previous.as_ref());
+                    likely=if !result.ambiguous && repeats>=super::PRIMARY_KEY_REPEAT_MIN && !contradiction && step>=cooldown_until {likely+1} else {0};
+                    result.source="audio_analysis:numpy_fallback".into();
+                    result=apply_ready_streak_gate(result,likely,"numpy_fallback",metrics.tonic_entropy,metrics.dominant_share);
+                    let winners=super::window_winners_from_results(&evidence.windows);
+                    let mut tonics=std::collections::BTreeMap::new();
+                    for winner in super::recent_window_horizon(&winners,super::AGGREGATION_RECENT_WINDOW_COUNT) { *tonics.entry(winner.key).or_insert(0usize)+=1; }
+                    let (dominance,distinct)=super::window_vote_quality(&tonics);
+                    result=enforce_apply_gate(result,"numpy_fallback",true,true,repeats>=super::PRIMARY_KEY_REPEAT_MIN,
+                        contradiction,step<cooldown_until,false,dominance,distinct,&metrics,likely);
+                    if step==19 || step==59 {
+                        assert_eq!(result.primary_key.as_deref(),Some(expected.0));
+                        assert_eq!(result.primary_scale.as_deref(),Some(expected.1));
+                        assert_eq!(result.reason.as_deref(),Some("stable_numpy_estimate"),"{expected:?} {mode:?} step{step}: {result:?}");
+                    }
+                    previous=Some(result);
+                }
+            }
+        }
+    }
+    #[test]
+    fn track_identity_normalizes_unicode_like_frontend() {
+        assert_eq!(super::normalize_track_field(Some("  BJÖRK  DEJA  VU ")),"björk deja vu");
+    }
+
+    #[test]
+    fn endpoint_confidence_is_measured_evidence_with_an_explicit_stricter_gate() {
+        for (confidence,eligible) in [(0.92,true),(0.87,false),(0.55,false)] {
+            let mut result=crate::audio_models::DetectedKeyPayload::unavailable("test");
+            result.primary_key=Some("D".into());result.primary_scale=Some("major".into());
+            result.state="likely_key".into();result.source="audio_analysis:numpy_fallback".into();
+            result.confidence=confidence;result.stability=0.95;result.ambiguous=false;result.enough_audio=true;
+            result.capture_mode=CaptureMode::EndpointLoopback;
+            result=super::apply_capture_degrade(result);
+            assert_eq!(result.confidence,confidence);
+            result=enforce_apply_gate(result,"numpy_fallback",true,true,true,false,false,false,0.95,1,&stable_cm(),8);
+            assert_eq!(result.reason.as_deref()==Some("stable_numpy_estimate"),eligible);
+            assert!(!result.ready_to_apply);
+        }
+    }
+    #[test]
+    fn actual_python_candidates_can_reach_live_estimate_gate_for_all_keys() {
+        let fixture: serde_json::Value=serde_json::from_str(include_str!("../tests/fixtures/generic_candidate_windows.json")).unwrap();
+        let mut endpoint_eligible=0;
+        for case in fixture["cases"].as_array().unwrap() {
+            let key=case["key"].as_str().unwrap();
+            let scale=case["scale"].as_str().unwrap();
+            let template: Vec<crate::audio_models::WindowAnalysisResult>=serde_json::from_value(case["windows"].clone()).unwrap();
+            assert!(template.iter().all(|w|w.candidates.as_ref().unwrap().len()==24));
+            for mode in [CaptureMode::ProcessLoopback,CaptureMode::EndpointLoopback] {
+                let mut evidence=super::AnalysisEvidence::default();
+                let mut history=VecDeque::new();
+                let mut result=crate::audio_models::DetectedKeyPayload::unavailable("test");
+                for step in 0..20 {
+                    assert!(evidence.accept(&template,step*4000,step*4000+12000));
+                    result=aggregate_results(&evidence.windows,mode,None,true,&history);
+                    if history.len()==super::HISTORY_HORIZON { history.pop_front(); }
+                    history.push_back(format!("{}:{}",result.primary_key.as_deref().unwrap(),result.primary_scale.as_deref().unwrap()));
+                }
+                let metrics=contradiction_metrics_from_history(&history);
+                result.source="audio_analysis:numpy_fallback".into();
+                result=apply_ready_streak_gate(result,8,"numpy_fallback",metrics.tonic_entropy,metrics.dominant_share);
+                result=enforce_apply_gate(result,"numpy_fallback",true,true,true,false,false,false,1.0,1,&metrics,8);
+                assert_eq!(result.primary_key.as_deref(),Some(key));
+                assert_eq!(result.primary_scale.as_deref(),Some(scale));
+                assert!(!result.ambiguous,"{key} {scale} {mode:?}: {:?} {} {}",result.reason,result.confidence,result.stability);
+                assert_eq!(result.reason.as_deref(),Some("stable_numpy_estimate"),"{key} {scale} {mode:?}: {result:?}");
+                if mode==CaptureMode::EndpointLoopback { endpoint_eligible+=1; }
+                assert!(!result.ready_to_apply,"numpy must remain suggestion-only for Practice");
+            }
+        }
+        assert_eq!(endpoint_eligible,24);
+        eprintln!("actual DSP native gate: 24/24 process keys eligible, 24/24 endpoint keys eligible under stricter endpoint gates");
+    }
+    #[test]
+    fn weak_absolute_fit_cannot_become_certain_from_candidate_separation() {
+        for scale in ["major","minor"] {
+            let windows: Vec<_>=(0..9).map(|i|scored_window("D",scale,"A",scale,0.55,0.25,i*4000)).collect();
+            let result=aggregate_results(&windows,CaptureMode::ProcessLoopback,None,true,&VecDeque::from(vec![format!("D:{scale}");16]));
+            assert!(result.ambiguous);
+            assert!(result.confidence<0.7);
+            assert!(!result.ready_to_apply);
+        }
+    }
+    #[test]
+    fn evidence_deduplicates_rescans_and_accepts_fresh_absolute_endpoints() {
+        let mut evidence = super::AnalysisEvidence::default();
+        let windows = vec![scored_window("D","major","B","minor",0.94,0.64,0)];
+        assert!(evidence.accept(&windows,48_000,60_000));
+        let revision = evidence.revision;
+        let before = aggregate_results(&evidence.windows,CaptureMode::ProcessLoopback,None,true,&VecDeque::new());
+        for _ in 0..10 { assert!(!evidence.accept(&windows,48_000,60_000)); }
+        assert_eq!(evidence.revision,revision);
+        assert_eq!(evidence.windows.len(),1);
+        let after = aggregate_results(&evidence.windows,CaptureMode::ProcessLoopback,None,true,&VecDeque::new());
+        assert_eq!(before.confidence,after.confidence);
+        assert_eq!(before.stability,after.stability);
+        // Identical relative offsets refer to NEW audio after the rolling buffer fills.
+        assert!(evidence.accept(&windows,52_000,64_000));
+        assert_eq!(evidence.revision,revision+1);
+        assert_eq!(evidence.windows.len(),2);
+        evidence.reset();
+        assert_eq!(evidence.revision,revision+1);
+        assert!(evidence.accept(&windows,64_000,76_000));
+        assert_eq!(evidence.revision,revision+2);
+    }
+
+    #[test]
+    fn capture_endpoint_advances_after_ring_fills_and_across_reset() {
+        let mut capture = crate::audio_capture::AudioCaptureManager::new();
+        let rate = capture.sample_rate_hz();
+        capture.ingest_mono_samples(rate,&vec![0.2;rate as usize*64]);
+        let seconds = capture.available_buffer_seconds();
+        let endpoint = capture.accepted_samples();
+        capture.ingest_mono_samples(rate,&vec![0.2;rate as usize*4]);
+        assert_eq!(capture.available_buffer_seconds(),seconds);
+        assert_eq!(capture.accepted_samples(),endpoint+rate as u64*4);
+        let (samples,start,end) = super::aligned_analysis_samples(capture.latest_samples(60),capture.accepted_samples(),rate);
+        assert_eq!(end,68*rate as u64);
+        assert_eq!(start,24_000);
+        assert_eq!(samples.len(),44*rate as usize);
+        capture.reset();
+        capture.ingest_mono_samples(rate,&vec![0.2;rate as usize*12]);
+        assert_eq!(capture.accepted_samples(),80*rate as u64);
+    }
+
+    #[test]
+    fn partial_hops_do_not_create_new_analysis_endpoints() {
+        for seconds in [60,61,62,63] {
+            let (_,start,end)=super::aligned_analysis_samples(vec![0.2;60*100],seconds*100,100);
+            assert_eq!(end,6000);
+            assert_eq!(start,16000);
+        }
+    }
+
+    #[test]
+    fn cloud_hit_keeps_local_capture_enabled_while_playing() {
+        for cloud_hit in [false,true] {
+            assert!(super::should_run_local_capture(true,true,cloud_hit));
+            assert!(!super::should_run_local_capture(true,false,cloud_hit));
+            assert!(!super::should_run_local_capture(false,true,cloud_hit));
+        }
+    }
+
+    #[test]
+    fn accumulating_candidates_follow_sustained_modulation_in_both_modes() {
+        let roots=["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
+        for (index,key) in roots.iter().enumerate() {
+            for scale in ["major","minor"] {
+                let next_key=roots[(index+2)%12];
+                let mut evidence=super::AnalysisEvidence::default();
+                let mut history=VecDeque::new();
+                let mut result=crate::audio_models::DetectedKeyPayload::unavailable("test");
+                for step in 0..40 {
+                    let tonic=if step < 16 {*key} else {next_key};
+                    let runner=if step < 16 {next_key} else {*key};
+                    let window=scored_window(tonic,scale,runner,scale,0.94,0.63,step*4000);
+                    assert!(evidence.accept(&[window],0,step*4000+12000));
+                    result=aggregate_results(&evidence.windows,CaptureMode::ProcessLoopback,None,true,&history);
+                    if history.len()==super::HISTORY_HORIZON { history.pop_front(); }
+                    history.push_back(format!("{}:{}",result.primary_key.as_deref().unwrap(),scale));
+                    if step==15 { assert_eq!(result.primary_key.as_deref(),Some(*key)); assert!(!result.ambiguous); }
+                }
+                assert_eq!(result.primary_key.as_deref(),Some(next_key));
+                assert!(!result.ambiguous,"{next_key} {scale}: {:?}",result.reason);
+                assert!(result.confidence>=super::MIN_CONFIDENCE_READY);
+            }
+        }
+    }
+    fn scored_window(key: &str, scale: &str, runner: &str, runner_scale: &str, top: f32, second: f32, start: u64) -> crate::audio_models::WindowAnalysisResult {
+        serde_json::from_value(serde_json::json!({"profileType":"test", "key":key,"scale":scale,
+            "displayName":format!("{key} {scale}"),"strength":top,"firstToSecondRelativeStrength":(top-second)/top,
+            "windowStartMs":start,"windowEndMs":start+12000,
+            "candidates":[{"key":key,"scale":scale,"score":top},{"key":runner,"scale":runner_scale,"score":second}]})).unwrap()
+    }
+
+    #[test]
+    fn close_candidates_remain_ambiguous_for_every_root_and_mode() {
+        for key in ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"] {
+            for (scale, runner_scale) in [("major","minor"),("minor","major")] {
+                let windows: Vec<_> = (0..9).map(|i| scored_window(key,scale,key,runner_scale,0.9,0.89,i*4000)).collect();
+                let history = VecDeque::from(vec![format!("{key}:{scale}"); 8]);
+                let payload = aggregate_results(&windows,CaptureMode::ProcessLoopback,None,true,&history);
+                assert!(payload.ambiguous, "close candidates {key} {scale}");
+                assert!(payload.confidence < 0.7);
+            }
+        }
+    }
+
+    #[test]
+    fn relative_pair_ranking_is_symmetric_when_modes_exchange() {
+        let evaluate = |early_key: &str, early_scale: &str, late_key: &str, late_scale: &str| {
+            let windows: Vec<_> = (0..7).map(|i| {
+                let (key,scale,strength) = if i < 2 {(early_key,early_scale,0.63)} else {(late_key,late_scale,0.72)};
+                serde_json::from_value(serde_json::json!({"profileType":"test","key":key,"scale":scale,"displayName":format!("{key} {scale}"),"strength":strength,"firstToSecondRelativeStrength":0.22,"windowStartMs":i*4000,"windowEndMs":i*4000+12000})).unwrap()
+            }).collect();
+            aggregate_results(&windows,CaptureMode::ProcessLoopback,None,true,&VecDeque::from(vec![format!("{late_key}:{late_scale}");8]))
+        };
+        let major = evaluate("A","minor","C","major");
+        let minor = evaluate("C","major","A","minor");
+        assert_eq!(major.primary_scale.as_deref(), Some("major"));
+        assert_eq!(minor.primary_scale.as_deref(), Some("minor"));
+        assert!((major.confidence-minor.confidence).abs() < 0.0001);
+        assert_eq!(major.ambiguous,minor.ambiguous);
+    }
+
+    #[test]
+    fn sustained_modulation_can_replace_a_high_confidence_previous_key() {
+        let mut last = crate::audio_models::DetectedKeyPayload::unavailable("test");
+        last.primary_key=Some("C".into()); last.primary_scale=Some("major".into());
+        last.confidence=0.99; last.ambiguous=false;
+        let mut next=last.clone(); next.primary_key=Some("D".into()); next.confidence=0.98;
+        next.stability=0.98; next.window_count=9; next.enough_audio=true;
+        assert!(!with_switch_hysteresis(next,Some(&last)).ambiguous);
+    }
     use super::{
         aggregate_results, apply_ready_streak_gate, contradiction_metrics_from_history,
         enforce_apply_gate, with_switch_hysteresis, ContradictionMetrics,
@@ -2472,6 +2798,8 @@ mod tests {
                 display_name: "E minor".to_string(),
                 strength: 0.79,
                 first_to_second_relative_strength: Some(0.14),
+                candidates: None,
+                tuning_cents: None,
                 window_start_ms: 0,
                 window_end_ms: 12_000,
             },
@@ -2482,6 +2810,8 @@ mod tests {
                 display_name: "G major".to_string(),
                 strength: 0.76,
                 first_to_second_relative_strength: Some(0.11),
+                candidates: None,
+                tuning_cents: None,
                 window_start_ms: 4_000,
                 window_end_ms: 16_000,
             },
@@ -2508,6 +2838,8 @@ mod tests {
                 display_name: "D major".to_string(),
                 strength: 0.91,
                 first_to_second_relative_strength: Some(0.35),
+                candidates: None,
+                tuning_cents: None,
                 window_start_ms: 0,
                 window_end_ms: 12_000,
             },
@@ -2518,6 +2850,8 @@ mod tests {
                 display_name: "D major".to_string(),
                 strength: 0.88,
                 first_to_second_relative_strength: Some(0.31),
+                candidates: None,
+                tuning_cents: None,
                 window_start_ms: 4_000,
                 window_end_ms: 16_000,
             },
@@ -2528,6 +2862,8 @@ mod tests {
                 display_name: "D major".to_string(),
                 strength: 0.86,
                 first_to_second_relative_strength: Some(0.29),
+                candidates: None,
+                tuning_cents: None,
                 window_start_ms: 8_000,
                 window_end_ms: 20_000,
             },
@@ -2562,6 +2898,8 @@ mod tests {
                 display_name: "G major".to_string(),
                 strength: 0.93,
                 first_to_second_relative_strength: Some(0.38),
+                candidates: None,
+                tuning_cents: None,
                 window_start_ms: 0,
                 window_end_ms: 12_000,
             });
@@ -2578,6 +2916,8 @@ mod tests {
                     display_name: "E minor".to_string(),
                     strength: *strength,
                     first_to_second_relative_strength: Some(0.30),
+                    candidates: None,
+                    tuning_cents: None,
                     window_start_ms: start,
                     window_end_ms: end,
                 });
@@ -2600,7 +2940,7 @@ mod tests {
     }
 
     #[test]
-    fn relative_pair_does_not_promote_relative_major_by_simple_votes() {
+    fn relative_pair_transition_remains_ambiguous_until_history_settles() {
         let mut windows = Vec::new();
         // Windows 1-2: E minor wins.
         for start in [0u64, 4_000] {
@@ -2612,6 +2952,8 @@ mod tests {
                     display_name: "E minor".to_string(),
                     strength: 0.63,
                     first_to_second_relative_strength: Some(0.22),
+                    candidates: None,
+                    tuning_cents: None,
                     window_start_ms: start,
                     window_end_ms: start + 12_000,
                 });
@@ -2627,6 +2969,8 @@ mod tests {
                     display_name: "G major".to_string(),
                     strength: 0.72,
                     first_to_second_relative_strength: Some(0.14),
+                    candidates: None,
+                    tuning_cents: None,
                     window_start_ms: start,
                     window_end_ms: start + 12_000,
                 });
@@ -2645,18 +2989,9 @@ mod tests {
             true,
             &history,
         );
-        assert!(
-            payload.ambiguous || payload.primary_scale.as_deref() == Some("minor"),
-            "relative pair should resolve to minor or remain ambiguous, not cleanly promote relative major"
-        );
-        assert!(
-            payload
-                .reason
-                .as_deref()
-                .unwrap_or_default()
-                .contains("relative_pair_")
-                || payload.primary_scale.as_deref() == Some("minor")
-        );
+        assert_eq!(payload.primary_scale.as_deref(), Some("major"));
+        assert!(payload.ambiguous);
+        assert!(!payload.ready_to_apply);
     }
 
     #[test]
@@ -2711,6 +3046,8 @@ mod tests {
             ambiguous: false,
             reason: None,
             state: "likely_key".to_string(),
+            evidence_id: None,
+            track_identity: None,
             ready_to_apply: true,
         };
         let next = crate::audio_models::DetectedKeyPayload {
@@ -2729,6 +3066,8 @@ mod tests {
             ambiguous: false,
             reason: None,
             state: "likely_key".to_string(),
+            evidence_id: None,
+            track_identity: None,
             ready_to_apply: true,
         };
         let gated = with_switch_hysteresis(next, Some(&last));
@@ -2755,6 +3094,8 @@ mod tests {
             ambiguous: false,
             reason: None,
             state: "likely_key".to_string(),
+            evidence_id: None,
+            track_identity: None,
             ready_to_apply: true,
         };
         let first = apply_ready_streak_gate(payload.clone(), 1, "essentia", 0.0, 1.0);
@@ -2822,6 +3163,8 @@ mod tests {
             ambiguous: false,
             reason: None,
             state: "likely_key".to_string(),
+            evidence_id: None,
+            track_identity: None,
             ready_to_apply: true,
         };
         let mut cm = stable_cm();
@@ -2863,6 +3206,8 @@ mod tests {
             ambiguous: false,
             reason: None,
             state: "likely_key".to_string(),
+            evidence_id: None,
+            track_identity: None,
             ready_to_apply: true,
         };
         let gated = enforce_apply_gate(
@@ -2880,6 +3225,80 @@ mod tests {
             8,
         );
         assert!(!gated.ready_to_apply);
+        assert_eq!(gated.reason.as_deref(), Some("stable_numpy_estimate"));
+    }
+
+    #[test]
+    fn apply_gate_accepts_verified_cloud_without_local_capture() {
+        let mut payload = crate::audio_models::DetectedKeyPayload::unavailable("test");
+        payload.primary_key = Some("Bb".into());
+        payload.primary_scale = Some("major".into());
+        payload.source = "cloud_verified".into();
+        payload.state = "likely_key".into();
+        payload.ambiguous = false;
+        payload.ready_to_apply = true;
+        let gated = enforce_apply_gate(payload, "unavailable", false, false, false,
+            false, false, true, 0.0, 0, &stable_cm(), 0);
+        assert!(gated.ready_to_apply);
+        assert_eq!(gated.primary_key.as_deref(), Some("Bb"));
+    }
+
+    #[test]
+    fn live_numpy_estimates_keep_all_evidence_safeguards() {
+        let mut payload = crate::audio_models::DetectedKeyPayload::unavailable("test");
+        payload.primary_key = Some("D".into());
+        payload.primary_scale = Some("major".into());
+        payload.source = "audio_analysis:numpy_fallback".into();
+        payload.state = "likely_key".into();
+        payload.capture_mode = CaptureMode::ProcessLoopback;
+        payload.confidence = 0.95;
+        payload.stability = 0.95;
+        payload.enough_audio = true;
+        payload.ambiguous = false;
+        // Each case changes one piece of otherwise stable evidence.
+        for case in 0..9 {
+            let mut next = payload.clone();
+            if case == 0 { next.ambiguous = true; }
+            if case == 1 { next.enough_audio = false; }
+            if case == 2 { next.confidence = 0.7; }
+            if case == 3 { next.state = "paused_hold".into(); }
+            let gated = enforce_apply_gate(next, "numpy_fallback", case != 4,
+                true, true, case == 5, case == 6, case == 7, 0.95, 1,
+                &stable_cm(), if case == 8 { 0 } else { 8 });
+            assert_ne!(gated.reason.as_deref(), Some("stable_numpy_estimate"), "case {case}");
+            assert!(!gated.ready_to_apply);
+        }
+    }
+
+    #[test]
+    fn cloud_hit_requires_valid_key_and_major_or_minor() {
+        let control = super::CloudResolutionControl {
+            track_identity: Some("track".into()), state: "hit".into(),
+            key: Some("Bb".into()), mode: Some("dorian".into()), error: None,
+        };
+        assert!(!super::set_cloud_resolution(control));
+    }
+
+    #[test]
+    fn final_apply_gate_requires_enough_audio_for_supported_backends() {
+        for backend in ["essentia", "libkeyfinder"] {
+            let mut payload = crate::audio_models::DetectedKeyPayload::unavailable("test");
+            payload.primary_key = Some("D".into());
+            payload.primary_scale = Some("major".into());
+            payload.source = format!("audio_analysis:{backend}");
+            payload.state = "likely_key".into();
+            payload.capture_mode = CaptureMode::ProcessLoopback;
+            payload.confidence = 0.95;
+            payload.stability = 0.95;
+            payload.ambiguous = false;
+            let gated = enforce_apply_gate(payload.clone(), backend, true, true, true,
+                false, false, false, 0.95, 1, &stable_cm(), 8);
+            assert!(!gated.ready_to_apply, "not enough audio on {backend}");
+            payload.enough_audio = true;
+            let gated = enforce_apply_gate(payload, backend, true, true, true,
+                false, false, false, 0.95, 1, &stable_cm(), 8);
+            assert!(gated.ready_to_apply, "stable supported backend {backend}");
+        }
     }
 
     #[test]
@@ -2900,6 +3319,8 @@ mod tests {
             ambiguous: false,
             reason: None,
             state: "likely_key".to_string(),
+            evidence_id: None,
+            track_identity: None,
             ready_to_apply: true,
         };
         let gated = enforce_apply_gate(
@@ -2938,6 +3359,8 @@ mod tests {
             ambiguous: false,
             reason: Some("paused_holding_last_good_detection".to_string()),
             state: "paused_hold".to_string(),
+            evidence_id: None,
+            track_identity: None,
             ready_to_apply: true,
         };
         let gated = enforce_apply_gate(
@@ -2959,5 +3382,14 @@ mod tests {
             gated.reason.as_deref(),
             Some("paused_hold_last_good_apply_grace")
         );
+    }
+
+    #[test]
+    fn shutdown_does_not_wait_indefinitely_for_a_stalled_native_thread() {
+        use std::time::{Duration, Instant};
+        let handle = std::thread::spawn(|| std::thread::sleep(Duration::from_millis(200)));
+        let started = Instant::now();
+        assert!(!super::join_engine_before_deadline(handle, Duration::from_millis(20)));
+        assert!(started.elapsed() < Duration::from_millis(150));
     }
 }

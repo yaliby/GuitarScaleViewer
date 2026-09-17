@@ -10,6 +10,43 @@ const PROCESS_REACQUIRE_COOLDOWN: Duration = Duration::from_secs(20);
 const DISCONNECT_GRACE_PERIOD: Duration = Duration::from_millis(2500);
 const RECENT_SILENCE_BLOCK_WINDOW: Duration = Duration::from_secs(14);
 
+/// Prefer an audible process belonging to this player. A random helper process
+/// (or another application's audio session) can yield silence or the wrong music.
+fn choose_capture_pid(source: &str, expected_exe: Option<&str>, active: &[(u32, String)], named: &[u32]) -> Option<u32> {
+    let source = source.to_ascii_lowercase();
+    let matching: Vec<u32> = active.iter().filter_map(|(pid, name)| {
+        let matches = if let Some(exe) = expected_exe {
+            name.eq_ignore_ascii_case(exe)
+        } else {
+            name.eq_ignore_ascii_case(&source)
+        };
+        matches.then_some(*pid)
+    }).collect();
+    match matching.as_slice() {
+        [pid] => Some(*pid),
+        [] => match named { [pid] => Some(*pid), _ => None },
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod selection_tests {
+    #[test]
+    fn prefers_the_audio_producing_spotify_process_over_a_helper() {
+        let active = vec![(20, "Spotify.exe".to_string())];
+        assert_eq!(super::choose_capture_pid("spotify", Some("Spotify.exe"), &active, &[10, 20]), Some(20));
+    }
+    #[test]
+    fn unrelated_audio_and_ambiguous_helpers_use_endpoint_fallback() {
+        let active = vec![(30, "chrome.exe".to_string())];
+        assert_eq!(super::choose_capture_pid("spotify", Some("Spotify.exe"), &active, &[10, 20]), None);
+    }
+    #[test]
+    fn a_single_known_player_process_is_a_valid_fallback() {
+        assert_eq!(super::choose_capture_pid("vlc", Some("vlc.exe"), &[], &[40]), Some(40));
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct CaptureSnapshot {
     pub requested_mode: CaptureMode,
@@ -172,19 +209,12 @@ mod win {
         }
     }
 
-    fn find_process_id_by_exe(exe_name: &str) -> Option<u32> {
+    fn find_process_ids_by_exe(exe_name: &str) -> Vec<u32> {
         let refreshes = RefreshKind::nothing().with_processes(ProcessRefreshKind::everything());
         let system = System::new_with_specifics(refreshes);
-        let process_ids = system.processes_by_name(OsStr::new(exe_name));
-        let mut found: Option<u32> = None;
-        for process in process_ids {
-            // Process loopback must target the actual audio-producing process PID, not its parent.
-            found = Some(process.pid().as_u32());
-            if found.is_some() {
-                break;
-            }
-        }
-        found
+        system.processes_by_name(OsStr::new(exe_name))
+            .filter(|p| p.name().to_string_lossy().eq_ignore_ascii_case(exe_name))
+            .map(|p| p.pid().as_u32()).collect()
     }
 
     fn process_basename_from_pid(pid: u32) -> Option<String> {
@@ -200,6 +230,17 @@ mod win {
     }
 
     fn list_active_render_session_pids() -> Vec<u32> {
+        // This runs on the key-engine thread before a capture worker exists.
+        // COM initialization in the worker does not initialize this thread.
+        if let Err(error) = initialize_mta().ok() {
+            log::warn!("audio_capture: cannot initialize audio-session discovery: {error}");
+            return Vec::new();
+        }
+        struct ComSession;
+        impl Drop for ComSession {
+            fn drop(&mut self) { wasapi::deinitialize(); }
+        }
+        let _com_session = ComSession;
         let enumerator = match DeviceEnumerator::new() {
             Ok(e) => e,
             Err(_) => return Vec::new(),
@@ -265,22 +306,13 @@ mod win {
     }
 
     fn resolve_pid_for_source_app(source_app: &str) -> Option<u32> {
-        if let Some(exe) = likely_exe_name(source_app).or_else(|| guess_exe_from_friendly_name(source_app)) {
-            if let Some(pid) = find_process_id_by_exe(&exe) {
-                return Some(pid);
-            }
-        }
-
-        let source_l = source_app.to_ascii_lowercase();
-        for pid in list_active_render_session_pids() {
-            if let Some(exe) = process_basename_from_pid(pid) {
-                let exe_l = exe.to_ascii_lowercase();
-                if source_l.contains(&exe_l) || exe_l.contains(&source_l) {
-                    return Some(pid);
-                }
-            }
-        }
-        list_active_render_session_pids().into_iter().next()
+        let exe = likely_exe_name(source_app).or_else(|| guess_exe_from_friendly_name(source_app));
+        let active: Vec<_> = list_active_render_session_pids().into_iter()
+            .filter_map(|pid| process_basename_from_pid(pid).map(|name| (pid, name))).collect();
+        let named = exe.as_deref().map(find_process_ids_by_exe).unwrap_or_default();
+        let selected = super::choose_capture_pid(source_app, exe.as_deref(), &active, &named);
+        log::debug!("audio_capture: selected audio PID={selected:?} for source={source_app}; matching processes={}", named.len());
+        selected
     }
 
     fn likely_exe_name(source_app: &str) -> Option<String> {
@@ -472,6 +504,7 @@ pub struct AudioCaptureManager {
     target_app: Option<String>,
     sample_rate_hz: u32,
     mono_ring: VecDeque<f32>,
+    accepted_samples: u64,
     max_samples: usize,
     has_live_capture: bool,
     requested_mode: CaptureMode,
@@ -501,6 +534,7 @@ impl AudioCaptureManager {
             target_app: None,
             sample_rate_hz: ANALYZER_SAMPLE_RATE_HZ,
             mono_ring: VecDeque::with_capacity(max_samples),
+            accepted_samples: 0,
             max_samples,
             has_live_capture: false,
             requested_mode: if cfg!(windows) {
@@ -811,6 +845,11 @@ impl AudioCaptureManager {
         self.sample_rate_hz
     }
 
+    /// Lifetime sample endpoint: does not wrap with the ring or reset on restart.
+    pub fn accepted_samples(&self) -> u64 {
+        self.accepted_samples
+    }
+
     pub fn available_buffer_seconds(&self) -> f32 {
         self.mono_ring.len() as f32 / self.sample_rate_hz as f32
     }
@@ -862,6 +901,7 @@ impl AudioCaptureManager {
             self.mono_ring.clear();
         }
 
+        self.accepted_samples = self.accepted_samples.saturating_add(normalized.len() as u64);
         for &sample in &normalized {
             if self.mono_ring.len() >= self.max_samples {
                 let _ = self.mono_ring.pop_front();

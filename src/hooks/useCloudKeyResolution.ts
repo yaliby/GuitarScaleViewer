@@ -38,7 +38,7 @@ type CloudControlWire = {
 type SuggestionStatus = 'idle' | 'submitting' | 'success' | 'error';
 
 function isActiveSession(media: MediaSessionUiState): boolean {
-  return media.playbackStatus !== 'none' && media.playbackStatus !== 'media_session_unavailable';
+  return !['none', 'closed', 'media_session_unavailable'].includes(media.playbackStatus);
 }
 
 function isPlaying(media: MediaSessionUiState): boolean {
@@ -73,7 +73,10 @@ export function useCloudKeyResolution(media: MediaSessionUiState, detectedKey: D
   const abortRef = useRef<AbortController | null>(null);
   const activeTrackRef = useRef<string | null>(null);
 
-  const trackIdentity = useMemo(() => buildTrackIdentity(media), [media]);
+  const trackIdentity = useMemo(
+    () => buildTrackIdentity(media),
+    [media.album, media.artist, media.durationMs, media.sourceApp, media.title],
+  );
 
   useEffect(() => {
     const now = Date.now();
@@ -93,6 +96,7 @@ export function useCloudKeyResolution(media: MediaSessionUiState, detectedKey: D
 
     if (!hasSession) {
       activeTrackRef.current = null;
+      requestRef.current += 1;
       abortRef.current?.abort();
       setCloudState('idle');
       setCloudHit(null);
@@ -108,24 +112,29 @@ export function useCloudKeyResolution(media: MediaSessionUiState, detectedKey: D
       return;
     }
 
+    const changedTrack = activeTrackRef.current !== trackIdentity;
+    if (changedTrack) {
+      requestRef.current += 1;
+      abortRef.current?.abort();
+      activeTrackRef.current = trackIdentity;
+      setCloudState('idle');
+      setCloudHit(null);
+      setCloudError(null);
+      setSuggestionStatus('idle');
+      setSuggestionMessage(null);
+      console.info('key_resolution: track identity changed', trackIdentity);
+    }
+
     if (paused) {
+      requestRef.current += 1;
+      abortRef.current?.abort();
+      abortRef.current = null;
       setResolutionState('paused');
       return;
     }
 
     if (!playing) {
       return;
-    }
-
-    const changedTrack = activeTrackRef.current !== trackIdentity;
-    if (changedTrack) {
-      abortRef.current?.abort();
-      activeTrackRef.current = trackIdentity;
-      setCloudHit(null);
-      setCloudError(null);
-      setSuggestionStatus('idle');
-      setSuggestionMessage(null);
-      console.info('key_resolution: track identity changed', trackIdentity);
     }
 
     if (!trackIdentity || !title || !artist) {
@@ -198,8 +207,8 @@ export function useCloudKeyResolution(media: MediaSessionUiState, detectedKey: D
           return;
         }
         if (result.found) {
-          const mode = result.song.mode.toLowerCase() === 'major' ? 'major' : 'minor';
-          const key = result.song.musical_key.toUpperCase();
+          const mode = result.song.mode;
+          const key = result.song.musical_key;
           cacheRef.current.set(trackIdentity, {
             state: 'hit',
             key,
@@ -264,9 +273,17 @@ export function useCloudKeyResolution(media: MediaSessionUiState, detectedKey: D
     return () => {
       ac.abort();
     };
-  }, [media, trackIdentity]);
+  }, [media.artist, media.playbackStatus, media.title, trackIdentity]);
 
   useEffect(() => {
+    if (!isActiveSession(media)) {
+      setResolutionState('no_session');
+      return;
+    }
+    if (isPausedOrStopped(media)) {
+      setResolutionState('paused');
+      return;
+    }
     if (cloudState === 'hit') {
       setResolutionState('cloud_hit');
       return;
@@ -282,7 +299,7 @@ export function useCloudKeyResolution(media: MediaSessionUiState, detectedKey: D
         setResolutionState(cloudState === 'miss' ? 'cloud_miss_local_detecting' : 'local_detecting');
       }
     }
-  }, [cloudState, detectedKey.ambiguous, detectedKey.primaryKey, detectedKey.primaryScale]);
+  }, [cloudState, detectedKey.ambiguous, detectedKey.primaryKey, detectedKey.primaryScale, media.playbackStatus]);
 
   const source = useMemo<'cloud_verified' | 'local_detected' | 'none'>(() => {
     if (cloudState === 'hit' && cloudHit) {
@@ -333,7 +350,7 @@ export function useCloudKeyResolution(media: MediaSessionUiState, detectedKey: D
   return {
     cloudState,
     cloudError,
-    cloudHit,
+    cloudHit: activeTrackRef.current === trackIdentity ? cloudHit : null,
     resolutionState,
     source,
     sourceBadge,

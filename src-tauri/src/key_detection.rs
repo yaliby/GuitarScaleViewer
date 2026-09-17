@@ -4,7 +4,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{mpsc, Mutex};
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
@@ -60,6 +60,7 @@ struct LibKeyFinderLaunch {
     program: String,
     args_prefix: Vec<String>,
     descriptor: String,
+    response_timeout: Duration,
 }
 
 #[derive(Debug, Clone)]
@@ -67,17 +68,62 @@ struct SidecarLaunch {
     program: String,
     args_prefix: Vec<String>,
     descriptor: String,
+    startup_timeout: Duration,
+    response_timeout: Duration,
 }
 
 #[derive(Debug)]
 struct SidecarWorker {
-    child: Child,
+    child: ManagedChild,
     stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
-    last_restart: Instant,
-    restart_burst: u32,
+    stdout: mpsc::Receiver<Result<String, String>>,
     backend: String,
-    essentia_available: bool,
+}
+
+#[derive(Debug)]
+struct ManagedChild(Child);
+
+impl std::ops::Deref for ManagedChild {
+    type Target = Child;
+    fn deref(&self) -> &Child { &self.0 }
+}
+impl std::ops::DerefMut for ManagedChild {
+    fn deref_mut(&mut self) -> &mut Child { &mut self.0 }
+}
+impl Drop for ManagedChild {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+struct TempWav(PathBuf);
+impl Drop for TempWav {
+    fn drop(&mut self) { let _ = std::fs::remove_file(&self.0); }
+}
+
+fn hide_console(command: &mut Command) {
+    #[cfg(windows)] {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+}
+
+fn read_sidecar_line(lines: &mpsc::Receiver<Result<String, String>>, timeout: Duration) -> Result<String, String> {
+    lines.recv_timeout(timeout).map_err(|error| match error {
+        mpsc::RecvTimeoutError::Timeout => "sidecar response deadline exceeded".to_string(),
+        mpsc::RecvTimeoutError::Disconnected => "sidecar closed output stream".to_string(),
+    })?
+}
+
+fn stdout_lines(stdout: ChildStdout) -> mpsc::Receiver<Result<String, String>> {
+    let (sender, receiver) = mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            if sender.send(line.map_err(|error| format!("read sidecar: {error}"))).is_err() { break; }
+        }
+    });
+    receiver
 }
 
 #[derive(Debug, Serialize)]
@@ -124,6 +170,8 @@ impl SidecarKeyDetector {
                 program: sidecar_executable.to_string_lossy().to_string(),
                 args_prefix: Vec::new(),
                 descriptor: sidecar_executable.display().to_string(),
+                startup_timeout: Duration::from_secs(10),
+                response_timeout: Duration::from_secs(8),
             },
             worker: Mutex::new(None),
             last_health: Mutex::new(DetectorHealth::unavailable("worker_not_started")),
@@ -141,6 +189,8 @@ impl SidecarKeyDetector {
                 program: python_command.to_string(),
                 args_prefix: args,
                 descriptor: format!("{python_command} {}", script_path.display()),
+                startup_timeout: Duration::from_secs(10),
+                response_timeout: Duration::from_secs(8),
             },
             worker: Mutex::new(None),
             last_health: Mutex::new(DetectorHealth::unavailable("worker_not_started")),
@@ -159,6 +209,8 @@ impl SidecarKeyDetector {
                 program: "wsl".to_string(),
                 args_prefix: args,
                 descriptor: format!("wsl -- {linux_python} {linux_script_path}"),
+                startup_timeout: Duration::from_secs(10),
+                response_timeout: Duration::from_secs(8),
             },
             worker: Mutex::new(None),
             last_health: Mutex::new(DetectorHealth::unavailable("worker_not_started")),
@@ -173,9 +225,10 @@ impl SidecarKeyDetector {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let mut child = command
+        hide_console(&mut command);
+        let mut child = ManagedChild(command
             .spawn()
-            .map_err(|e| format!("spawn sidecar ({}): {e}", self.launch.descriptor))?;
+            .map_err(|e| format!("spawn sidecar ({}): {e}", self.launch.descriptor))?);
         let stdin = child
             .stdin
             .take()
@@ -190,11 +243,8 @@ impl SidecarKeyDetector {
             .ok_or_else(|| "sidecar stderr unavailable".to_string())?;
         Self::spawn_stderr_pump(stderr);
 
-        let mut stdout_reader = BufReader::new(stdout);
-        let mut ready_line = String::new();
-        let _ = stdout_reader
-            .read_line(&mut ready_line)
-            .map_err(|e| format!("read sidecar ready line: {e}"))?;
+        let stdout_reader = stdout_lines(stdout);
+        let ready_line = read_sidecar_line(&stdout_reader, self.launch.startup_timeout)?;
         if ready_line.trim().is_empty() {
             return Err("sidecar did not provide ready line".to_string());
         }
@@ -238,7 +288,7 @@ impl SidecarKeyDetector {
         };
         if let Ok(mut health) = self.last_health.lock() {
             *health = DetectorHealth {
-                healthy: ready_flag && essentia_available,
+                healthy: ready_flag && (essentia_available || numpy_available),
                 backend: backend.clone(),
                 reason: reason.clone(),
             };
@@ -260,10 +310,7 @@ impl SidecarKeyDetector {
             child,
             stdin,
             stdout: stdout_reader,
-            last_restart: Instant::now(),
-            restart_burst: 0,
             backend,
-            essentia_available,
         })
     }
 
@@ -289,11 +336,8 @@ impl SidecarKeyDetector {
             .map_err(|e| format!("flush sidecar request: {e}"))?;
         log::debug!("key_detection: request flushed; waiting for response");
 
-        let mut line = String::new();
-        let read = worker
-            .stdout
-            .read_line(&mut line)
-            .map_err(|e| format!("read sidecar response: {e}"))?;
+        let line = read_sidecar_line(&worker.stdout, self.launch.response_timeout)?;
+        let read = line.len();
         log::debug!("key_detection: response bytes read={read}");
         if read == 0 {
             let status = worker.child.try_wait().ok().flatten();
@@ -350,6 +394,7 @@ impl LibKeyFinderDetector {
                 program: executable.to_string_lossy().to_string(),
                 args_prefix: Vec::new(),
                 descriptor: executable.display().to_string(),
+                response_timeout: Duration::from_secs(8),
             },
             last_health: Mutex::new(DetectorHealth {
                 healthy: true,
@@ -365,6 +410,7 @@ impl LibKeyFinderDetector {
                 program: "wsl".to_string(),
                 args_prefix: vec!["--".to_string(), linux_executable.clone()],
                 descriptor: format!("wsl -- {linux_executable}"),
+                response_timeout: Duration::from_secs(8),
             },
             last_health: Mutex::new(DetectorHealth {
                 healthy: true,
@@ -411,6 +457,7 @@ impl KeyDetector for SidecarKeyDetector {
                 .as_millis()
         );
         let wav_path = temp_dir.join(name);
+        let _temp_wav = TempWav(wav_path.clone());
         write_temp_wav_f32_mono(&wav_path, sample_rate_hz, mono_samples)?;
 
         let mut wav_path_str = wav_path.to_string_lossy().to_string();
@@ -447,17 +494,17 @@ impl KeyDetector for SidecarKeyDetector {
         }
 
         if let Some(worker) = guard.as_mut() {
-            if !worker.essentia_available {
+            if worker.backend == "unavailable" {
                 if let Ok(mut health) = self.last_health.lock() {
                     *health = DetectorHealth {
                         healthy: false,
                         backend: worker.backend.clone(),
-                        reason: Some("essentia_required_but_missing".to_string()),
+                        reason: Some("analyzer_dependencies_missing".to_string()),
                     };
                 }
                 let _ = std::fs::remove_file(&wav_path);
                 return Err(format!(
-                    "analyzer_unavailable:essentia_required backend={}",
+                    "analyzer_unavailable:dependencies_missing backend={}",
                     worker.backend
                 ));
             }
@@ -484,46 +531,14 @@ impl KeyDetector for SidecarKeyDetector {
                     Ok(output)
                 }
                 Err(first_err) => {
-                    // Prevent tight restart loops if the sidecar cannot start (missing deps, etc.).
-                    if worker.last_restart.elapsed() < Duration::from_secs(10) {
-                        worker.restart_burst = worker.restart_burst.saturating_add(1);
-                    } else {
-                        worker.restart_burst = 0;
+                    log::warn!("key_detection: discarding failed sidecar: {first_err}");
+                    // Drop kills and waits for the child, closing both pipe pumps.
+                    // Retry on the next engine cycle, never extend this request's deadline.
+                    drop(guard.take());
+                    if let Ok(mut health) = self.last_health.lock() {
+                        *health = DetectorHealth::unavailable(first_err.clone());
                     }
-                    worker.last_restart = Instant::now();
-
-                    // Do not drain stderr while the child is still running; read_to_string blocks until EOF.
-                    let err_detail = first_err;
-
-                    log::warn!(
-                        "key_detection: sidecar request failed (burst={}): {err_detail}",
-                        worker.restart_burst
-                    );
-
-                    if worker.restart_burst >= 3 {
-                        // Stop trying to respawn every cycle; let the engine surface analysis_error.
-                        if let Some(mut crashed) = guard.take() {
-                            let _ = crashed.child.kill();
-                        }
-                        if let Ok(mut health) = self.last_health.lock() {
-                            *health = DetectorHealth {
-                                healthy: false,
-                                backend: "unavailable".to_string(),
-                                reason: Some("sidecar_unstable_or_missing_dependencies".to_string()),
-                            };
-                        }
-                        let _ = std::fs::remove_file(&wav_path);
-                        return Err("sidecar_unstable_or_missing_dependencies".to_string());
-                    }
-                    if let Some(mut crashed) = guard.take() {
-                        let _ = crashed.child.kill();
-                    }
-                    *guard = Some(self.spawn_worker()?);
-                    if let Some(restarted) = guard.as_mut() {
-                        self.analyze_with_worker(restarted, &request, &wav_path)
-                    } else {
-                        Err("sidecar restart failed".to_string())
-                    }
+                    Err(first_err)
                 }
             }
         } else {
@@ -585,22 +600,30 @@ impl KeyDetector for LibKeyFinderDetector {
 
         let mut cmd = Command::new(&self.launch.program);
         cmd.args(&self.launch.args_prefix).arg(&wav_path_arg);
-        let output = cmd
-            .output()
-            .map_err(|e| format!("run libkeyfinder analyzer ({}): {e}", self.launch.descriptor))?;
-        let _ = std::fs::remove_file(&wav_path);
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
+        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+        hide_console(&mut cmd);
+        let _temp_wav = TempWav(wav_path.clone());
+        let mut child = ManagedChild(cmd.spawn()
+            .map_err(|e| format!("run libkeyfinder analyzer ({}): {e}", self.launch.descriptor))?);
+        if let Some(stderr) = child.stderr.take() { SidecarKeyDetector::spawn_stderr_pump(stderr); }
+        let lines = stdout_lines(child.stdout.take().ok_or("CLI stdout unavailable")?);
+        let deadline = Instant::now() + self.launch.response_timeout;
+        let stdout = read_sidecar_line(&lines, self.launch.response_timeout)?;
+        let status = loop {
+            if let Some(status) = child.try_wait().map_err(|e| format!("wait CLI: {e}"))? { break status; }
+            if Instant::now() >= deadline { return Err("CLI exit deadline exceeded".into()); }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        if !status.success() {
             if let Ok(mut h) = self.last_health.lock() {
                 *h = DetectorHealth {
                     healthy: false,
                     backend: "libkeyfinder".to_string(),
-                    reason: Some(format!("cli_failed:{stderr}")),
+                    reason: Some(format!("cli_failed:{status}")),
                 };
             }
-            return Err(format!("libkeyfinder analyzer failed: {stderr}"));
+            return Err(format!("libkeyfinder analyzer failed: {status}"));
         }
-        let stdout = String::from_utf8_lossy(&output.stdout);
         let parsed: LibKeyFinderResponse = serde_json::from_str(stdout.trim())
             .map_err(|e| format!("decode libkeyfinder response: {e}; stdout={stdout}"))?;
         let backend = parsed
@@ -614,7 +637,7 @@ impl KeyDetector for LibKeyFinderDetector {
             };
         }
 
-        let key = parsed.key.trim().to_ascii_uppercase();
+        let key = parsed.key.trim().to_string();
         let scale = parsed.scale.trim().to_ascii_lowercase();
         let is_unknown = key.is_empty()
             || key == "UNKNOWN"
@@ -644,6 +667,8 @@ impl KeyDetector for LibKeyFinderDetector {
                 display_name: display,
                 strength: 0.90,
                 first_to_second_relative_strength: Some(0.25),
+                candidates: None,
+                tuning_cents: None,
                 window_start_ms: 0,
                 window_end_ms: 12_000,
             }],
@@ -677,5 +702,70 @@ fn write_temp_wav_f32_mono(path: &Path, sample_rate_hz: u32, mono_samples: &[f32
     }
     writer.finalize().map_err(|e| format!("finalize wav: {e}"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn python() -> String {
+        std::env::var("KEY_ANALYZER_PYTHON").unwrap_or_else(|_| "python".into())
+    }
+
+    #[test]
+    fn numpy_worker_is_healthy_and_can_analyze_silence() {
+        let detector = SidecarKeyDetector::from_python_script(&python(),
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("sidecars/key_analyzer/key_analyzer.py"));
+        assert!(detector.health().healthy, "{:?}", detector.health());
+        let output = detector.analyze(&vec![0.0; 8000 * 4], 8000, 4, 2).unwrap();
+        assert!(output.windows.is_empty());
+    }
+
+    fn controlled_worker(code: &str) -> SidecarKeyDetector {
+        let mut detector = SidecarKeyDetector::from_executable(PathBuf::from(python()));
+        detector.launch.args_prefix = vec!["-u".into(), "-c".into(), code.into()];
+        detector.launch.startup_timeout = Duration::from_millis(100);
+        detector.launch.response_timeout = Duration::from_millis(100);
+        detector
+    }
+
+    #[test]
+    fn sidecar_startup_has_a_deadline() {
+        let detector = controlled_worker("import time; time.sleep(2); print('{\"ready\":true,\"numpyAvailable\":true}')");
+        let start = Instant::now();
+        let result = detector.spawn_worker();
+        assert!(result.is_err(), "delayed ready must time out");
+        assert!(start.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn sidecar_response_has_a_deadline_and_worker_is_discarded() {
+        let mut detector = controlled_worker("import time; print('{\"ready\":true,\"essentiaAvailable\":true,\"numpyAvailable\":true}'); input(); time.sleep(2); print('{\"windows\":[]}')");
+        detector.launch.startup_timeout = Duration::from_secs(2);
+        assert!(detector.health().healthy);
+        let start = Instant::now();
+        let result = detector.analyze(&[0.0; 20], 8000, 1, 1);
+        assert!(result.is_err(), "delayed response must time out");
+        assert!(start.elapsed() < Duration::from_secs(1));
+        assert!(detector.worker.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn libkeyfinder_cli_has_a_deadline() {
+        let mut detector = LibKeyFinderDetector::from_executable(PathBuf::from(python()));
+        detector.launch.args_prefix = vec!["-c".into(), "import time; time.sleep(2); print('{\"key\":\"C\",\"scale\":\"major\"}')".into()];
+        detector.launch.response_timeout = Duration::from_millis(100);
+        let start = Instant::now();
+        assert!(detector.analyze(&[0.0; 20], 8000, 1, 1).is_err());
+        assert!(start.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn libkeyfinder_preserves_flat_accidentals() {
+        let mut detector = LibKeyFinderDetector::from_executable(PathBuf::from(python()));
+        detector.launch.args_prefix = vec!["-c".into(), "print('{\"key\":\"Bb\",\"scale\":\"major\"}')".into()];
+        let result = detector.analyze(&[0.0; 20], 8000, 1, 1).unwrap();
+        assert_eq!(result.windows[0].key, "Bb");
+    }
 }
 

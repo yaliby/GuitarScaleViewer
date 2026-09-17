@@ -57,6 +57,11 @@ pub fn run() {
       key_engine::set_cloud_resolution,
       key_engine::get_cloud_resolution
     ])
-    .run(tauri::generate_context!())
-    .expect("error while running tauri application");
+    .build(tauri::generate_context!())
+    .expect("error while building tauri application")
+    .run(|_app, event| {
+      if matches!(event, tauri::RunEvent::Exit) {
+        key_engine::shutdown_key_engine();
+      }
+    });
 }

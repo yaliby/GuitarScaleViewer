@@ -8,3 +8,14 @@ logs/
 
 __pycache__/
 *.pyc
+test-results/
+playwright-report/
+
+# Local credentials and internal review artifacts
+.env
+.env.*
+!.env.example
+docs/superpowers/
+docs/review-evidence/*
+!docs/review-evidence/key-accuracy-before.json
+!docs/review-evidence/key-accuracy-after.json

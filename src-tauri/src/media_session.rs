@@ -280,11 +280,61 @@ mod win {
 pub async fn get_current_media_payload() -> MediaSessionPayload {
     #[cfg(windows)]
     {
-        win::fetch_payload().await
+        media_with_deadline(win::fetch_payload(), Duration::from_secs(2)).await
     }
     #[cfg(not(windows))]
     {
         MediaSessionPayload::unavailable()
+    }
+}
+
+#[cfg(windows)]
+async fn media_with_deadline(
+    poll: impl std::future::Future<Output = MediaSessionPayload>,
+    deadline: Duration,
+) -> MediaSessionPayload {
+    match tokio::time::timeout(deadline, poll).await {
+        Ok(payload) => payload,
+        Err(_) => {
+            log::warn!("media_session: metadata lookup deadline exceeded");
+            MediaSessionPayload::unavailable()
+        }
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn slow_media_lookup_returns_unavailable_and_drops_pending_work() {
+        use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+        struct Cancelled(Arc<AtomicBool>);
+        impl Drop for Cancelled {
+            fn drop(&mut self) { self.0.store(true, Ordering::Relaxed); }
+        }
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let cancellation_flag = cancelled.clone();
+        let poll = async move {
+            let _cancelled = Cancelled(cancellation_flag);
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            MediaSessionPayload::empty_session()
+        };
+        let start = std::time::Instant::now();
+        let result = media_with_deadline(poll, Duration::from_millis(20)).await;
+        assert_eq!(result.playback_status, "media_session_unavailable");
+        assert!(start.elapsed() < Duration::from_millis(150));
+        assert!(cancelled.load(Ordering::Relaxed));
+    }
+
+    #[tokio::test]
+    async fn timely_media_lookup_preserves_snapshot() {
+        let mut expected = MediaSessionPayload::empty_session();
+        expected.title = Some("Current track".into());
+        expected.playback_status = "playing".into();
+        expected.position_ms = Some(1234);
+        let result = media_with_deadline(std::future::ready(expected.clone()), Duration::from_millis(20)).await;
+        assert_eq!(result, expected);
     }
 }
 

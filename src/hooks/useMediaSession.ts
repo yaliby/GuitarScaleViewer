@@ -70,11 +70,16 @@ export function useMediaSession(): MediaSessionUiState {
           setState(wireToUi(initial));
         }
 
-        unlisten = await listen<MediaSessionWire>('media-session-update', (event) => {
+        const nextUnlisten = await listen<MediaSessionWire>('media-session-update', (event) => {
           if (!cancelled) {
             setState(wireToUi(event.payload));
           }
         });
+        if (cancelled) {
+          nextUnlisten();
+          return;
+        }
+        unlisten = nextUnlisten;
       } catch {
         if (!cancelled) {
           setState(BROWSER_FALLBACK);

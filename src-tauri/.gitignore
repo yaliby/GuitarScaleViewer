@@ -2,3 +2,6 @@
 # will have compiled files and executables
 /target/
 /gen/schemas
+/sidecars/key_analyzer/dist/
+/sidecars/key_analyzer/build/
+/sidecars/key_analyzer/*.spec

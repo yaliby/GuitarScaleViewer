@@ -75,26 +75,6 @@ export const SCALE_DEGREE_LABELS: Record<ScaleType, readonly string[]> = {
 
 const LETTER_ORDER = ['C', 'D', 'E', 'F', 'G', 'A', 'B'] as const;
 
-const NOTE_TO_PC: Record<string, number> = {
-  C: 0,
-  'C#': 1,
-  Db: 1,
-  D: 2,
-  'D#': 3,
-  Eb: 3,
-  E: 4,
-  F: 5,
-  'F#': 6,
-  Gb: 6,
-  G: 7,
-  'G#': 8,
-  Ab: 8,
-  A: 9,
-  'A#': 10,
-  Bb: 10,
-  B: 11,
-};
-
 const BASE_PC: Record<string, number> = {
   C: 0,
   D: 2,
@@ -111,20 +91,39 @@ export type ScaleNote = {
   isRoot: boolean;
 };
 
-export function parseRoot(root: string): { letter: string; pitchClass: number; key: string } {
-  const t = root.trim();
-  const match = /^([A-Ga-g])([#b]?)$/.exec(t);
-  if (!match || match[1] === undefined) {
-    throw new Error(`Invalid root: ${root}`);
+function normalizePitchClass(pc: number): number {
+  return ((pc % 12) + 12) % 12;
+}
+
+function parseSpelledNote(note: string): { letter: string; accidentals: string; pitchClass: number } | null {
+  const normalized = note.trim().replaceAll('♯', '#').replaceAll('♭', 'b');
+  const match = /^([A-Ga-g])([#b]*)$/.exec(normalized);
+  if (!match || match[1] === undefined || match[2] === undefined) {
+    return null;
   }
   const letter = match[1].toUpperCase();
-  const acc = match[2] ?? '';
-  const key = `${letter}${acc}` as keyof typeof NOTE_TO_PC;
-  const pc = NOTE_TO_PC[key];
-  if (pc === undefined) {
+  const accidentals = match[2];
+  if (accidentals.includes('#') && accidentals.includes('b')) {
+    return null;
+  }
+  const base = BASE_PC[letter];
+  if (base === undefined) {
+    return null;
+  }
+  const offset = accidentals.startsWith('#') ? accidentals.length : -accidentals.length;
+  return { letter, accidentals, pitchClass: normalizePitchClass(base + offset) };
+}
+
+export function parseRoot(root: string): { letter: string; pitchClass: number; key: string } {
+  const parsed = parseSpelledNote(root);
+  if (!parsed) {
     throw new Error(`Invalid root: ${root}`);
   }
-  return { letter, pitchClass: pc, key };
+  return {
+    letter: parsed.letter,
+    pitchClass: parsed.pitchClass,
+    key: `${parsed.letter}${parsed.accidentals}`,
+  };
 }
 
 function rotateLettersFromRoot(rootLetter: string): readonly string[] {
@@ -147,14 +146,7 @@ function accidentalForLetter(letter: string, targetPc: number): string {
   if (diff === 0) {
     return letter;
   }
-  if (diff === 1) {
-    return `${letter}#`;
-  }
-  if (diff === -1) {
-    return `${letter}b`;
-  }
-  const chromatic = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
-  return chromatic[targetPc] ?? '';
+  return diff > 0 ? `${letter}${'#'.repeat(diff)}` : `${letter}${'b'.repeat(-diff)}`;
 }
 
 export function buildScaleNotes(root: string, scaleType: ScaleType): ScaleNote[] {
@@ -201,14 +193,5 @@ export function labelForPitchClass(
 }
 
 export function pitchClassForNoteLabel(noteLabel: string): number | null {
-  const t = noteLabel.trim();
-  const m = /^([A-Ga-g])([#b]?)$/.exec(t);
-  if (!m || m[1] === undefined) {
-    return null;
-  }
-  const letter = m[1].toUpperCase();
-  const acc = m[2] ?? '';
-  const key = `${letter}${acc}` as keyof typeof NOTE_TO_PC;
-  const pc = NOTE_TO_PC[key];
-  return pc === undefined ? null : pc;
+  return parseSpelledNote(noteLabel)?.pitchClass ?? null;
 }

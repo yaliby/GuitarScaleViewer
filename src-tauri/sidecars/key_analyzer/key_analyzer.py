@@ -56,6 +56,8 @@ class WindowResult:
     first_to_second_relative_strength: float | None
     window_start_ms: int
     window_end_ms: int
+    candidates: list[dict] | None = None
+    tuning_cents: float | None = None
 
     def to_wire(self) -> dict:
         return {
@@ -67,6 +69,8 @@ class WindowResult:
             "firstToSecondRelativeStrength": self.first_to_second_relative_strength,
             "windowStartMs": self.window_start_ms,
             "windowEndMs": self.window_end_ms,
+            "candidates": self.candidates,
+            "tuningCents": self.tuning_cents,
         }
 
 
@@ -287,7 +291,7 @@ def _normalize_vec(v: np.ndarray) -> np.ndarray:
     return v / s
 
 
-def _estimate_key_from_chroma(chroma12: np.ndarray, profile_type: str) -> tuple[str, str, float]:
+def _rank_keys(chroma12: np.ndarray, profile_type: str) -> list[dict]:
     profiles = _key_profiles()
     p = profiles.get(profile_type, None) or profiles.get("krumhansl")
     major = p.get("major") if isinstance(p, dict) else None
@@ -296,63 +300,111 @@ def _estimate_key_from_chroma(chroma12: np.ndarray, profile_type: str) -> tuple[
         p = profiles.get("krumhansl")
         major, minor = p["major"], p["minor"]
 
-    c = _normalize_vec(chroma12)
-    best = ("C", "major", -1.0)
+    # Center both vectors: unpitched, flat chroma must not score ~98% merely
+    # because all bins and profile weights are positive. This is correlation,
+    # a descriptive fit score, not a calibrated probability of the song key.
+    c = _normalize_vec(chroma12 - np.mean(chroma12))
+    ranked = []
     for tonic in range(12):
-        maj = float(np.dot(c, _normalize_vec(_rotate(major, tonic))))
-        if maj > best[2]:
-            best = (NOTE_NAMES[tonic], "major", maj)
-        minv = float(np.dot(c, _normalize_vec(_rotate(minor, tonic))))
-        if minv > best[2]:
-            best = (NOTE_NAMES[tonic], "minor", minv)
-    # Map cosine similarity [-1..1] to [0..1] as strength.
-    strength = max(0.0, min(1.0, (best[2] + 1.0) * 0.5))
-    return best[0], best[1], strength
+        for mode, profile in (("major", major), ("minor", minor)):
+            score = float(np.dot(c, _normalize_vec(_rotate(profile - np.mean(profile), tonic))))
+            ranked.append({"key": NOTE_NAMES[tonic], "scale": mode,
+                           "score": max(0.0, min(1.0, score))})
+    return sorted(ranked, key=lambda candidate: candidate["score"], reverse=True)
+
+
+def _estimate_key_from_chroma(chroma12: np.ndarray, profile_type: str) -> tuple[str, str, float]:
+    top = _rank_keys(chroma12, profile_type)[0]
+    return top["key"], top["scale"], top["score"]
 
 
 def _chroma_from_window_numpy(window: np.ndarray, sample_rate_hz: int) -> np.ndarray:
-    frame_size = 4096
-    hop = 2048
+    return _tonal_features_numpy(window, sample_rate_hz)[0]
+
+
+def _tonal_features_numpy(window: np.ndarray, sample_rate_hz: int) -> tuple[np.ndarray, float]:
+    # ~370ms gives bass notes enough frequency resolution. Scale the FFT with
+    # sample rate so capture format does not change the musical resolution.
+    frame_size = 2 ** int(round(math.log2(max(1024, sample_rate_hz * 0.37))))
+    hop = frame_size // 4
     if len(window) < frame_size:
-        return np.zeros(12, dtype=np.float32)
-    win_fn = np.hanning(frame_size).astype(np.float32)
-    chroma_acc = np.zeros(12, dtype=np.float32)
-    frame_count = 0
-    for start in range(0, len(window) - frame_size + 1, hop):
-        frame = window[start : start + frame_size] * win_fn
-        spectrum = np.fft.rfft(frame)
-        mags = np.abs(spectrum)
-        freqs = np.fft.rfftfreq(frame_size, d=1.0 / sample_rate_hz)
-        # 40Hz..5kHz capture tonal range.
-        mask = (freqs >= 40.0) & (freqs <= 5000.0)
-        if not np.any(mask):
+        return np.zeros(12, dtype=np.float32), 0.0
+    frames = np.lib.stride_tricks.sliding_window_view(window, frame_size)[::hop]
+    magnitudes = np.abs(np.fft.rfft(frames * np.hanning(frame_size), axis=1))
+    frequencies = np.fft.rfftfreq(frame_size, 1.0 / sample_rate_hz)
+    band = (frequencies >= 40) & (frequencies <= min(5000, sample_rate_hz * 0.45))
+    pitches, weights, frame_ids = [], [], []
+    for frame_id, mags in enumerate(magnitudes):
+        band_mags = mags[band]
+        if not len(band_mags) or float(np.max(band_mags)) < 1e-5:
             continue
-        sel_freqs = freqs[mask]
-        sel_mags = mags[mask]
-        # MIDI note mapping -> pitch class.
-        midi = 69.0 + 12.0 * np.log2(np.maximum(sel_freqs, 1e-9) / 440.0)
-        pcs = np.mod(np.round(midi).astype(np.int32), 12)
-        for pc, mag in zip(pcs, sel_mags):
-            chroma_acc[int(pc)] += float(mag)
-        frame_count += 1
-    if frame_count == 0:
-        return np.zeros(12, dtype=np.float32)
-    return chroma_acc / (np.max(chroma_acc) + 1e-9)
+        flatness = np.exp(np.mean(np.log(np.maximum(band_mags, 1e-12)))) / (np.mean(band_mags) + 1e-12)
+        if flatness > 0.55:  # unpitched frames contribute no key evidence
+            continue
+        peaks = np.flatnonzero((mags[1:-1] > mags[:-2]) & (mags[1:-1] >= mags[2:])) + 1
+        peaks = peaks[band[peaks] & (mags[peaks] > np.max(band_mags) * 0.015)]
+        if not len(peaks):
+            continue
+        peaks = peaks[np.argsort(mags[peaks])[-80:]]
+        # Parabolic interpolation of log magnitude removes FFT-bin pitch bias.
+        left, middle, right = [np.log(np.maximum(mags[peaks + offset], 1e-12)) for offset in (-1, 0, 1)]
+        curvature = left - 2 * middle + right
+        offset = np.divide(0.5 * (left - right), curvature,
+                           out=np.zeros_like(middle), where=np.abs(curvature) > 1e-12)
+        peak_hz = (peaks + np.clip(offset, -0.5, 0.5)) * sample_rate_hz / frame_size
+        midi = 69 + 12 * np.log2(peak_hz / 440)
+        # Broad spectral envelope whitening reduces timbre/bass dominance without
+        # inventing subharmonic pitches. Compression retains softer chord tones.
+        envelope = np.convolve(mags, np.ones(81) / 81, mode="same")
+        amplitude = mags[peaks] ** 0.7 / np.maximum(envelope[peaks], np.max(mags) * 0.001) ** 0.3
+        amplitude /= np.sum(amplitude) + 1e-12
+        pitches.append(midi)
+        weights.append(amplitude)
+        frame_ids.append(np.full(len(midi), frame_id, dtype=np.int32))
+    # A short chord surrounded by silence must not masquerade as a full window
+    # of stable tonal evidence after chroma normalization discards its duration.
+    if not pitches or len(pitches) / len(magnitudes) < 0.2:
+        return np.zeros(12, dtype=np.float32), 0.0
+    midi, amplitude, frame_ids = map(np.concatenate, (pitches, weights, frame_ids))
+    # Circular fractional-semitone statistics estimate detuning independently of
+    # root. Correction is bounded to less than half a semitone; a true transpose
+    # remains a transpose. Diffuse tuning evidence does not trigger correction.
+    residual = midi - np.round(midi)
+    vector = np.sum(amplitude * np.exp(2j * np.pi * residual)) / (np.sum(amplitude) + 1e-12)
+    tuning = float(np.angle(vector) / (2 * np.pi)) if abs(vector) >= 0.5 else 0.0
+    tuning = float(np.clip(tuning, -0.4, 0.4))
+    positions = np.mod((midi - tuning) * 3, 36)
+    hpcp = np.zeros((len(magnitudes), 36), dtype=np.float64)
+    # Cosine weighting on 36 bins preserves sub-semitone resolution until after
+    # tuning correction. Each frame has equal influence, not each loud FFT bin.
+    for delta in (-1, 0, 1, 2):
+        bins = np.floor(positions).astype(np.int32) + delta
+        distance = np.abs(positions - bins) / 3
+        contribution = amplitude * np.where(distance < 0.5, np.cos(np.pi * distance) ** 2, 0)
+        np.add.at(hpcp, (frame_ids, bins % 36), contribution)
+    chroma = (hpcp[:, ::3] + 0.5 * (hpcp[:, 1::3] + np.roll(hpcp, 1, axis=1)[:, ::3])).sum(axis=0)
+    return (chroma / (np.max(chroma) + 1e-12)).astype(np.float32), tuning * 100
 
 
 def _analyze_numpy(samples: np.ndarray, sample_rate_hz: int, window_seconds: int, hop_seconds: int, profiles: List[str]) -> list[WindowResult]:
     results: list[WindowResult] = []
+    # Only two independent profiles exist here. Unknown Essentia profiles map
+    # to Krumhansl once; counting them repeatedly fabricates consensus.
+    profiles = list(dict.fromkeys(p if p in ("krumhansl", "temperley") else "krumhansl" for p in profiles))
     total_windows = 0
     skipped_low_chroma = 0
     for start, end, win in _iter_windows(samples, sample_rate_hz, window_seconds, hop_seconds) or []:
         total_windows += 1
         y = win.astype(np.float32)
-        chroma12 = _chroma_from_window_numpy(y, sample_rate_hz)
+        chroma12, tuning_cents = _tonal_features_numpy(y, sample_rate_hz)
         if float(np.max(np.abs(chroma12))) < 1e-6:
             skipped_low_chroma += 1
             continue
         for profile in profiles:
-            key, scale, strength = _estimate_key_from_chroma(chroma12, profile)
+            candidates = _rank_keys(chroma12, profile)
+            top = candidates[0]
+            key, scale, strength = top["key"], top["scale"], top["score"]
+            margin = (strength - candidates[1]["score"]) / max(strength, 1e-9)
             results.append(
                 WindowResult(
                     profile_type=profile,
@@ -360,9 +412,11 @@ def _analyze_numpy(samples: np.ndarray, sample_rate_hz: int, window_seconds: int
                     scale=scale,
                     display_name=f"{key} {scale}",
                     strength=float(strength),
-                    first_to_second_relative_strength=None,
+                    first_to_second_relative_strength=float(margin),
                     window_start_ms=math.floor(start * 1000 / sample_rate_hz),
                     window_end_ms=math.floor(end * 1000 / sample_rate_hz),
+                    candidates=candidates,
+                    tuning_cents=tuning_cents,
                 )
             )
     _log(

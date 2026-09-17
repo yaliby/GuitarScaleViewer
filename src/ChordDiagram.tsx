@@ -1,5 +1,6 @@
 import { useId } from 'react';
 import type { ChordVoicing } from './chords/chordTypes';
+import { getChordDiagramFretWindow } from './chords/diagramGeometry';
 
 export type ChordDiagramProps = {
   voicing: ChordVoicing;
@@ -9,6 +10,8 @@ export type ChordDiagramProps = {
   /** When set with openStringPcs, root dot gets a subtle accent ring. */
   rootPitchClass?: number;
   openStringPcs?: readonly number[];
+  /** Absolute capo fret. The diagram treats open strings as sounding at this boundary. */
+  capo?: number;
   /**
    * Open-pitch name per string (6 → 1, low to high). Shown as a compact hint row; display-only.
    */
@@ -43,6 +46,7 @@ export function ChordDiagram({
   size = 'md',
   rootPitchClass,
   openStringPcs,
+  capo = 0,
   stringLabels,
 }: ChordDiagramProps) {
   const rid = useId().replace(/:/g, '');
@@ -50,32 +54,13 @@ export function ChordDiagram({
   const showStringHints = Boolean(stringLabels && stringLabels.length === 6);
   const strHintPadL = showStringHints ? s.labelNudge : 0;
   const frets = voicing.frets;
-  const hasNut =
-    frets.some((c) => c === 'o' || c === 0) ||
-    frets.some((c) => typeof c === 'number' && c === 0);
-
-  const numericPlayed = frets
-    .map((c) => (c === 'o' ? 0 : typeof c === 'number' ? c : null))
-    .filter((n): n is number => n !== null);
-  const positive = numericPlayed.filter((n) => n > 0);
-  const minF = positive.length ? Math.min(...positive) : 1;
-  const maxF = numericPlayed.length ? Math.max(...numericPlayed) : 1;
-
-  let startFret = 1;
-  if (!hasNut && positive.length) {
-    startFret = voicing.baseFret > 1 ? voicing.baseFret : minF;
-  } else if (maxF > 5 && !hasNut) {
-    startFret = Math.max(1, maxF - 3);
-  }
-
-  // Keep open-chord nut view, but expand rows when a voicing reaches higher frets
-  // so dots/pills do not get clipped inside compact cards.
-  const fretRows = hasNut ? Math.max(4, Math.min(6, maxF)) : 4;
+  const { startFret, fretRows, hasOpenBoundary, boundaryFret } =
+    getChordDiagramFretWindow(voicing, capo);
   const strCount = 6;
   const innerW = (strCount - 1) * s.strGap;
   const innerH = fretRows * s.fretGap;
   /** Any “no nut” diagram (typical barre) — always show the window’s starting fret at left. */
-  const leftFretLabelW = !hasNut ? 22 : 0;
+  const leftFretLabelW = !hasOpenBoundary ? 22 : 0;
   const topPad = s.padT + (showStringHints ? 6 : 0);
   const w = s.padL + innerW + s.padR + leftFretLabelW + strHintPadL;
   const h = topPad + innerH + s.padB;
@@ -83,14 +68,16 @@ export function ChordDiagram({
   const x0 = s.padL + leftFretLabelW + strHintPadL;
   const y0 = topPad;
   const fretWindowLabelCx =
-    !hasNut && leftFretLabelW > 0 ? s.padL + strHintPadL + leftFretLabelW * 0.5 : null;
+    !hasOpenBoundary && leftFretLabelW > 0
+      ? s.padL + strHintPadL + leftFretLabelW * 0.5
+      : null;
 
   function fretCenterY(absFret: number): number {
-    if (hasNut) {
-      if (absFret <= 0) {
+    if (hasOpenBoundary) {
+      if (absFret <= boundaryFret) {
         return y0 - 8;
       }
-      return y0 + (absFret - 0.5) * s.fretGap;
+      return y0 + (absFret - startFret + 0.5) * s.fretGap;
     }
     return y0 + (absFret - startFret + 0.5) * s.fretGap;
   }
@@ -110,7 +97,7 @@ export function ChordDiagram({
   const gShine = `cd-shine-${rid}`;
   const fShadow = `cd-sh-${rid}`;
 
-  const fretWireYs = hasNut
+  const fretWireYs = hasOpenBoundary
     ? Array.from({ length: fretRows }, (_, i) => y0 + (i + 1) * s.fretGap)
     : Array.from({ length: fretRows + 1 }, (_, i) => y0 + i * s.fretGap);
 
@@ -180,7 +167,7 @@ export function ChordDiagram({
         </text>
       ) : null}
 
-      {hasNut ? (
+      {hasOpenBoundary ? (
         <rect
           x={x0 - 2}
           y={y0 - 5}
@@ -212,7 +199,7 @@ export function ChordDiagram({
             key={`str-${i}`}
             x1={x}
             x2={x}
-            y1={hasNut ? y0 - 6 : y0}
+            y1={hasOpenBoundary ? y0 - 6 : y0}
             y2={y0 + innerH}
             stroke="#d4d4d8"
             strokeOpacity={0.35}
@@ -242,7 +229,7 @@ export function ChordDiagram({
             </text>
           );
         }
-        if (cell === 'o' || cell === 0) {
+        if (cell === 'o' || cell === 0 || (capo > 0 && cell === boundaryFret)) {
           return (
             <circle
               key={`xo-${si}`}
@@ -320,7 +307,7 @@ export function ChordDiagram({
         if (typeof f !== 'number' || f < 0) {
           return null;
         }
-        if (f === 0 && hasNut) {
+        if (f <= boundaryFret && hasOpenBoundary) {
           return null;
         }
         if (barre && f === barre.fret && si >= barre.fromString && si <= barre.toString) {

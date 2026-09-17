@@ -19,6 +19,10 @@ export type KeyAlternative = {
 };
 
 export type DetectedKeyState = {
+  /** Advances only when native analysis receives fresh audio. */
+  evidenceId?: number;
+  /** Identity of the track whose audio produced this snapshot. */
+  trackIdentity?: string | null;
   primaryKey: string | null;
   primaryScale: string | null;
   displayName: string | null;
@@ -94,17 +98,27 @@ export function useDetectedKey() {
           setState(initial);
         }
 
-        unlisten = await listen<DetectedKeyState>('detected-key-update', (event) => {
+        const nextUnlisten = await listen<DetectedKeyState>('detected-key-update', (event) => {
           if (!cancelled) {
             setState(event.payload);
           }
         });
+        if (cancelled) {
+          nextUnlisten();
+          return;
+        }
+        unlisten = nextUnlisten;
 
-        unlistenAb = await listen<DetectedKeyAbState>('detected-key-ab-update', (event) => {
+        const nextUnlistenAb = await listen<DetectedKeyAbState>('detected-key-ab-update', (event) => {
           if (!cancelled) {
             setAbState(event.payload);
           }
         });
+        if (cancelled) {
+          nextUnlistenAb();
+          return;
+        }
+        unlistenAb = nextUnlistenAb;
       } catch {
         if (!cancelled) {
           setState(FALLBACK);

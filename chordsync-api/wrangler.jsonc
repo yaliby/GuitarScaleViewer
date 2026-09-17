@@ -6,7 +6,7 @@
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "chordsync-api",
 	"main": "src/index.ts",
-	"compatibility_date": "2026-04-27",
+	"compatibility_date": "2026-03-10",
 	"observability": {
 		"enabled": true
 	},
