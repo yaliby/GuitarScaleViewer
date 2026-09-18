@@ -10,6 +10,40 @@ const DEFAULT_API_BASE = 'https://chordsync-api.yali-chordsync.workers.dev';
 const API_BASE_OVERRIDE_KEY = 'gsv_api_base_override';
 const FREQBLOG_KEY_STORAGE = 'gsv_freqblog_api_key';
 const GETSONGBPM_KEY_STORAGE = 'gsv_getsongbpm_api_key';
+const REQUEST_TIMEOUT_MS = 8_000;
+
+/**
+ * A request that never settles is worse than a miss: the lookup effect stays pending
+ * for the whole track. Bound every call, while still honouring the caller's own signal
+ * so a track change aborts immediately rather than waiting out the deadline.
+ */
+async function fetchWithDeadline(url: string, init: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const sourceSignal = init.signal;
+  let timedOut = false;
+  const abortFromSource = () => controller.abort(sourceSignal?.reason);
+  if (sourceSignal?.aborted) {
+    abortFromSource();
+  } else {
+    sourceSignal?.addEventListener('abort', abortFromSource, { once: true });
+  }
+  const timeout = globalThis.setTimeout(() => {
+    timedOut = true;
+    controller.abort(new DOMException('Request timed out', 'TimeoutError'));
+  }, REQUEST_TIMEOUT_MS);
+
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (timedOut) {
+      throw new Error(`Request timed out after ${REQUEST_TIMEOUT_MS}ms`);
+    }
+    throw error;
+  } finally {
+    globalThis.clearTimeout(timeout);
+    sourceSignal?.removeEventListener('abort', abortFromSource);
+  }
+}
 
 function currentApiBase(): string {
   if (typeof window === 'undefined') {
@@ -74,6 +108,11 @@ export type LookupSongHit = {
   title: string;
   artist: string;
   musical_key: string;
+  /**
+   * Left loose on purpose: catalogs answer with '', '0', 'Minor' and Spotify-style
+   * integers. `normalizeLookupKey` is the single place that decides whether a record
+   * is readable, and an unreadable one is reported as a miss rather than throwing.
+   */
   mode: string;
   verified: boolean;
   source: KeyLookupSource;
@@ -101,8 +140,14 @@ export type SuggestionInput = {
   user?: string;
 };
 
-function assertString(value: unknown, field: string): string {
-  if (typeof value !== 'string') {
+/** Bounds on fields accepted from the API, matching the Worker's own input limits. */
+const MAX_TITLE_LENGTH = 300;
+const MAX_ARTIST_LENGTH = 200;
+const MAX_ID_LENGTH = 200;
+const MAX_KEY_LENGTH = 32;
+
+function assertString(value: unknown, field: string, maxLength: number): string {
+  if (typeof value !== 'string' || !value.trim() || value.length > maxLength) {
     throw new Error(`Invalid ${field} in API response`);
   }
   return value;
@@ -146,7 +191,7 @@ async function lookupOwnDatabase(
       title,
       artist,
     }, 'start');
-    const res = await fetch(url.toString(), { method: 'GET', signal });
+    const res = await fetchWithDeadline(url.toString(), { method: 'GET', signal });
     const elapsedMs = Date.now() - started;
     if (!res.ok) {
       trace('cloud', 'own_db.http_fail', `Worker returned HTTP ${res.status} — not a song miss; falling through to client catalogs`, {
@@ -199,11 +244,15 @@ async function lookupOwnDatabase(
           ? 'verified_db'
           : 'reccobeats';
     const hit: LookupSongHit = {
-      id: assertString((song as { id?: unknown }).id, 'song.id'),
-      title: assertString((song as { title?: unknown }).title, 'song.title'),
-      artist: assertString((song as { artist?: unknown }).artist, 'song.artist'),
-      musical_key: assertString((song as { musical_key?: unknown }).musical_key, 'song.musical_key'),
-      mode: assertString((song as { mode?: unknown }).mode, 'song.mode'),
+      id: assertString((song as { id?: unknown }).id, 'song.id', MAX_ID_LENGTH),
+      title: assertString((song as { title?: unknown }).title, 'song.title', MAX_TITLE_LENGTH),
+      artist: assertString((song as { artist?: unknown }).artist, 'song.artist', MAX_ARTIST_LENGTH),
+      musical_key: assertString(
+        (song as { musical_key?: unknown }).musical_key,
+        'song.musical_key',
+        MAX_KEY_LENGTH,
+      ),
+      mode: assertString((song as { mode?: unknown }).mode, 'song.mode', MAX_KEY_LENGTH),
       verified: source === 'verified_db' || Boolean((song as { verified?: unknown }).verified),
       source,
       sourceLabel:
@@ -328,7 +377,7 @@ export async function submitSongKeySuggestion(input: SuggestionInput): Promise<v
     key: payload.key,
     mode: payload.mode,
   }, 'start');
-  const res = await fetch(`${currentApiBase()}/submit-suggestion`, {
+  const res = await fetchWithDeadline(`${currentApiBase()}/submit-suggestion`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

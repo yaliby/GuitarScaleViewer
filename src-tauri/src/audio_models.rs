@@ -28,8 +28,20 @@ pub struct WindowAnalysisResult {
     pub display_name: String,
     pub strength: f32,
     pub first_to_second_relative_strength: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub candidates: Option<Vec<WindowKeyCandidate>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tuning_cents: Option<f32>,
     pub window_start_ms: u64,
     pub window_end_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowKeyCandidate {
+    pub key: String,
+    pub scale: String,
+    pub score: f32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -44,6 +56,10 @@ pub struct KeyCandidate {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DetectedKeyPayload {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_id: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub track_identity: Option<String>,
     pub primary_key: Option<String>,
     pub primary_scale: Option<String>,
     pub display_name: Option<String>,
@@ -65,6 +81,8 @@ pub struct DetectedKeyPayload {
 impl DetectedKeyPayload {
     pub fn unavailable(reason: impl Into<String>) -> Self {
         Self {
+            evidence_id: None,
+            track_identity: None,
             primary_key: None,
             primary_scale: None,
             display_name: None,
@@ -86,6 +104,8 @@ impl DetectedKeyPayload {
 
     pub fn warming_up(capture_mode: CaptureMode, target_app: Option<String>, reason: &str) -> Self {
         Self {
+            evidence_id: None,
+            track_identity: None,
             primary_key: None,
             primary_scale: None,
             display_name: None,

@@ -1,0 +1,161 @@
+[
+  {
+    "id": "clear_major_loop",
+    "backend": "numpy_fallback",
+    "windowCount": 12,
+    "expected": {
+      "key": "D",
+      "scale": "major"
+    },
+    "primaryMatches": true,
+    "candidates": [
+      {
+        "key": "D",
+        "scale": "major",
+        "share": 1.0
+      }
+    ],
+    "autoApplyAllowed": false,
+    "note": "Uncalibrated NumPy suggestions; vote share is not probability."
+  },
+  {
+    "id": "clear_minor_loop",
+    "backend": "numpy_fallback",
+    "windowCount": 8,
+    "expected": {
+      "key": "E",
+      "scale": "minor"
+    },
+    "primaryMatches": true,
+    "candidates": [
+      {
+        "key": "E",
+        "scale": "minor",
+        "share": 1.0
+      }
+    ],
+    "autoApplyAllowed": false,
+    "note": "Uncalibrated NumPy suggestions; vote share is not probability."
+  },
+  {
+    "id": "relative_ambiguous_excerpt",
+    "backend": "numpy_fallback",
+    "windowCount": 16,
+    "expected": {
+      "key": "A",
+      "scale": "minor"
+    },
+    "primaryMatches": true,
+    "candidates": [
+      {
+        "key": "A",
+        "scale": "minor",
+        "share": 0.5040445579871026
+      },
+      {
+        "key": "C",
+        "scale": "major",
+        "share": 0.49595544201289743
+      }
+    ],
+    "autoApplyAllowed": false,
+    "note": "Uncalibrated NumPy suggestions; vote share is not probability."
+  },
+  {
+    "id": "edm_mixed_excerpt",
+    "backend": "numpy_fallback",
+    "windowCount": 26,
+    "expected": {
+      "key": "A",
+      "scale": "minor"
+    },
+    "primaryMatches": true,
+    "candidates": [
+      {
+        "key": "A",
+        "scale": "minor",
+        "share": 0.5155204045329503
+      },
+      {
+        "key": "D",
+        "scale": "major",
+        "share": 0.2742480526339157
+      },
+      {
+        "key": "D",
+        "scale": "minor",
+        "share": 0.14416290386995864
+      },
+      {
+        "key": "G",
+        "scale": "major",
+        "share": 0.033822910659778445
+      },
+      {
+        "key": "F",
+        "scale": "major",
+        "share": 0.03224572830339681
+      }
+    ],
+    "autoApplyAllowed": false,
+    "note": "Uncalibrated NumPy suggestions; vote share is not probability."
+  },
+  {
+    "id": "guitar_rock_intro_then_hook",
+    "backend": "numpy_fallback",
+    "windowCount": 12,
+    "expected": {
+      "key": "E",
+      "scale": "minor"
+    },
+    "primaryMatches": true,
+    "candidates": [
+      {
+        "key": "E",
+        "scale": "minor",
+        "share": 0.5703040262740575
+      },
+      {
+        "key": "G",
+        "scale": "major",
+        "share": 0.3397723269956081
+      },
+      {
+        "key": "D",
+        "scale": "major",
+        "share": 0.08992364673033436
+      }
+    ],
+    "autoApplyAllowed": false,
+    "note": "Uncalibrated NumPy suggestions; vote share is not probability."
+  },
+  {
+    "id": "relative_pair_ground_truth_e_minor",
+    "backend": "numpy_fallback",
+    "windowCount": 12,
+    "expected": {
+      "key": "E",
+      "scale": "minor"
+    },
+    "primaryMatches": true,
+    "candidates": [
+      {
+        "key": "E",
+        "scale": "minor",
+        "share": 0.5703040262740575
+      },
+      {
+        "key": "G",
+        "scale": "major",
+        "share": 0.3397723269956081
+      },
+      {
+        "key": "D",
+        "scale": "major",
+        "share": 0.08992364673033436
+      }
+    ],
+    "autoApplyAllowed": false,
+    "note": "Uncalibrated NumPy suggestions; vote share is not probability."
+  }
+]

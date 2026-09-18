@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { lookupSongKey, normalizeLookupKey } from './songKeyApi';
+import { lookupSongKey, normalizeLookupKey, submitSongKeySuggestion } from './songKeyApi';
 
 /**
  * Hermetic degradation tests: no network is touched. They pin the behaviour the quality gate
@@ -177,5 +177,56 @@ describe('normalizeLookupKey', () => {
 
   it('returns null for a value that is not a key at all', () => {
     expect(normalizeLookupKey({ musical_key: 'unknown', mode: 'major' })).toBeNull();
+  });
+});
+
+/**
+ * Ported from the Fretboard Studio branch: these cover the request deadline and the
+ * accidental-preserving submit payload, which the catalog-fallback suite above does not.
+ */
+describe('lookupSongKey deadline', () => {
+  it('gives up on a Worker that never answers instead of hanging for the whole track', async () => {
+    vi.useFakeTimers();
+    // Only the Worker stalls; the catalogs fail fast so the run reaches a clean miss
+    // rather than hanging on a second unresolved promise.
+    const spy = vi.fn(async (...args: FetchArgs) => {
+      const url = typeof args[0] === 'string' ? args[0] : String(args[0]);
+      if (url.includes('workers.dev') || url.includes('/lookup-song')) {
+        const init = args[1] as RequestInit | undefined;
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), {
+            once: true,
+          });
+        });
+      }
+      return json({ error: 'not found' }, 404);
+    });
+    vi.stubGlobal('fetch', spy);
+
+    const lookup = lookupSongKey({ title: 'Blue in Green', artist: 'Miles Davis' });
+    // Flush the request deadline and every catalog backoff it schedules afterwards.
+    await vi.runAllTimersAsync();
+    await expect(lookup).resolves.toMatchObject({ found: false });
+
+    const workerCall = spy.mock.calls.find(([url]) => String(url).includes('/lookup-song'));
+    expect(workerCall).toBeDefined();
+    vi.useRealTimers();
+  });
+});
+
+describe('submitSongKeySuggestion', () => {
+  it('serializes a valid flat without destroying its accidental case', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(json({ success: true }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await submitSongKeySuggestion({
+      title: 'Blue in Green',
+      artist: 'Miles Davis',
+      key: 'bb',
+      mode: 'major',
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toMatchObject({ key: 'Bb', mode: 'major' });
   });
 });

@@ -20,6 +20,10 @@ export type KeyAlternative = {
 };
 
 export type DetectedKeyState = {
+  /** Advances only when native analysis receives fresh audio. */
+  evidenceId?: number;
+  /** Identity of the track whose audio produced this snapshot. */
+  trackIdentity?: string | null;
   primaryKey: string | null;
   primaryScale: string | null;
   displayName: string | null;
@@ -145,17 +149,27 @@ export function useDetectedKey() {
           apply(initial);
         }
 
-        unlisten = await listen<DetectedKeyState>('detected-key-update', (event) => {
+        const nextUnlisten = await listen<DetectedKeyState>('detected-key-update', (event) => {
           if (!cancelled) {
             apply(event.payload);
           }
         });
+        if (cancelled) {
+          nextUnlisten();
+          return;
+        }
+        unlisten = nextUnlisten;
 
-        unlistenAb = await listen<DetectedKeyAbState>('detected-key-ab-update', (event) => {
+        const nextUnlistenAb = await listen<DetectedKeyAbState>('detected-key-ab-update', (event) => {
           if (!cancelled) {
             setAbState(event.payload);
           }
         });
+        if (cancelled) {
+          nextUnlistenAb();
+          return;
+        }
+        unlistenAb = nextUnlistenAb;
         trace('detect', 'subscribed', 'Listening for detected-key-update from Rust', undefined, 'ok');
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

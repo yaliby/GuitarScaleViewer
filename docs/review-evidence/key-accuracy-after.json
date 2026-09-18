@@ -1,0 +1,924 @@
+{
+  "kind": "synthetic DSP benchmark, not real-song or auto-apply accuracy",
+  "pitchCases": 288,
+  "pitchCorrect": 288,
+  "pitchMisses": [],
+  "evaluationCases": 48,
+  "evaluationCorrect": 48,
+  "noisePredictions": 0,
+  "rolling60SecondAnalysisMs": 1061.97,
+  "cases": [
+    {
+      "root": 0,
+      "mode": "major",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "C",
+        "major"
+      ],
+      "actual": [
+        "C",
+        "major"
+      ],
+      "correct": true,
+      "fit": 0.9401430785655975,
+      "runnerGap": 0.2378092110157013,
+      "analysisMs": 183.51
+    },
+    {
+      "root": 0,
+      "mode": "minor",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "C",
+        "minor"
+      ],
+      "actual": [
+        "C",
+        "minor"
+      ],
+      "correct": true,
+      "fit": 0.91947340965271,
+      "runnerGap": 0.3235313296318054,
+      "analysisMs": 118.16
+    },
+    {
+      "root": 1,
+      "mode": "major",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "C#",
+        "major"
+      ],
+      "actual": [
+        "C#",
+        "major"
+      ],
+      "correct": true,
+      "fit": 0.9403475224971771,
+      "runnerGap": 0.22485730051994324,
+      "analysisMs": 127.09
+    },
+    {
+      "root": 1,
+      "mode": "minor",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "C#",
+        "minor"
+      ],
+      "actual": [
+        "C#",
+        "minor"
+      ],
+      "correct": true,
+      "fit": 0.9141300916671753,
+      "runnerGap": 0.3147319555282593,
+      "analysisMs": 123.84
+    },
+    {
+      "root": 2,
+      "mode": "major",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "D",
+        "major"
+      ],
+      "actual": [
+        "D",
+        "major"
+      ],
+      "correct": true,
+      "fit": 0.9408158659934998,
+      "runnerGap": 0.23762160539627075,
+      "analysisMs": 111.65
+    },
+    {
+      "root": 2,
+      "mode": "minor",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "D",
+        "minor"
+      ],
+      "actual": [
+        "D",
+        "minor"
+      ],
+      "correct": true,
+      "fit": 0.9174717366695404,
+      "runnerGap": 0.31984853744506836,
+      "analysisMs": 176.03
+    },
+    {
+      "root": 3,
+      "mode": "major",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "D#",
+        "major"
+      ],
+      "actual": [
+        "D#",
+        "major"
+      ],
+      "correct": true,
+      "fit": 0.942198783159256,
+      "runnerGap": 0.23330453038215637,
+      "analysisMs": 134.91
+    },
+    {
+      "root": 3,
+      "mode": "minor",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "D#",
+        "minor"
+      ],
+      "actual": [
+        "D#",
+        "minor"
+      ],
+      "correct": true,
+      "fit": 0.9174244999885559,
+      "runnerGap": 0.31038588285446167,
+      "analysisMs": 118.15
+    },
+    {
+      "root": 4,
+      "mode": "major",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "E",
+        "major"
+      ],
+      "actual": [
+        "E",
+        "major"
+      ],
+      "correct": true,
+      "fit": 0.9415407478809357,
+      "runnerGap": 0.22715294361114502,
+      "analysisMs": 158.37
+    },
+    {
+      "root": 4,
+      "mode": "minor",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "E",
+        "minor"
+      ],
+      "actual": [
+        "E",
+        "minor"
+      ],
+      "correct": true,
+      "fit": 0.917419970035553,
+      "runnerGap": 0.3151313364505768,
+      "analysisMs": 113.52
+    },
+    {
+      "root": 5,
+      "mode": "major",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "F",
+        "major"
+      ],
+      "actual": [
+        "F",
+        "major"
+      ],
+      "correct": true,
+      "fit": 0.9418145418167114,
+      "runnerGap": 0.24087002873420715,
+      "analysisMs": 100.88
+    },
+    {
+      "root": 5,
+      "mode": "minor",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "F",
+        "minor"
+      ],
+      "actual": [
+        "F",
+        "minor"
+      ],
+      "correct": true,
+      "fit": 0.9146451652050018,
+      "runnerGap": 0.30492156744003296,
+      "analysisMs": 121.02
+    },
+    {
+      "root": 6,
+      "mode": "major",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "F#",
+        "major"
+      ],
+      "actual": [
+        "F#",
+        "major"
+      ],
+      "correct": true,
+      "fit": 0.9419724643230438,
+      "runnerGap": 0.23572242259979248,
+      "analysisMs": 91.93
+    },
+    {
+      "root": 6,
+      "mode": "minor",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "F#",
+        "minor"
+      ],
+      "actual": [
+        "F#",
+        "minor"
+      ],
+      "correct": true,
+      "fit": 0.9130175709724426,
+      "runnerGap": 0.3054935038089752,
+      "analysisMs": 84.14
+    },
+    {
+      "root": 7,
+      "mode": "major",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "G",
+        "major"
+      ],
+      "actual": [
+        "G",
+        "major"
+      ],
+      "correct": true,
+      "fit": 0.9431522190570831,
+      "runnerGap": 0.24163296818733215,
+      "analysisMs": 110.69
+    },
+    {
+      "root": 7,
+      "mode": "minor",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "G",
+        "minor"
+      ],
+      "actual": [
+        "G",
+        "minor"
+      ],
+      "correct": true,
+      "fit": 0.9115529954433441,
+      "runnerGap": 0.3008509874343872,
+      "analysisMs": 79.97
+    },
+    {
+      "root": 8,
+      "mode": "major",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "G#",
+        "major"
+      ],
+      "actual": [
+        "G#",
+        "major"
+      ],
+      "correct": true,
+      "fit": 0.9425971508026123,
+      "runnerGap": 0.23314836621284485,
+      "analysisMs": 66.09
+    },
+    {
+      "root": 8,
+      "mode": "minor",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "G#",
+        "minor"
+      ],
+      "actual": [
+        "G#",
+        "minor"
+      ],
+      "correct": true,
+      "fit": 0.9086142778396606,
+      "runnerGap": 0.2904767394065857,
+      "analysisMs": 83.96
+    },
+    {
+      "root": 9,
+      "mode": "major",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "A",
+        "major"
+      ],
+      "actual": [
+        "A",
+        "major"
+      ],
+      "correct": true,
+      "fit": 0.946299135684967,
+      "runnerGap": 0.2414887249469757,
+      "analysisMs": 65.41
+    },
+    {
+      "root": 9,
+      "mode": "minor",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "A",
+        "minor"
+      ],
+      "actual": [
+        "A",
+        "minor"
+      ],
+      "correct": true,
+      "fit": 0.9095366299152374,
+      "runnerGap": 0.28787657618522644,
+      "analysisMs": 69.31
+    },
+    {
+      "root": 10,
+      "mode": "major",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "A#",
+        "major"
+      ],
+      "actual": [
+        "A#",
+        "major"
+      ],
+      "correct": true,
+      "fit": 0.9426962435245514,
+      "runnerGap": 0.24389922618865967,
+      "analysisMs": 68.13
+    },
+    {
+      "root": 10,
+      "mode": "minor",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "A#",
+        "minor"
+      ],
+      "actual": [
+        "A#",
+        "minor"
+      ],
+      "correct": true,
+      "fit": 0.9036987721920013,
+      "runnerGap": 0.26868659257888794,
+      "analysisMs": 65.39
+    },
+    {
+      "root": 11,
+      "mode": "major",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "B",
+        "major"
+      ],
+      "actual": [
+        "B",
+        "major"
+      ],
+      "correct": true,
+      "fit": 0.9424049854278564,
+      "runnerGap": 0.24561619758605957,
+      "analysisMs": 74.2
+    },
+    {
+      "root": 11,
+      "mode": "minor",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "B",
+        "minor"
+      ],
+      "actual": [
+        "B",
+        "minor"
+      ],
+      "correct": true,
+      "fit": 0.9035530686378479,
+      "runnerGap": 0.2634294033050537,
+      "analysisMs": 66.26
+    },
+    {
+      "root": 0,
+      "mode": "major",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "C",
+        "major"
+      ],
+      "actual": [
+        "C",
+        "major"
+      ],
+      "correct": true,
+      "fit": 0.9393401741981506,
+      "runnerGap": 0.2322160303592682,
+      "analysisMs": 100.49
+    },
+    {
+      "root": 0,
+      "mode": "minor",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "C",
+        "minor"
+      ],
+      "actual": [
+        "C",
+        "minor"
+      ],
+      "correct": true,
+      "fit": 0.9155678749084473,
+      "runnerGap": 0.31764429807662964,
+      "analysisMs": 202.21
+    },
+    {
+      "root": 1,
+      "mode": "major",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "C#",
+        "major"
+      ],
+      "actual": [
+        "C#",
+        "major"
+      ],
+      "correct": true,
+      "fit": 0.940878689289093,
+      "runnerGap": 0.2388143539428711,
+      "analysisMs": 114.06
+    },
+    {
+      "root": 1,
+      "mode": "minor",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "C#",
+        "minor"
+      ],
+      "actual": [
+        "C#",
+        "minor"
+      ],
+      "correct": true,
+      "fit": 0.9161094129085541,
+      "runnerGap": 0.3095056712627411,
+      "analysisMs": 115.33
+    },
+    {
+      "root": 2,
+      "mode": "major",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "D",
+        "major"
+      ],
+      "actual": [
+        "D",
+        "major"
+      ],
+      "correct": true,
+      "fit": 0.9398977756500244,
+      "runnerGap": 0.23146849870681763,
+      "analysisMs": 115.48
+    },
+    {
+      "root": 2,
+      "mode": "minor",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "D",
+        "minor"
+      ],
+      "actual": [
+        "D",
+        "minor"
+      ],
+      "correct": true,
+      "fit": 0.9187376499176025,
+      "runnerGap": 0.3282155394554138,
+      "analysisMs": 104.78
+    },
+    {
+      "root": 3,
+      "mode": "major",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "D#",
+        "major"
+      ],
+      "actual": [
+        "D#",
+        "major"
+      ],
+      "correct": true,
+      "fit": 0.9420789480209351,
+      "runnerGap": 0.2358873188495636,
+      "analysisMs": 89.89
+    },
+    {
+      "root": 3,
+      "mode": "minor",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "D#",
+        "minor"
+      ],
+      "actual": [
+        "D#",
+        "minor"
+      ],
+      "correct": true,
+      "fit": 0.917635589838028,
+      "runnerGap": 0.314516544342041,
+      "analysisMs": 93.05
+    },
+    {
+      "root": 4,
+      "mode": "major",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "E",
+        "major"
+      ],
+      "actual": [
+        "E",
+        "major"
+      ],
+      "correct": true,
+      "fit": 0.941815197467804,
+      "runnerGap": 0.23495671153068542,
+      "analysisMs": 113.49
+    },
+    {
+      "root": 4,
+      "mode": "minor",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "E",
+        "minor"
+      ],
+      "actual": [
+        "E",
+        "minor"
+      ],
+      "correct": true,
+      "fit": 0.9167909026145935,
+      "runnerGap": 0.31413066387176514,
+      "analysisMs": 92.16
+    },
+    {
+      "root": 5,
+      "mode": "major",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "F",
+        "major"
+      ],
+      "actual": [
+        "F",
+        "major"
+      ],
+      "correct": true,
+      "fit": 0.9416826665401459,
+      "runnerGap": 0.22608909010887146,
+      "analysisMs": 102.4
+    },
+    {
+      "root": 5,
+      "mode": "minor",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "F",
+        "minor"
+      ],
+      "actual": [
+        "F",
+        "minor"
+      ],
+      "correct": true,
+      "fit": 0.9187707304954529,
+      "runnerGap": 0.3182256817817688,
+      "analysisMs": 96.33
+    },
+    {
+      "root": 6,
+      "mode": "major",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "F#",
+        "major"
+      ],
+      "actual": [
+        "F#",
+        "major"
+      ],
+      "correct": true,
+      "fit": 0.9413318932056427,
+      "runnerGap": 0.23323577642440796,
+      "analysisMs": 79.9
+    },
+    {
+      "root": 6,
+      "mode": "minor",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "F#",
+        "minor"
+      ],
+      "actual": [
+        "F#",
+        "minor"
+      ],
+      "correct": true,
+      "fit": 0.9109860062599182,
+      "runnerGap": 0.2922535836696625,
+      "analysisMs": 85.65
+    },
+    {
+      "root": 7,
+      "mode": "major",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "G",
+        "major"
+      ],
+      "actual": [
+        "G",
+        "major"
+      ],
+      "correct": true,
+      "fit": 0.9427829384803772,
+      "runnerGap": 0.23643144965171814,
+      "analysisMs": 84.53
+    },
+    {
+      "root": 7,
+      "mode": "minor",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "G",
+        "minor"
+      ],
+      "actual": [
+        "G",
+        "minor"
+      ],
+      "correct": true,
+      "fit": 0.9113007485866547,
+      "runnerGap": 0.29788661003112793,
+      "analysisMs": 85.18
+    },
+    {
+      "root": 8,
+      "mode": "major",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "G#",
+        "major"
+      ],
+      "actual": [
+        "G#",
+        "major"
+      ],
+      "correct": true,
+      "fit": 0.9439029395580292,
+      "runnerGap": 0.24414768815040588,
+      "analysisMs": 86.98
+    },
+    {
+      "root": 8,
+      "mode": "minor",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "G#",
+        "minor"
+      ],
+      "actual": [
+        "G#",
+        "minor"
+      ],
+      "correct": true,
+      "fit": 0.9133424162864685,
+      "runnerGap": 0.3059760630130768,
+      "analysisMs": 89.91
+    },
+    {
+      "root": 9,
+      "mode": "major",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "A",
+        "major"
+      ],
+      "actual": [
+        "A",
+        "major"
+      ],
+      "correct": true,
+      "fit": 0.9459131956100464,
+      "runnerGap": 0.2390400767326355,
+      "analysisMs": 83.07
+    },
+    {
+      "root": 9,
+      "mode": "minor",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "A",
+        "minor"
+      ],
+      "actual": [
+        "A",
+        "minor"
+      ],
+      "correct": true,
+      "fit": 0.9113756418228149,
+      "runnerGap": 0.29874226450920105,
+      "analysisMs": 89.64
+    },
+    {
+      "root": 10,
+      "mode": "major",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "A#",
+        "major"
+      ],
+      "actual": [
+        "A#",
+        "major"
+      ],
+      "correct": true,
+      "fit": 0.9444818794727325,
+      "runnerGap": 0.23670437932014465,
+      "analysisMs": 82.82
+    },
+    {
+      "root": 10,
+      "mode": "minor",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "A#",
+        "minor"
+      ],
+      "actual": [
+        "A#",
+        "minor"
+      ],
+      "correct": true,
+      "fit": 0.9102740585803986,
+      "runnerGap": 0.2951311767101288,
+      "analysisMs": 92.72
+    },
+    {
+      "root": 11,
+      "mode": "major",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "B",
+        "major"
+      ],
+      "actual": [
+        "B",
+        "major"
+      ],
+      "correct": true,
+      "fit": 0.943206250667572,
+      "runnerGap": 0.24807563424110413,
+      "analysisMs": 94.3
+    },
+    {
+      "root": 11,
+      "mode": "minor",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "B",
+        "minor"
+      ],
+      "actual": [
+        "B",
+        "minor"
+      ],
+      "correct": true,
+      "fit": 0.9001074433326721,
+      "runnerGap": 0.25362688302993774,
+      "analysisMs": 87.56
+    }
+  ]
+}

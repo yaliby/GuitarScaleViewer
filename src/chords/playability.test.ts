@@ -17,11 +17,18 @@ function voicing(
 }
 
 describe('evaluateVoicingPlayability', () => {
-  it('rejects a voicing with no fretted note', () => {
+  it('accepts an all-open voicing that still sounds a chord', () => {
     const result = evaluateVoicingPlayability(voicing(['x', 'o', 'o', 'o', 'o', 'x']));
+    expect(result.playable).toBe(true);
+    expect(result.difficulty).toBe('easy');
+    expect(result.reason).toBe('open-friendly');
+  });
+
+  it('rejects a voicing with too few strings left sounding', () => {
+    const result = evaluateVoicingPlayability(voicing(['x', 'x', 'x', 'x', 'o', 'o']));
     expect(result.playable).toBe(false);
     expect(result.difficulty).toBe('hard');
-    expect(result.reason).toBe('no fretted notes');
+    expect(result.reason).toBe('too few sounded strings');
   });
 
   it('rejects a stretch no hand can make', () => {

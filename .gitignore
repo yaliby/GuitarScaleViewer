@@ -8,6 +8,17 @@ logs/
 
 __pycache__/
 *.pyc
+test-results/
+playwright-report/
 
 # CMake build output for the libkeyfinder sidecar
 src-tauri/sidecars/libkeyfinder_cli/build/
+
+# Local credentials and internal review artifacts
+.env
+.env.*
+!.env.example
+docs/superpowers/
+docs/review-evidence/*
+!docs/review-evidence/key-accuracy-before.json
+!docs/review-evidence/key-accuracy-after.json

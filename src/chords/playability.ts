@@ -107,10 +107,19 @@ function classifyDifficulty(score: number, span: number, fingerCount: number): C
 export function evaluateVoicingPlayability(v: ChordVoicing): ChordPlayability {
   const presses = pressedFrets(v);
   if (presses.length === 0) {
+    const soundedStrings = v.frets.filter((cell) => cell !== 'x').length;
+    if (soundedStrings >= 3) {
+      return {
+        playable: true,
+        difficulty: 'easy',
+        reason: 'open-friendly',
+        playabilityScore: 20,
+      };
+    }
     return {
       playable: false,
       difficulty: 'hard',
-      reason: 'no fretted notes',
+      reason: soundedStrings === 0 ? 'no sounded strings' : 'too few sounded strings',
       playabilityScore: -100,
     };
   }

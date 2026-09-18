@@ -67,6 +67,10 @@ function wasIncomplete(result: LookupSongResult): boolean {
   return !result.found && result.incomplete === true;
 }
 
+function isActiveSession(media: MediaSessionUiState): boolean {
+  return !['none', 'closed', 'media_session_unavailable'].includes(media.playbackStatus);
+}
+
 function delay(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal.aborted) {
@@ -170,6 +174,7 @@ export function useCloudKeyResolution(media: MediaSessionUiState, detectedKey: D
         why: 'no_session',
       }, 'skip');
       activeTrackRef.current = null;
+      requestRef.current += 1;
       abortRef.current?.abort();
       setCloudState('idle');
       setCloudHit(null);
@@ -185,7 +190,30 @@ export function useCloudKeyResolution(media: MediaSessionUiState, detectedKey: D
       return;
     }
 
+    const changedTrack = activeTrackRef.current !== trackIdentity;
+    if (changedTrack) {
+      requestRef.current += 1;
+      abortRef.current?.abort();
+      activeTrackRef.current = trackIdentity;
+      setCloudState('idle');
+      setCloudHit(null);
+      setCloudError(null);
+      setSuggestionStatus('idle');
+      setSuggestionMessage(null);
+      trace('cloud', 'track.changed', 'Track identity changed — aborting any in-flight lookup so it cannot cache a miss for the previous song', {
+        trackIdentity,
+        title,
+        artist,
+        why: 'identity_changed',
+      }, 'decide');
+    }
+
     if (paused) {
+      // Hold the last key, but drop any lookup still in flight so its late
+      // answer cannot land against the paused track.
+      requestRef.current += 1;
+      abortRef.current?.abort();
+      abortRef.current = null;
       trace('cloud', 'session.paused', 'Playback is paused/stopped — holding the last key, not starting a new lookup', {
         trackIdentity,
         title,
@@ -202,22 +230,6 @@ export function useCloudKeyResolution(media: MediaSessionUiState, detectedKey: D
         why: 'not_playing',
       }, 'skip');
       return;
-    }
-
-    const changedTrack = activeTrackRef.current !== trackIdentity;
-    if (changedTrack) {
-      abortRef.current?.abort();
-      activeTrackRef.current = trackIdentity;
-      setCloudHit(null);
-      setCloudError(null);
-      setSuggestionStatus('idle');
-      setSuggestionMessage(null);
-      trace('cloud', 'track.changed', 'Track identity changed — aborting any in-flight lookup so it cannot cache a miss for the previous song', {
-        trackIdentity,
-        title,
-        artist,
-        why: 'identity_changed',
-      }, 'decide');
     }
 
     if (!trackIdentity || !title || !artist) {
@@ -453,6 +465,14 @@ export function useCloudKeyResolution(media: MediaSessionUiState, detectedKey: D
   }, [artist, hasSession, paused, playing, title, trackIdentity]);
 
   useEffect(() => {
+    if (!isActiveSession(media)) {
+      setResolutionState('no_session');
+      return;
+    }
+    if (paused) {
+      setResolutionState('paused');
+      return;
+    }
     if (cloudState === 'hit') {
       setResolutionState(cloudHit?.verified ? 'cloud_hit' : 'catalog_hit');
       return;
@@ -468,7 +488,17 @@ export function useCloudKeyResolution(media: MediaSessionUiState, detectedKey: D
         setResolutionState(cloudState === 'miss' ? 'cloud_miss_local_detecting' : 'local_detecting');
       }
     }
-  }, [cloudHit?.verified, cloudState, detectedKey.ambiguous, detectedKey.primaryKey, detectedKey.primaryScale]);
+    // `cloudHit?.verified` picks cloud_hit vs catalog_hit and `media.playbackStatus`
+    // drives the session/paused branches, so both belong here.
+  }, [
+    cloudHit?.verified,
+    cloudState,
+    detectedKey.ambiguous,
+    detectedKey.primaryKey,
+    detectedKey.primaryScale,
+    media.playbackStatus,
+    paused,
+  ]);
 
   const source = useMemo<'cloud_verified' | 'catalog' | 'local_detected' | 'none'>(() => {
     if (cloudState === 'hit' && cloudHit) {
@@ -522,7 +552,7 @@ export function useCloudKeyResolution(media: MediaSessionUiState, detectedKey: D
   return {
     cloudState,
     cloudError,
-    cloudHit,
+    cloudHit: activeTrackRef.current === trackIdentity ? cloudHit : null,
     resolutionState,
     source,
     sourceBadge,

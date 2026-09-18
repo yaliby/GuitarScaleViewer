@@ -96,11 +96,16 @@ export function useMediaSession(): MediaSessionUiState {
           apply(wireToUi(initial));
         }
 
-        unlisten = await listen<MediaSessionWire>('media-session-update', (event) => {
+        const nextUnlisten = await listen<MediaSessionWire>('media-session-update', (event) => {
           if (!cancelled) {
             apply(wireToUi(event.payload));
           }
         });
+        if (cancelled) {
+          nextUnlisten();
+          return;
+        }
+        unlisten = nextUnlisten;
         trace('media', 'subscribed', 'Listening for media-session-update from Rust', undefined, 'ok');
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

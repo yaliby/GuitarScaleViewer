@@ -1,0 +1,1291 @@
+{
+  "kind": "synthetic DSP benchmark, not real-song or auto-apply accuracy",
+  "pitchCases": 288,
+  "pitchCorrect": 227,
+  "pitchMisses": [
+    {
+      "sampleRate": 44100,
+      "midi": 37,
+      "cents": -30,
+      "actualPitchClass": 0
+    },
+    {
+      "sampleRate": 44100,
+      "midi": 37,
+      "cents": 0,
+      "actualPitchClass": 0
+    },
+    {
+      "sampleRate": 44100,
+      "midi": 37,
+      "cents": 30,
+      "actualPitchClass": 2
+    },
+    {
+      "sampleRate": 44100,
+      "midi": 39,
+      "cents": -30,
+      "actualPitchClass": 2
+    },
+    {
+      "sampleRate": 44100,
+      "midi": 39,
+      "cents": 0,
+      "actualPitchClass": 2
+    },
+    {
+      "sampleRate": 44100,
+      "midi": 39,
+      "cents": 30,
+      "actualPitchClass": 2
+    },
+    {
+      "sampleRate": 44100,
+      "midi": 40,
+      "cents": -30,
+      "actualPitchClass": 5
+    },
+    {
+      "sampleRate": 44100,
+      "midi": 40,
+      "cents": 0,
+      "actualPitchClass": 5
+    },
+    {
+      "sampleRate": 44100,
+      "midi": 40,
+      "cents": 30,
+      "actualPitchClass": 5
+    },
+    {
+      "sampleRate": 44100,
+      "midi": 42,
+      "cents": -30,
+      "actualPitchClass": 5
+    },
+    {
+      "sampleRate": 44100,
+      "midi": 42,
+      "cents": 0,
+      "actualPitchClass": 7
+    },
+    {
+      "sampleRate": 44100,
+      "midi": 42,
+      "cents": 30,
+      "actualPitchClass": 7
+    },
+    {
+      "sampleRate": 44100,
+      "midi": 44,
+      "cents": -30,
+      "actualPitchClass": 7
+    },
+    {
+      "sampleRate": 44100,
+      "midi": 44,
+      "cents": 0,
+      "actualPitchClass": 9
+    },
+    {
+      "sampleRate": 44100,
+      "midi": 44,
+      "cents": 30,
+      "actualPitchClass": 9
+    },
+    {
+      "sampleRate": 44100,
+      "midi": 47,
+      "cents": -30,
+      "actualPitchClass": 10
+    },
+    {
+      "sampleRate": 44100,
+      "midi": 47,
+      "cents": 0,
+      "actualPitchClass": 10
+    },
+    {
+      "sampleRate": 44100,
+      "midi": 47,
+      "cents": 30,
+      "actualPitchClass": 0
+    },
+    {
+      "sampleRate": 44100,
+      "midi": 50,
+      "cents": -30,
+      "actualPitchClass": 1
+    },
+    {
+      "sampleRate": 44100,
+      "midi": 51,
+      "cents": -30,
+      "actualPitchClass": 2
+    },
+    {
+      "sampleRate": 44100,
+      "midi": 51,
+      "cents": 0,
+      "actualPitchClass": 2
+    },
+    {
+      "sampleRate": 44100,
+      "midi": 51,
+      "cents": 30,
+      "actualPitchClass": 4
+    },
+    {
+      "sampleRate": 44100,
+      "midi": 52,
+      "cents": 30,
+      "actualPitchClass": 5
+    },
+    {
+      "sampleRate": 44100,
+      "midi": 53,
+      "cents": 30,
+      "actualPitchClass": 6
+    },
+    {
+      "sampleRate": 44100,
+      "midi": 55,
+      "cents": 30,
+      "actualPitchClass": 8
+    },
+    {
+      "sampleRate": 44100,
+      "midi": 56,
+      "cents": 30,
+      "actualPitchClass": 9
+    },
+    {
+      "sampleRate": 44100,
+      "midi": 58,
+      "cents": -30,
+      "actualPitchClass": 9
+    },
+    {
+      "sampleRate": 44100,
+      "midi": 61,
+      "cents": -30,
+      "actualPitchClass": 0
+    },
+    {
+      "sampleRate": 44100,
+      "midi": 63,
+      "cents": -30,
+      "actualPitchClass": 2
+    },
+    {
+      "sampleRate": 44100,
+      "midi": 63,
+      "cents": 30,
+      "actualPitchClass": 4
+    },
+    {
+      "sampleRate": 48000,
+      "midi": 36,
+      "cents": -30,
+      "actualPitchClass": 10
+    },
+    {
+      "sampleRate": 48000,
+      "midi": 36,
+      "cents": 0,
+      "actualPitchClass": 1
+    },
+    {
+      "sampleRate": 48000,
+      "midi": 36,
+      "cents": 30,
+      "actualPitchClass": 1
+    },
+    {
+      "sampleRate": 48000,
+      "midi": 38,
+      "cents": -30,
+      "actualPitchClass": 1
+    },
+    {
+      "sampleRate": 48000,
+      "midi": 38,
+      "cents": 0,
+      "actualPitchClass": 1
+    },
+    {
+      "sampleRate": 48000,
+      "midi": 38,
+      "cents": 30,
+      "actualPitchClass": 1
+    },
+    {
+      "sampleRate": 48000,
+      "midi": 39,
+      "cents": -30,
+      "actualPitchClass": 4
+    },
+    {
+      "sampleRate": 48000,
+      "midi": 39,
+      "cents": 0,
+      "actualPitchClass": 4
+    },
+    {
+      "sampleRate": 48000,
+      "midi": 39,
+      "cents": 30,
+      "actualPitchClass": 4
+    },
+    {
+      "sampleRate": 48000,
+      "midi": 41,
+      "cents": -30,
+      "actualPitchClass": 4
+    },
+    {
+      "sampleRate": 48000,
+      "midi": 41,
+      "cents": 0,
+      "actualPitchClass": 4
+    },
+    {
+      "sampleRate": 48000,
+      "midi": 41,
+      "cents": 30,
+      "actualPitchClass": 6
+    },
+    {
+      "sampleRate": 48000,
+      "midi": 43,
+      "cents": -30,
+      "actualPitchClass": 6
+    },
+    {
+      "sampleRate": 48000,
+      "midi": 43,
+      "cents": 0,
+      "actualPitchClass": 6
+    },
+    {
+      "sampleRate": 48000,
+      "midi": 43,
+      "cents": 30,
+      "actualPitchClass": 8
+    },
+    {
+      "sampleRate": 48000,
+      "midi": 45,
+      "cents": -30,
+      "actualPitchClass": 8
+    },
+    {
+      "sampleRate": 48000,
+      "midi": 45,
+      "cents": 0,
+      "actualPitchClass": 8
+    },
+    {
+      "sampleRate": 48000,
+      "midi": 45,
+      "cents": 30,
+      "actualPitchClass": 10
+    },
+    {
+      "sampleRate": 48000,
+      "midi": 47,
+      "cents": -30,
+      "actualPitchClass": 10
+    },
+    {
+      "sampleRate": 48000,
+      "midi": 47,
+      "cents": 0,
+      "actualPitchClass": 0
+    },
+    {
+      "sampleRate": 48000,
+      "midi": 47,
+      "cents": 30,
+      "actualPitchClass": 0
+    },
+    {
+      "sampleRate": 48000,
+      "midi": 50,
+      "cents": -30,
+      "actualPitchClass": 1
+    },
+    {
+      "sampleRate": 48000,
+      "midi": 50,
+      "cents": 0,
+      "actualPitchClass": 3
+    },
+    {
+      "sampleRate": 48000,
+      "midi": 50,
+      "cents": 30,
+      "actualPitchClass": 3
+    },
+    {
+      "sampleRate": 48000,
+      "midi": 51,
+      "cents": 30,
+      "actualPitchClass": 4
+    },
+    {
+      "sampleRate": 48000,
+      "midi": 55,
+      "cents": -30,
+      "actualPitchClass": 6
+    },
+    {
+      "sampleRate": 48000,
+      "midi": 56,
+      "cents": -30,
+      "actualPitchClass": 7
+    },
+    {
+      "sampleRate": 48000,
+      "midi": 57,
+      "cents": -30,
+      "actualPitchClass": 8
+    },
+    {
+      "sampleRate": 48000,
+      "midi": 60,
+      "cents": 30,
+      "actualPitchClass": 1
+    },
+    {
+      "sampleRate": 48000,
+      "midi": 62,
+      "cents": 30,
+      "actualPitchClass": 3
+    },
+    {
+      "sampleRate": 48000,
+      "midi": 64,
+      "cents": 30,
+      "actualPitchClass": 5
+    }
+  ],
+  "evaluationCases": 48,
+  "evaluationCorrect": 42,
+  "noisePredictions": 1,
+  "rolling60SecondAnalysisMs": 1203.89,
+  "cases": [
+    {
+      "root": 0,
+      "mode": "major",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "C",
+        "major"
+      ],
+      "actual": [
+        "C",
+        "major"
+      ],
+      "correct": true,
+      "fit": 0.8777118921279907,
+      "runnerGap": 0.16963040828704834,
+      "analysisMs": 72.93
+    },
+    {
+      "root": 0,
+      "mode": "minor",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "C",
+        "minor"
+      ],
+      "actual": [
+        "C",
+        "minor"
+      ],
+      "correct": true,
+      "fit": 0.8311651349067688,
+      "runnerGap": 0.20879337191581726,
+      "analysisMs": 62.46
+    },
+    {
+      "root": 1,
+      "mode": "major",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "C#",
+        "major"
+      ],
+      "actual": [
+        "F",
+        "minor"
+      ],
+      "correct": false,
+      "fit": 0.7596375644207001,
+      "runnerGap": 0.010286271572113037,
+      "analysisMs": 74.86
+    },
+    {
+      "root": 1,
+      "mode": "minor",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "C#",
+        "minor"
+      ],
+      "actual": [
+        "C#",
+        "minor"
+      ],
+      "correct": true,
+      "fit": 0.6964300572872162,
+      "runnerGap": 0.09062597155570984,
+      "analysisMs": 78.55
+    },
+    {
+      "root": 2,
+      "mode": "major",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "D",
+        "major"
+      ],
+      "actual": [
+        "D",
+        "major"
+      ],
+      "correct": true,
+      "fit": 0.881579577922821,
+      "runnerGap": 0.15590903162956238,
+      "analysisMs": 75.16
+    },
+    {
+      "root": 2,
+      "mode": "minor",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "D",
+        "minor"
+      ],
+      "actual": [
+        "D",
+        "minor"
+      ],
+      "correct": true,
+      "fit": 0.823835700750351,
+      "runnerGap": 0.1648571491241455,
+      "analysisMs": 73.61
+    },
+    {
+      "root": 3,
+      "mode": "major",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "D#",
+        "major"
+      ],
+      "actual": [
+        "G",
+        "minor"
+      ],
+      "correct": false,
+      "fit": 0.7917220592498779,
+      "runnerGap": 0.07110631465911865,
+      "analysisMs": 74.31
+    },
+    {
+      "root": 3,
+      "mode": "minor",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "D#",
+        "minor"
+      ],
+      "actual": [
+        "D#",
+        "minor"
+      ],
+      "correct": true,
+      "fit": 0.5966847538948059,
+      "runnerGap": 0.05983993411064148,
+      "analysisMs": 71.53
+    },
+    {
+      "root": 4,
+      "mode": "major",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "E",
+        "major"
+      ],
+      "actual": [
+        "E",
+        "major"
+      ],
+      "correct": true,
+      "fit": 0.9079441130161285,
+      "runnerGap": 0.2588232159614563,
+      "analysisMs": 85.95
+    },
+    {
+      "root": 4,
+      "mode": "minor",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "E",
+        "minor"
+      ],
+      "actual": [
+        "E",
+        "minor"
+      ],
+      "correct": true,
+      "fit": 0.8762078881263733,
+      "runnerGap": 0.25685223937034607,
+      "analysisMs": 71.39
+    },
+    {
+      "root": 5,
+      "mode": "major",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "F",
+        "major"
+      ],
+      "actual": [
+        "F",
+        "major"
+      ],
+      "correct": true,
+      "fit": 0.8657175600528717,
+      "runnerGap": 0.12374815344810486,
+      "analysisMs": 91.58
+    },
+    {
+      "root": 5,
+      "mode": "minor",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "F",
+        "minor"
+      ],
+      "actual": [
+        "F",
+        "minor"
+      ],
+      "correct": true,
+      "fit": 0.8105486631393433,
+      "runnerGap": 0.1870381236076355,
+      "analysisMs": 99.26
+    },
+    {
+      "root": 6,
+      "mode": "major",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "F#",
+        "major"
+      ],
+      "actual": [
+        "F#",
+        "major"
+      ],
+      "correct": true,
+      "fit": 0.8517108857631683,
+      "runnerGap": 0.17909005284309387,
+      "analysisMs": 87.24
+    },
+    {
+      "root": 6,
+      "mode": "minor",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "F#",
+        "minor"
+      ],
+      "actual": [
+        "F#",
+        "minor"
+      ],
+      "correct": true,
+      "fit": 0.8220255970954895,
+      "runnerGap": 0.24929258227348328,
+      "analysisMs": 115.09
+    },
+    {
+      "root": 7,
+      "mode": "major",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "G",
+        "major"
+      ],
+      "actual": [
+        "G",
+        "major"
+      ],
+      "correct": true,
+      "fit": 0.8941590189933777,
+      "runnerGap": 0.17631152272224426,
+      "analysisMs": 92.31
+    },
+    {
+      "root": 7,
+      "mode": "minor",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "G",
+        "minor"
+      ],
+      "actual": [
+        "G",
+        "minor"
+      ],
+      "correct": true,
+      "fit": 0.846823126077652,
+      "runnerGap": 0.18103265762329102,
+      "analysisMs": 105.46
+    },
+    {
+      "root": 8,
+      "mode": "major",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "G#",
+        "major"
+      ],
+      "actual": [
+        "G#",
+        "major"
+      ],
+      "correct": true,
+      "fit": 0.8799134492874146,
+      "runnerGap": 0.19712942838668823,
+      "analysisMs": 106.23
+    },
+    {
+      "root": 8,
+      "mode": "minor",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "G#",
+        "minor"
+      ],
+      "actual": [
+        "G#",
+        "minor"
+      ],
+      "correct": true,
+      "fit": 0.8301415741443634,
+      "runnerGap": 0.19058486819267273,
+      "analysisMs": 84.95
+    },
+    {
+      "root": 9,
+      "mode": "major",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "A",
+        "major"
+      ],
+      "actual": [
+        "A",
+        "major"
+      ],
+      "correct": true,
+      "fit": 0.9126067459583282,
+      "runnerGap": 0.2699032425880432,
+      "analysisMs": 77.41
+    },
+    {
+      "root": 9,
+      "mode": "minor",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "A",
+        "minor"
+      ],
+      "actual": [
+        "A",
+        "minor"
+      ],
+      "correct": true,
+      "fit": 0.8768242299556732,
+      "runnerGap": 0.20797649025917053,
+      "analysisMs": 71.19
+    },
+    {
+      "root": 10,
+      "mode": "major",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "A#",
+        "major"
+      ],
+      "actual": [
+        "A#",
+        "major"
+      ],
+      "correct": true,
+      "fit": 0.8247734010219574,
+      "runnerGap": 0.06199142336845398,
+      "analysisMs": 61.79
+    },
+    {
+      "root": 10,
+      "mode": "minor",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "A#",
+        "minor"
+      ],
+      "actual": [
+        "A#",
+        "minor"
+      ],
+      "correct": true,
+      "fit": 0.7736782729625702,
+      "runnerGap": 0.16675013303756714,
+      "analysisMs": 73.89
+    },
+    {
+      "root": 11,
+      "mode": "major",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "B",
+        "major"
+      ],
+      "actual": [
+        "B",
+        "major"
+      ],
+      "correct": true,
+      "fit": 0.8997217416763306,
+      "runnerGap": 0.20642182230949402,
+      "analysisMs": 58.14
+    },
+    {
+      "root": 11,
+      "mode": "minor",
+      "sampleRate": 22050,
+      "cents": -25,
+      "gain": 0.3,
+      "expected": [
+        "B",
+        "minor"
+      ],
+      "actual": [
+        "B",
+        "minor"
+      ],
+      "correct": true,
+      "fit": 0.8668115437030792,
+      "runnerGap": 0.22835198044776917,
+      "analysisMs": 89.99
+    },
+    {
+      "root": 0,
+      "mode": "major",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "C",
+        "major"
+      ],
+      "actual": [
+        "F",
+        "minor"
+      ],
+      "correct": false,
+      "fit": 0.3958267867565155,
+      "runnerGap": 0.06659679114818573,
+      "analysisMs": 78.15
+    },
+    {
+      "root": 0,
+      "mode": "minor",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "C",
+        "minor"
+      ],
+      "actual": [
+        "G#",
+        "major"
+      ],
+      "correct": false,
+      "fit": 0.5702002942562103,
+      "runnerGap": 0.11215783655643463,
+      "analysisMs": 96.44
+    },
+    {
+      "root": 1,
+      "mode": "major",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "C#",
+        "major"
+      ],
+      "actual": [
+        "C#",
+        "major"
+      ],
+      "correct": true,
+      "fit": 0.9178128838539124,
+      "runnerGap": 0.2941221296787262,
+      "analysisMs": 132.08
+    },
+    {
+      "root": 1,
+      "mode": "minor",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "C#",
+        "minor"
+      ],
+      "actual": [
+        "C#",
+        "minor"
+      ],
+      "correct": true,
+      "fit": 0.8674361109733582,
+      "runnerGap": 0.1819758117198944,
+      "analysisMs": 114.7
+    },
+    {
+      "root": 2,
+      "mode": "major",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "D",
+        "major"
+      ],
+      "actual": [
+        "C#",
+        "minor"
+      ],
+      "correct": false,
+      "fit": 0.616454005241394,
+      "runnerGap": 0.06424090266227722,
+      "analysisMs": 111.01
+    },
+    {
+      "root": 2,
+      "mode": "minor",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "D",
+        "minor"
+      ],
+      "actual": [
+        "A#",
+        "minor"
+      ],
+      "correct": false,
+      "fit": 0.5430493354797363,
+      "runnerGap": 0.09001731872558594,
+      "analysisMs": 94.83
+    },
+    {
+      "root": 3,
+      "mode": "major",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "D#",
+        "major"
+      ],
+      "actual": [
+        "D#",
+        "major"
+      ],
+      "correct": true,
+      "fit": 0.6864783465862274,
+      "runnerGap": 0.2014634758234024,
+      "analysisMs": 133.59
+    },
+    {
+      "root": 3,
+      "mode": "minor",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "D#",
+        "minor"
+      ],
+      "actual": [
+        "D#",
+        "minor"
+      ],
+      "correct": true,
+      "fit": 0.7606909573078156,
+      "runnerGap": 0.06523272395133972,
+      "analysisMs": 133.99
+    },
+    {
+      "root": 4,
+      "mode": "major",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "E",
+        "major"
+      ],
+      "actual": [
+        "E",
+        "major"
+      ],
+      "correct": true,
+      "fit": 0.7655113339424133,
+      "runnerGap": 0.20553156733512878,
+      "analysisMs": 140.08
+    },
+    {
+      "root": 4,
+      "mode": "minor",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "E",
+        "minor"
+      ],
+      "actual": [
+        "E",
+        "minor"
+      ],
+      "correct": true,
+      "fit": 0.7608000338077545,
+      "runnerGap": 0.2596658766269684,
+      "analysisMs": 127.72
+    },
+    {
+      "root": 5,
+      "mode": "major",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "F",
+        "major"
+      ],
+      "actual": [
+        "F",
+        "major"
+      ],
+      "correct": true,
+      "fit": 0.5562005937099457,
+      "runnerGap": 0.12037967145442963,
+      "analysisMs": 140.93
+    },
+    {
+      "root": 5,
+      "mode": "minor",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "F",
+        "minor"
+      ],
+      "actual": [
+        "F",
+        "minor"
+      ],
+      "correct": true,
+      "fit": 0.7131288349628448,
+      "runnerGap": 0.012401282787322998,
+      "analysisMs": 131.63
+    },
+    {
+      "root": 6,
+      "mode": "major",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "F#",
+        "major"
+      ],
+      "actual": [
+        "F#",
+        "major"
+      ],
+      "correct": true,
+      "fit": 0.8634731471538544,
+      "runnerGap": 0.1948341727256775,
+      "analysisMs": 140.77
+    },
+    {
+      "root": 6,
+      "mode": "minor",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "F#",
+        "minor"
+      ],
+      "actual": [
+        "F#",
+        "minor"
+      ],
+      "correct": true,
+      "fit": 0.8538435995578766,
+      "runnerGap": 0.3211634159088135,
+      "analysisMs": 123.09
+    },
+    {
+      "root": 7,
+      "mode": "major",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "G",
+        "major"
+      ],
+      "actual": [
+        "G",
+        "major"
+      ],
+      "correct": true,
+      "fit": 0.6424855589866638,
+      "runnerGap": 0.09230250120162964,
+      "analysisMs": 103.88
+    },
+    {
+      "root": 7,
+      "mode": "minor",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "G",
+        "minor"
+      ],
+      "actual": [
+        "G",
+        "minor"
+      ],
+      "correct": true,
+      "fit": 0.7030351459980011,
+      "runnerGap": 0.21645745635032654,
+      "analysisMs": 86.2
+    },
+    {
+      "root": 8,
+      "mode": "major",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "G#",
+        "major"
+      ],
+      "actual": [
+        "G#",
+        "major"
+      ],
+      "correct": true,
+      "fit": 0.8748626708984375,
+      "runnerGap": 0.280423104763031,
+      "analysisMs": 106.45
+    },
+    {
+      "root": 8,
+      "mode": "minor",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "G#",
+        "minor"
+      ],
+      "actual": [
+        "G#",
+        "minor"
+      ],
+      "correct": true,
+      "fit": 0.9101341962814331,
+      "runnerGap": 0.3808795213699341,
+      "analysisMs": 90.4
+    },
+    {
+      "root": 9,
+      "mode": "major",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "A",
+        "major"
+      ],
+      "actual": [
+        "A",
+        "major"
+      ],
+      "correct": true,
+      "fit": 0.6476088464260101,
+      "runnerGap": 0.10896658897399902,
+      "analysisMs": 85.21
+    },
+    {
+      "root": 9,
+      "mode": "minor",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "A",
+        "minor"
+      ],
+      "actual": [
+        "A",
+        "minor"
+      ],
+      "correct": true,
+      "fit": 0.700047105550766,
+      "runnerGap": 0.16836071014404297,
+      "analysisMs": 107.61
+    },
+    {
+      "root": 10,
+      "mode": "major",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "A#",
+        "major"
+      ],
+      "actual": [
+        "A#",
+        "major"
+      ],
+      "correct": true,
+      "fit": 0.8289420008659363,
+      "runnerGap": 0.2179946005344391,
+      "analysisMs": 154.47
+    },
+    {
+      "root": 10,
+      "mode": "minor",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "A#",
+        "minor"
+      ],
+      "actual": [
+        "A#",
+        "minor"
+      ],
+      "correct": true,
+      "fit": 0.8787021934986115,
+      "runnerGap": 0.3700023591518402,
+      "analysisMs": 89.78
+    },
+    {
+      "root": 11,
+      "mode": "major",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "B",
+        "major"
+      ],
+      "actual": [
+        "B",
+        "major"
+      ],
+      "correct": true,
+      "fit": 0.7423807978630066,
+      "runnerGap": 0.09314784407615662,
+      "analysisMs": 111.45
+    },
+    {
+      "root": 11,
+      "mode": "minor",
+      "sampleRate": 48000,
+      "cents": 25,
+      "gain": 0.003,
+      "expected": [
+        "B",
+        "minor"
+      ],
+      "actual": [
+        "B",
+        "minor"
+      ],
+      "correct": true,
+      "fit": 0.7740273475646973,
+      "runnerGap": 0.3450092077255249,
+      "analysisMs": 140.26
+    }
+  ]
+}

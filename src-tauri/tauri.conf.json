@@ -1,9 +1,9 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "Guitar Scale Viewer",
-  "mainBinaryName": "guitar-scale-viewer",
+  "productName": "Fretboard Studio",
+  "mainBinaryName": "fretboard-studio",
   "version": "0.1.0",
-  "identifier": "com.yaliby.guitarscaleviewer",
+  "identifier": "com.fretboardstudio.desktop",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://127.0.0.1:1420",
@@ -13,11 +13,11 @@
   "app": {
     "windows": [
       {
-        "title": "Guitar Scale Viewer",
-        "width": 1280,
-        "height": 860,
-        "minWidth": 900,
-        "minHeight": 640,
+        "title": "Fretboard Studio",
+        "width": 1440,
+        "height": 960,
+        "minWidth": 800,
+        "minHeight": 600,
         "resizable": true,
         "fullscreen": false
       }

@@ -49,6 +49,9 @@ pub fn run() {
                     std::env::consts::ARCH
                 );
             }
+            // Both pollers gate on the supported platforms internally (Windows
+            // via WASAPI/GSMTC, Linux via PulseAudio/MPRIS), so call them
+            // unconditionally rather than re-gating on Windows only.
             media_session::spawn_media_session_poller(app.handle().clone());
             key_engine::spawn_key_engine(app.handle().clone());
             Ok(())
@@ -61,6 +64,11 @@ pub fn run() {
             key_engine::set_cloud_resolution,
             key_engine::get_cloud_resolution
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                key_engine::shutdown_key_engine();
+            }
+        });
 }

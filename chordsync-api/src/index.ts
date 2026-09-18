@@ -10,18 +10,103 @@ interface Env {
   GETSONGBPM_API_KEY?: string;
 }
 
-const CORS: Record<string, string> = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, x-admin-secret",
-};
+const MAX_TITLE_LENGTH = 300;
+const MAX_ARTIST_LENGTH = 200;
+const MAX_USER_LENGTH = 100;
+
+/**
+ * The worker holds a service-role key and honours an admin header, so it must not answer
+ * to arbitrary web origins. Only the desktop shell and local dev servers are allowed.
+ */
+function isAllowedOrigin(origin: string): boolean {
+  if (origin === "tauri://localhost" || origin === "http://tauri.localhost" || origin === "https://tauri.localhost") {
+    return true;
+  }
+  try {
+    const parsed = new URL(origin);
+    return (
+      (parsed.protocol === "http:" || parsed.protocol === "https:") &&
+      (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function corsHeaders(origin: string | null): Record<string, string> {
+  if (!origin || !isAllowedOrigin(origin)) {
+    return {};
+  }
+  return {
+    "Access-Control-Allow-Origin": origin,
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, x-admin-secret",
+    "Access-Control-Max-Age": "86400",
+    Vary: "Origin",
+  };
+}
 
 function json(data: unknown, status = 200): Response {
-  return Response.json(data, { status, headers: CORS });
+  return Response.json(data, { status });
 }
 
 function text(body: string, status = 200): Response {
-  return new Response(body, { status, headers: CORS });
+  return new Response(body, { status });
+}
+
+function validateText(
+  value: unknown,
+  field: string,
+  maxLength: number,
+): { ok: true; value: string } | { ok: false; error: string } {
+  if (value === undefined || value === null) {
+    return { ok: false, error: `${field} is required` };
+  }
+  if (typeof value !== "string") {
+    return { ok: false, error: `${field} must be a string` };
+  }
+  const collapsed = value.trim().replace(/\s+/g, " ");
+  if (!collapsed) {
+    return { ok: false, error: `${field} is required` };
+  }
+  if (collapsed.length > maxLength) {
+    return { ok: false, error: `${field} must be at most ${maxLength} characters` };
+  }
+  return { ok: true, value: collapsed };
+}
+
+function normalizeKey(value: unknown): { ok: true; value: string } | { ok: false; error: string } {
+  if (typeof value !== "string") {
+    return { ok: false, error: "key is required" };
+  }
+  const match = value.trim().replaceAll("♭", "b").replaceAll("♯", "#").match(/^([A-Ga-g])([#b]?)$/);
+  if (!match) {
+    return { ok: false, error: "key must be a note from A to G with an optional # or b" };
+  }
+  return { ok: true, value: `${match[1]!.toUpperCase()}${match[2] ?? ""}` };
+}
+
+function normalizeMode(value: unknown): { ok: true; value: "major" | "minor" } | { ok: false; error: string } {
+  if (typeof value !== "string") {
+    return { ok: false, error: "mode is required" };
+  }
+  const mode = value.trim().toLowerCase();
+  if (mode !== "major" && mode !== "minor") {
+    return { ok: false, error: "mode must be major or minor" };
+  }
+  return { ok: true, value: mode };
+}
+
+async function parseJson(req: Request): Promise<{ ok: true; value: Record<string, unknown> } | { ok: false }> {
+  try {
+    const value: unknown = await req.json();
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return { ok: false };
+    }
+    return { ok: true, value: value as Record<string, unknown> };
+  } catch {
+    return { ok: false };
+  }
 }
 
 function workerLog(event: string, message: string, detail?: Record<string, unknown>): void {
@@ -77,27 +162,70 @@ function supabaseClient(env: Env): SupabaseClient | null {
 }
 
 export default {
+  /**
+   * Routing happens in `handle`; CORS is applied here in one place so every response
+   * — including ones thrown from a route — carries the same origin-checked headers.
+   */
   async fetch(req: Request, env: Env): Promise<Response> {
-    if (req.method === "OPTIONS") {
-      return new Response(null, { status: 204, headers: CORS });
+    const origin = req.headers.get("Origin");
+    // Only browsers send Origin, so this turns away an unknown web page without
+    // touching the database, while native and desktop callers (no Origin) still work.
+    if (origin && !isAllowedOrigin(origin)) {
+      return Response.json({ error: "origin is not allowed" }, { status: 403 });
     }
 
-    const supabase = supabaseClient(env);
+    const headers = corsHeaders(origin);
+
+    if (req.method === "OPTIONS") {
+      return new Response(null, { status: 204, headers });
+    }
+
+    const response = await handle(req, env);
+    const merged = new Headers(response.headers);
+    for (const [name, value] of Object.entries(headers)) {
+      merged.set(name, value);
+    }
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: merged,
+    });
+  },
+};
+
+async function handle(req: Request, env: Env): Promise<Response> {
+  {
+    // Built on first use, so a request rejected by validation never opens a
+    // database connection.
+    let client: SupabaseClient | null | undefined;
+    const database = (): SupabaseClient | null => {
+      if (client === undefined) {
+        client = supabaseClient(env);
+      }
+      return client;
+    };
     const url = new URL(req.url);
 
     if (req.method === "GET" && url.pathname === "/lookup-song") {
-      const title = url.searchParams.get("title") || "";
-      const artist = url.searchParams.get("artist") || "";
+      const titleField = validateText(url.searchParams.get("title"), "title", MAX_TITLE_LENGTH);
+      if (!titleField.ok) {
+        workerLog("lookup.skip", "Rejected title", { why: "invalid_title", error: titleField.error });
+        return json({ error: titleField.error }, 400);
+      }
+      const artistField = validateText(url.searchParams.get("artist"), "artist", MAX_ARTIST_LENGTH);
+      if (!artistField.ok) {
+        workerLog("lookup.skip", "Rejected artist", { why: "invalid_artist", error: artistField.error });
+        return json({ error: artistField.error }, 400);
+      }
+      const title = titleField.value;
+      const artist = artistField.value;
+
+      const supabase = database();
       workerLog("lookup.start", `GET /lookup-song "${title}" — ${artist}`, {
         title,
         artist,
         hasSupabase: Boolean(supabase),
       });
-
-      if (!title.trim() || !artist.trim()) {
-        workerLog("lookup.skip", "Empty title or artist — no lookup", { why: "empty_metadata" });
-        return json({ found: false, catalogsTried: false, source: null, song: null });
-      }
 
       const keys = buildMatchKeys(title, artist);
 
@@ -186,21 +314,48 @@ export default {
     }
 
     if (req.method === "POST" && url.pathname === "/submit-suggestion") {
+      const body = await parseJson(req);
+      if (!body.ok) {
+        return json({ error: "request body must be valid JSON" }, 400);
+      }
+
+      // Every field is bounded and normalised before it reaches the table: the key and
+      // mode are written verbatim into the catalog, so an unvalidated one poisons later
+      // lookups for that song.
+      const titleField = validateText(body.value.title, "title", MAX_TITLE_LENGTH);
+      if (!titleField.ok) {
+        return json({ error: titleField.error }, 400);
+      }
+      const artistField = validateText(body.value.artist, "artist", MAX_ARTIST_LENGTH);
+      if (!artistField.ok) {
+        return json({ error: artistField.error }, 400);
+      }
+      const keyField = normalizeKey(body.value.key);
+      if (!keyField.ok) {
+        return json({ error: keyField.error }, 400);
+      }
+      const modeField = normalizeMode(body.value.mode);
+      if (!modeField.ok) {
+        return json({ error: modeField.error }, 400);
+      }
+      const userField =
+        body.value.user === undefined || body.value.user === null
+          ? { ok: true as const, value: "anonymous" }
+          : validateText(body.value.user, "user", MAX_USER_LENGTH);
+      if (!userField.ok) {
+        return json({ error: userField.error }, 400);
+      }
+
+      const title = titleField.value;
+      const artist = artistField.value;
+      const key = keyField.value;
+      const mode = modeField.value;
+      const user = userField.value;
+
+      const supabase = database();
       if (!supabase) {
         workerLog("suggest.fail", "submit-suggestion rejected — database unavailable", { why: "no_supabase" });
         return json({ error: "database unavailable" }, 503);
-      }
-
-      const body = (await req.json()) as any;
-
-      let title = body.title;
-      let artist = body.artist;
-      let key = body.key;
-      let mode = body.mode;
-      let user = body.user || "anonymous";
-
-      if (typeof title !== "string" || typeof artist !== "string" || !title.trim() || !artist.trim()) {
-        return json({ error: "title and artist are required" }, 400);
       }
 
       const keys = buildMatchKeys(title, artist);
@@ -234,8 +389,13 @@ export default {
         song = created.data;
       }
 
+      if (!song || typeof song.id !== "string") {
+        workerLog("suggest.fail", "database returned an invalid song record", { why: "bad_song_row" });
+        return json({ error: "database returned an invalid song record" }, 500);
+      }
+
       const result = await supabase.from("key_suggestions").insert({
-        song_id: song!.id,
+        song_id: song.id,
         suggested_key: key,
         suggested_mode: mode,
         suggested_by: user,
@@ -256,6 +416,7 @@ export default {
       if (secret !== env.ADMIN_SECRET) {
         return text("Unauthorized", 401);
       }
+      const supabase = database();
       if (!supabase) {
         return json({ error: "database unavailable" }, 503);
       }
@@ -283,6 +444,7 @@ export default {
       if (secret !== env.ADMIN_SECRET) {
         return text("Unauthorized", 401);
       }
+      const supabase = database();
       if (!supabase) {
         return json({ error: "database unavailable" }, 503);
       }
@@ -346,5 +508,5 @@ export default {
     }
 
     return text("Not Found", 404);
-  },
-};
+  }
+}

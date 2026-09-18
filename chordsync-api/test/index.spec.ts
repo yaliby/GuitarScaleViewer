@@ -252,7 +252,7 @@ describe("lookup-song worker", () => {
     }
   });
 
-  it("answers an empty title or artist without touching the catalogs", async () => {
+  it("rejects an empty title or artist without touching the catalogs", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async () => {
       throw new Error("no catalog call expected");
@@ -262,8 +262,10 @@ describe("lookup-song worker", () => {
       const ctx = createExecutionContext();
       const response = await worker.fetch(request, env, ctx);
       await waitOnExecutionContext(ctx);
-      expect(response.status).toBe(200);
-      await expect(response.json()).resolves.toMatchObject({ found: false, catalogsTried: false });
+      // Empty metadata is a caller bug, not a song the catalogs could answer for,
+      // so it is refused up front rather than reported as a miss.
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: "title is required" });
     } finally {
       globalThis.fetch = originalFetch;
     }

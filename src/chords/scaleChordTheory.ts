@@ -26,8 +26,8 @@ const TRIAD_ROMAN: Record<string, readonly string[]> = {
   'melodic-minor': ['i', 'ii', 'III+', 'IV', 'V', 'vi°', 'vii°'],
   dorian: ['i', 'ii', 'III', 'IV', 'v', 'vi°', 'VII'],
   phrygian: ['i', 'II', 'III', 'iv', 'v°', 'VI', 'vii'],
-  lydian: ['I', 'II', 'iii', '#iv°', 'V', 'VI', 'vii'],
-  mixolydian: ['I', 'ii', 'iii°', 'IV', 'v', 'VI', 'VII'],
+  lydian: ['I', 'II', 'iii', '#iv°', 'V', 'vi', 'vii'],
+  mixolydian: ['I', 'ii', 'iii°', 'IV', 'v', 'vi', 'VII'],
   locrian: ['i°', 'II', 'iii', 'iv', 'V', 'VI', 'vii'],
 };
 
