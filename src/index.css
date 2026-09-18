@@ -2,6 +2,41 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+  Design language: a piece of studio gear. The neck is a physical object, so the chrome around it
+  is one too — milled aluminium panels, engraved legends, real toggles, status LEDs.
+  Depth comes from light direction (top-lit), never from translucency or blur.
+*/
+:root {
+  /* Panel greys — warm-shifted so they sit with the rosewood neck instead of against it. */
+  --gear-void: #0a0a0c;
+  --gear-chassis: #131316;
+  --gear-panel: #1a1a1e;
+  --gear-panel-hi: #212127;
+  --gear-recess: #0d0d10;
+  --gear-engrave: #6a6a73;
+  --gear-legend: #9c9ca6;
+  --gear-text: #e8e8ec;
+
+  /* One accent. It is the root note, and nothing else. */
+  --gear-accent: #f0a52a;
+  --gear-accent-dim: #7a5314;
+
+  /* LEDs carry state. Never decoration. */
+  --led-live: #3ddc97;
+  --led-hold: #f0a52a;
+  --led-fault: #f2555a;
+  --led-data: #47b6f0;
+
+  /* Top-lit bevels: highlight on the upper edge, shadow on the lower. */
+  --bevel-raised: inset 0 1px 0 rgba(255, 255, 255, 0.085), inset 0 -1px 0 rgba(0, 0, 0, 0.55),
+    0 1px 1px rgba(0, 0, 0, 0.5);
+  --bevel-proud: inset 0 1px 0 rgba(255, 255, 255, 0.12), inset 0 -2px 0 rgba(0, 0, 0, 0.6),
+    0 2px 3px rgba(0, 0, 0, 0.55), 0 6px 16px -6px rgba(0, 0, 0, 0.7);
+  --bevel-inset: inset 0 2px 5px rgba(0, 0, 0, 0.75), inset 0 -1px 0 rgba(255, 255, 255, 0.045);
+  --bevel-hairline: inset 0 0 0 1px rgba(255, 255, 255, 0.045);
+}
+
 html,
 body,
 #root {
@@ -9,6 +44,148 @@ body,
 }
 
 body {
-  @apply antialiased text-zinc-100;
+  @apply antialiased;
+  background: var(--gear-void);
+  color: var(--gear-text);
   text-rendering: optimizeLegibility;
+  /* Gear has no rubber-band scroll. */
+  overscroll-behavior: none;
+}
+
+@layer components {
+  /*
+    Brushed aluminium: fine horizontal grain over a top-lit vertical gradient.
+    Kept under 2% opacity — you should feel it, not see it.
+  */
+  .gear-brushed {
+    background-image: repeating-linear-gradient(
+        0deg,
+        rgba(255, 255, 255, 0.014) 0px,
+        rgba(255, 255, 255, 0.014) 1px,
+        transparent 1px,
+        transparent 3px
+      ),
+      linear-gradient(180deg, var(--gear-panel-hi) 0%, var(--gear-panel) 42%, var(--gear-chassis) 100%);
+  }
+
+  /* A raised faceplate. */
+  .gear-panel {
+    @apply gear-brushed;
+    box-shadow: var(--bevel-proud), var(--bevel-hairline);
+  }
+
+  /* A milled-out well: inputs, readouts, anything recessed into the face. */
+  .gear-well {
+    background: linear-gradient(180deg, #090a0c 0%, var(--gear-recess) 65%, #111114 100%);
+    box-shadow: var(--bevel-inset), inset 0 0 0 1px rgba(0, 0, 0, 0.7);
+  }
+
+  /* Engraved legend: cut into the metal, so it is darker than the face with a lit lower lip. */
+  .gear-engraved {
+    color: var(--gear-engrave);
+    text-shadow: 0 1px 0 rgba(255, 255, 255, 0.055);
+  }
+
+  /* Screw head, top-lit with a cross slot. */
+  .gear-screw {
+    background: radial-gradient(circle at 34% 30%, #4a4a52 0%, #2a2a30 48%, #131316 100%);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), inset 0 -1px 1px rgba(0, 0, 0, 0.8),
+      0 1px 1px rgba(0, 0, 0, 0.6);
+  }
+  .gear-screw::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      52deg,
+      transparent calc(50% - 0.5px),
+      rgba(0, 0, 0, 0.65) calc(50% - 0.5px),
+      rgba(0, 0, 0, 0.65) calc(50% + 0.5px),
+      transparent calc(50% + 0.5px)
+    );
+  }
+
+  /* Hairline seam between panel sections — the join between two plates. */
+  .gear-seam {
+    background: linear-gradient(90deg, transparent, rgba(0, 0, 0, 0.85) 12%, rgba(0, 0, 0, 0.85) 88%, transparent);
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.05);
+  }
+}
+
+/* Panel legends are small and wide-tracked, but engraved rather than shouted. */
+.legend {
+  @apply gear-engraved text-[10px] font-semibold uppercase leading-none tracking-[0.16em];
+}
+
+/* Native select arrow is a browser artifact; every select here draws its own. */
+select.gear-select {
+  appearance: none;
+}
+
+/* Numeric telemetry reads as an instrument, not as prose. */
+.tele {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/*
+  Fader: a milled slot with a knurled cap. Range inputs need per-engine pseudo-elements, and the
+  two blocks cannot be merged — an unknown selector invalidates the whole rule for that engine.
+*/
+input[type='range'].gear-fader {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  height: 16px;
+}
+
+input[type='range'].gear-fader::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, #05050700 0%, #090a0c 100%), #0d0d10;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.9), inset 0 -1px 0 rgba(255, 255, 255, 0.05);
+}
+input[type='range'].gear-fader::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: #0d0d10;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.9), inset 0 -1px 0 rgba(255, 255, 255, 0.05);
+}
+
+input[type='range'].gear-fader::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 16px;
+  margin-top: -6px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, #43434d 0%, #2b2b33 45%, #17171b 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22), 0 1px 3px rgba(0, 0, 0, 0.8);
+  cursor: grab;
+}
+input[type='range'].gear-fader::-moz-range-thumb {
+  width: 12px;
+  height: 16px;
+  border: none;
+  border-radius: 2px;
+  background: linear-gradient(180deg, #43434d 0%, #2b2b33 45%, #17171b 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22), 0 1px 3px rgba(0, 0, 0, 0.8);
+  cursor: grab;
+}
+
+input[type='range'].gear-fader:focus-visible::-webkit-slider-thumb {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22), 0 0 0 2px var(--gear-accent);
+}
+input[type='range'].gear-fader:focus-visible::-moz-range-thumb {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22), 0 0 0 2px var(--gear-accent);
 }

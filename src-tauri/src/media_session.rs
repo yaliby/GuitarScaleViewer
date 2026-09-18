@@ -136,7 +136,9 @@ fn source_app_from(
     desktop_entry: Option<String>,
     bus_name: &str,
 ) -> Option<String> {
-    let identity = identity.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let identity = identity
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     let desktop = desktop_entry
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
@@ -187,7 +189,7 @@ fn select_current_session(sessions: &[SessionCandidate]) -> Option<&SessionCandi
                 .find(|s| s.playback_status == "paused" && s.title.is_some())
         })
         .or_else(|| sessions.iter().filter(not_ctl).find(|s| s.title.is_some()))
-        .or_else(|| sessions.iter().filter(not_ctl).next())
+        .or_else(|| sessions.iter().find(not_ctl))
 }
 
 fn debug_entries_from_sessions(
@@ -235,9 +237,7 @@ mod win {
         Some((ticks as u64) / 10_000)
     }
 
-    fn playback_status_str(
-        s: GlobalSystemMediaTransportControlsSessionPlaybackStatus,
-    ) -> String {
+    fn playback_status_str(s: GlobalSystemMediaTransportControlsSessionPlaybackStatus) -> String {
         use GlobalSystemMediaTransportControlsSessionPlaybackStatus as P;
         match s {
             P::Playing => "playing".to_string(),
@@ -343,8 +343,7 @@ mod win {
             }
         };
 
-        let session: GlobalSystemMediaTransportControlsSession = match manager.GetCurrentSession()
-        {
+        let session: GlobalSystemMediaTransportControlsSession = match manager.GetCurrentSession() {
             Ok(s) => s,
             Err(_) => {
                 if should_log_snapshot() {
@@ -487,7 +486,11 @@ mod linux {
     fn owned_i64(value: &OwnedValue) -> Option<i64> {
         i64::try_from(value.clone())
             .ok()
-            .or_else(|| u64::try_from(value.clone()).ok().and_then(|n| i64::try_from(n).ok()))
+            .or_else(|| {
+                u64::try_from(value.clone())
+                    .ok()
+                    .and_then(|n| i64::try_from(n).ok())
+            })
             .or_else(|| i32::try_from(value.clone()).ok().map(i64::from))
     }
 
@@ -535,11 +538,7 @@ mod linux {
                 .unwrap_or_else(|_| "unknown".to_string()),
         );
         let metadata = player.metadata().await.unwrap_or_default();
-        let position_ms = player
-            .position()
-            .await
-            .ok()
-            .and_then(position_ms_from_us);
+        let position_ms = player.position().await.ok().and_then(position_ms_from_us);
         let identity = root.identity().await.ok();
         let desktop_entry = root.desktop_entry().await.ok();
 
@@ -649,6 +648,29 @@ pub async fn get_media_sessions_debug() -> Vec<MediaSessionDebugEntry> {
     }
 }
 
+#[cfg(any(windows, target_os = "linux"))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SessionIdentity {
+    title: Option<String>,
+    artist: Option<String>,
+    album: Option<String>,
+    source_app: Option<String>,
+    playback_status: String,
+}
+
+#[cfg(any(windows, target_os = "linux"))]
+impl From<&MediaSessionPayload> for SessionIdentity {
+    fn from(payload: &MediaSessionPayload) -> Self {
+        Self {
+            title: payload.title.clone(),
+            artist: payload.artist.clone(),
+            album: payload.album.clone(),
+            source_app: payload.source_app.clone(),
+            playback_status: payload.playback_status.clone(),
+        }
+    }
+}
+
 /// Backend-owned polling loop; React only subscribes to `media-session-update`.
 pub fn spawn_media_session_poller(app: AppHandle) {
     #[cfg(any(windows, target_os = "linux"))]
@@ -664,9 +686,24 @@ pub fn spawn_media_session_poller(app: AppHandle) {
                     return;
                 };
 
+                log::info!("media_session: poller started interval_ms=1500");
                 let mut last: Option<MediaSessionPayload> = None;
+                let mut last_identity: Option<SessionIdentity> = None;
                 loop {
                     let next = rt.block_on(get_current_media_payload());
+                    let identity = SessionIdentity::from(&next);
+                    if last_identity.as_ref() != Some(&identity) {
+                        log::info!(
+                            "media_session: session changed app={:?} status={} title={:?} artist={:?} album={:?} duration_ms={:?}",
+                            next.source_app,
+                            next.playback_status,
+                            next.title,
+                            next.artist,
+                            next.album,
+                            next.duration_ms
+                        );
+                        last_identity = Some(identity);
+                    }
                     if last.as_ref() != Some(&next) {
                         last = Some(next.clone());
                         if let Err(e) = app.emit("media-session-update", &next) {
@@ -845,8 +882,12 @@ mod tests {
         let current = select_current_session(&sessions).unwrap().bus_name.clone();
         let debug = debug_entries_from_sessions(&sessions, Some(&current));
         assert_eq!(debug.len(), 2);
-        assert!(debug.iter().any(|e| e.is_current && e.source_app.as_deref() == Some("Spotify")));
-        assert!(debug.iter().any(|e| !e.is_current && e.source_app.as_deref() == Some("VLC")));
+        assert!(debug
+            .iter()
+            .any(|e| e.is_current && e.source_app.as_deref() == Some("Spotify")));
+        assert!(debug
+            .iter()
+            .any(|e| !e.is_current && e.source_app.as_deref() == Some("VLC")));
     }
 }
 
@@ -971,7 +1012,9 @@ mod linux_mpris_tests {
 
         let debug = linux::enumerate_sessions().await;
         assert!(
-            debug.iter().any(|e| e.is_current && e.title.as_deref() == Some("Karma Police")),
+            debug
+                .iter()
+                .any(|e| e.is_current && e.title.as_deref() == Some("Karma Police")),
             "expected mock player to be current, got {debug:?}"
         );
     }

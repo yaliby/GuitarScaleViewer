@@ -112,6 +112,7 @@ struct LibKeyFinderResponse {
 #[serde(rename_all = "camelCase")]
 struct SidecarReady {
     ready: Option<bool>,
+    ready_reason: Option<String>,
     essentia_available: Option<bool>,
     numpy_available: Option<bool>,
     essentia_error: Option<String>,
@@ -205,10 +206,7 @@ impl SidecarKeyDetector {
         );
 
         let parsed_ready: Option<SidecarReady> = serde_json::from_str(ready_line.trim()).ok();
-        let ready_flag = parsed_ready
-            .as_ref()
-            .and_then(|r| r.ready)
-            .unwrap_or(false);
+        let ready_flag = parsed_ready.as_ref().and_then(|r| r.ready).unwrap_or(false);
         let essentia_available = parsed_ready
             .as_ref()
             .and_then(|r| r.essentia_available)
@@ -225,7 +223,12 @@ impl SidecarKeyDetector {
             "unavailable".to_string()
         };
         let reason = if !ready_flag {
-            Some("sidecar_not_ready".to_string())
+            Some(
+                parsed_ready
+                    .as_ref()
+                    .and_then(|r| r.ready_reason.clone())
+                    .unwrap_or_else(|| "sidecar_not_ready".to_string()),
+            )
         } else if !essentia_available {
             Some(
                 parsed_ready
@@ -255,7 +258,10 @@ impl SidecarKeyDetector {
             log::info!("key_detection: analyzer backend is 'essentia'");
         }
 
-        log::info!("key_detection: spawned persistent analyzer {}", self.launch.descriptor);
+        log::info!(
+            "key_detection: spawned persistent analyzer {}",
+            self.launch.descriptor
+        );
         Ok(SidecarWorker {
             child,
             stdin,
@@ -277,7 +283,8 @@ impl SidecarKeyDetector {
             "key_detection: sending request (wav={})",
             temp_wav_path.display()
         );
-        let mut json = serde_json::to_vec(request).map_err(|e| format!("serialize request: {e}"))?;
+        let mut json =
+            serde_json::to_vec(request).map_err(|e| format!("serialize request: {e}"))?;
         json.push(b'\n');
         worker
             .stdin
@@ -304,8 +311,8 @@ impl SidecarKeyDetector {
             };
             return Err(detail);
         }
-        let parsed: AnalyzeResponse =
-            serde_json::from_str(line.trim()).map_err(|e| format!("decode sidecar response: {e}"))?;
+        let parsed: AnalyzeResponse = serde_json::from_str(line.trim())
+            .map_err(|e| format!("decode sidecar response: {e}"))?;
         if let Some(error) = parsed.error {
             return Err(format!("sidecar analysis error: {error}"));
         }
@@ -388,7 +395,11 @@ fn windows_path_to_wsl(path: &Path) -> Option<String> {
     }
     let drive = drive.to_ascii_lowercase();
     let rest = s[2..].replace('\\', "/");
-    let rest = if rest.starts_with('/') { rest } else { format!("/{rest}") };
+    let rest = if rest.starts_with('/') {
+        rest
+    } else {
+        format!("/{rest}")
+    };
     Some(format!("/mnt/{drive}{rest}"))
 }
 
@@ -509,7 +520,9 @@ impl KeyDetector for SidecarKeyDetector {
                             *health = DetectorHealth {
                                 healthy: false,
                                 backend: "unavailable".to_string(),
-                                reason: Some("sidecar_unstable_or_missing_dependencies".to_string()),
+                                reason: Some(
+                                    "sidecar_unstable_or_missing_dependencies".to_string(),
+                                ),
                             };
                         }
                         let _ = std::fs::remove_file(&wav_path);
@@ -585,9 +598,12 @@ impl KeyDetector for LibKeyFinderDetector {
 
         let mut cmd = Command::new(&self.launch.program);
         cmd.args(&self.launch.args_prefix).arg(&wav_path_arg);
-        let output = cmd
-            .output()
-            .map_err(|e| format!("run libkeyfinder analyzer ({}): {e}", self.launch.descriptor))?;
+        let output = cmd.output().map_err(|e| {
+            format!(
+                "run libkeyfinder analyzer ({}): {e}",
+                self.launch.descriptor
+            )
+        })?;
         let _ = std::fs::remove_file(&wav_path);
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -660,7 +676,11 @@ impl KeyDetector for LibKeyFinderDetector {
     }
 }
 
-fn write_temp_wav_f32_mono(path: &Path, sample_rate_hz: u32, mono_samples: &[f32]) -> Result<(), String> {
+fn write_temp_wav_f32_mono(
+    path: &Path,
+    sample_rate_hz: u32,
+    mono_samples: &[f32],
+) -> Result<(), String> {
     let spec = hound::WavSpec {
         channels: 1,
         sample_rate: sample_rate_hz,
@@ -675,7 +695,8 @@ fn write_temp_wav_f32_mono(path: &Path, sample_rate_hz: u32, mono_samples: &[f32
             .write_sample(s16)
             .map_err(|e| format!("write wav sample: {e}"))?;
     }
-    writer.finalize().map_err(|e| format!("finalize wav: {e}"))?;
+    writer
+        .finalize()
+        .map_err(|e| format!("finalize wav: {e}"))?;
     Ok(())
 }
-

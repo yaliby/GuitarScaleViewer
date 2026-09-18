@@ -3,6 +3,7 @@
  */
 
 import type { ScaleType } from './scaleDataProvider';
+import { pitchClassToKey } from './services/keyParse';
 
 export const SCALE_DEFINITIONS: Record<
   ScaleType,
@@ -76,13 +77,19 @@ export const SCALE_DEGREE_LABELS: Record<ScaleType, readonly string[]> = {
 const LETTER_ORDER = ['C', 'D', 'E', 'F', 'G', 'A', 'B'] as const;
 
 const NOTE_TO_PC: Record<string, number> = {
+  // Includes the enharmonic edges (Cb/Fb/E#/B#) that buildScaleNotes legitimately spells,
+  // e.g. Eb minor contains Cb — without them the label cannot be read back to a pitch class.
+  Cb: 11,
+  'B#': 0,
   C: 0,
   'C#': 1,
   Db: 1,
   D: 2,
   'D#': 3,
   Eb: 3,
+  Fb: 4,
   E: 4,
+  'E#': 5,
   F: 5,
   'F#': 6,
   Gb: 6,
@@ -98,7 +105,9 @@ const NOTE_TO_PC: Record<string, number> = {
 const BASE_PC: Record<string, number> = {
   C: 0,
   D: 2,
+  Fb: 4,
   E: 4,
+  'E#': 5,
   F: 5,
   G: 7,
   A: 9,
@@ -202,13 +211,41 @@ export function labelForPitchClass(
 
 export function pitchClassForNoteLabel(noteLabel: string): number | null {
   const t = noteLabel.trim();
-  const m = /^([A-Ga-g])([#b]?)$/.exec(t);
+  const m = /^([A-Ga-g])([#b]?)$/i.exec(t);
   if (!m || m[1] === undefined) {
     return null;
   }
   const letter = m[1].toUpperCase();
-  const acc = m[2] ?? '';
+  const acc = (m[2] ?? '').toLowerCase();
   const key = `${letter}${acc}` as keyof typeof NOTE_TO_PC;
   const pc = NOTE_TO_PC[key];
   return pc === undefined ? null : pc;
+}
+
+/**
+ * The relative major or minor of a key: the same seven notes, tonal centre moved a third.
+ *
+ * This earns a control of its own because it is the mistake both the local analyser and the
+ * catalogs make most often — C major reported for A minor, G major for E minor. When it
+ * happens the neck is already lighting the right notes; only the root marker and the degree
+ * numbers sit on the wrong step, so one flip fixes the reading instead of retyping the key.
+ */
+export function relativeKey(
+  root: string,
+  scaleType: ScaleType,
+): { root: string; scaleType: 'major' | 'minor' } | null {
+  const pc = pitchClassForNoteLabel(root);
+  if (pc === null) {
+    return null;
+  }
+  if (scaleType === 'major') {
+    const spelled = pitchClassToKey((pc + 9) % 12, 'minor');
+    return spelled === null ? null : { root: spelled, scaleType: 'minor' };
+  }
+  if (scaleType === 'minor') {
+    const spelled = pitchClassToKey((pc + 3) % 12, 'major');
+    return spelled === null ? null : { root: spelled, scaleType: 'major' };
+  }
+  // Every other scale type has no relative pair; the caller disables the control instead.
+  return null;
 }

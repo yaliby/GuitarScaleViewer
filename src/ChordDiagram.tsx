@@ -21,6 +21,9 @@ const SIZE_MAP = {
   lg: { strGap: 30, fretGap: 42, padT: 48, padL: 36, padR: 18, padB: 16, dotR: 10, font: 13, labelNudge: 18 },
 } as const;
 
+/** Distance from the nut up to the string-name baseline. */
+const STRING_HINT_BASELINE = 36;
+
 function cellPitchClass(
   openStringPcs: readonly number[] | undefined,
   stringIndex: number,
@@ -76,7 +79,14 @@ export function ChordDiagram({
   const innerH = fretRows * s.fretGap;
   /** Any “no nut” diagram (typical barre) — always show the window’s starting fret at left. */
   const leftFretLabelW = !hasNut ? 22 : 0;
-  const topPad = s.padT + (showStringHints ? 6 : 0);
+  /*
+    Stack above the nut, bottom-up: string tops (y0−6), the mute/open row (y0−22), then the string
+    name hints (y0−STRING_HINT_BASELINE). A flat padding bump did not clear the hint ascenders at
+    the small size, so reserve what the type actually needs.
+  */
+  const topPad = showStringHints
+    ? Math.max(s.padT, STRING_HINT_BASELINE + Math.ceil(s.font * 0.85) + 2)
+    : s.padT;
   const w = s.padL + innerW + s.padR + leftFretLabelW + strHintPadL;
   const h = topPad + innerH + s.padB;
 
@@ -263,7 +273,7 @@ export function ChordDiagram({
             <text
               key={`str-hint-${si}`}
               x={x0 + si * s.strGap - 8}
-              y={y0 - 36}
+              y={y0 - STRING_HINT_BASELINE}
               textAnchor="end"
               fill="#a1a1aa"
               style={{
@@ -334,7 +344,7 @@ export function ChordDiagram({
         return (
           <g key={`dot-${si}`} filter={`url(#${fShadow})`}>
             {isRoot ? (
-              <circle cx={x} cy={cy} r={s.dotR + 3} fill="none" stroke="#38bdf8" strokeOpacity={0.45} strokeWidth={1.5} />
+              <circle cx={x} cy={cy} r={s.dotR + 3} fill="none" stroke="#f0a52a" strokeOpacity={0.75} strokeWidth={1.6} />
             ) : null}
             <circle cx={x} cy={cy} r={s.dotR} fill={`url(#${gDot})`} stroke="#f4f4f5" strokeWidth={1.2} />
             <circle cx={x} cy={cy} r={s.dotR * 0.88} fill={`url(#${gShine})`} />
@@ -372,8 +382,8 @@ export function ChordDiagram({
                   width={pillW}
                   height={pillH}
                   rx={4}
-                  fill={isOpen ? 'rgba(6,78,59,0.72)' : 'rgba(49,46,129,0.72)'}
-                  stroke={isOpen ? 'rgba(52,211,153,0.55)' : 'rgba(167,139,250,0.55)'}
+                  fill="rgba(9,10,12,0.82)"
+                  stroke="rgba(255,255,255,0.14)"
                   strokeWidth={1}
                 />
                 <text
@@ -381,7 +391,7 @@ export function ChordDiagram({
                   y={py + pillH / 2 + 0.5}
                   textAnchor="middle"
                   dominantBaseline="middle"
-                  fill={isOpen ? '#d1fae5' : '#ede9fe'}
+                  fill="#9c9ca6"
                   style={{
                     fontSize: pillFs,
                     fontWeight: 800,
@@ -403,10 +413,10 @@ export function ChordDiagram({
           y={1}
           width={w - 2}
           height={h - 2}
-          rx={10}
+          rx={4}
           fill="none"
-          stroke="#38bdf8"
-          strokeOpacity={0.55}
+          stroke="#f0a52a"
+          strokeOpacity={0.8}
           strokeWidth={2}
           style={{ pointerEvents: 'none' }}
         />

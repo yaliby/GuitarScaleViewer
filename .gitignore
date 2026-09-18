@@ -8,3 +8,6 @@ logs/
 
 __pycache__/
 *.pyc
+
+# CMake build output for the libkeyfinder sidecar
+src-tauri/sidecars/libkeyfinder_cli/build/

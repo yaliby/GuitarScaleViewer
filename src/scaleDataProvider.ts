@@ -48,7 +48,8 @@ export const SCALE_TYPE_LABELS: Record<ScaleType, string> = {
   blues: 'Blues',
 };
 
-const VALID_ROOT_NOTES = new Set([
+/** Every root spelling the fretboard can draw, chromatically ordered. */
+export const ROOT_NOTE_OPTIONS = [
   'C',
   'C#',
   'Db',
@@ -66,7 +67,9 @@ const VALID_ROOT_NOTES = new Set([
   'A#',
   'Bb',
   'B',
-]);
+] as const;
+
+const VALID_ROOT_NOTES = new Set<string>(ROOT_NOTE_OPTIONS);
 
 /** Returns canonical root (e.g. "Bb") or null if invalid / incomplete. */
 export function tryNormalizeRoot(input: string): string | null {

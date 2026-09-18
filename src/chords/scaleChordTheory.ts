@@ -116,6 +116,8 @@ export function getDiatonicTriads(root: string, scaleType: ScaleType): ScaleChor
     const degree = romans?.[i] ?? `${i + 1}`;
     const chordName = chordSymbolFromRootLabel(r.label, kind);
     const unique = [...new Set([r.pitchClass, t.pitchClass, f.pitchClass])];
+    // Parallel to chordPitchClasses: the spelled note names of the triad, not the chord symbol.
+    const labels = [r.label, t.label, f.label];
 
     out.push({
       degree,
@@ -123,7 +125,7 @@ export function getDiatonicTriads(root: string, scaleType: ScaleType): ScaleChor
       root: r.label,
       quality: qualityForScaleChord(kind),
       chordPitchClasses: unique,
-      chordLabels: [chordName],
+      chordLabels: labels,
       family: 'diatonic-triad',
       rootPitchClass: r.pitchClass,
     });

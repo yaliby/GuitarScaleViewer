@@ -23,13 +23,14 @@ describe("key parsing", () => {
 
   it("parses ReccoBeats/Spotify style integers", () => {
     expect(parseSpotifyStyleKey(4, 0)).toEqual({ key: "E", mode: "minor" });
-    expect(parseSpotifyStyleKey(1, 1)).toEqual({ key: "C#", mode: "major" });
+    // Pitch class 1 as a major key is Db (five flats), not C# (seven sharps).
+    expect(parseSpotifyStyleKey(1, 1)).toEqual({ key: "Db", mode: "major" });
   });
 });
 
 describe("catalog fallbacks", () => {
   it("uses ReccoBeats when title and artist match", async () => {
-    const hit = await lookupKeyFromCatalogs("Blinding Lights", "The Weeknd", {
+    const { hit } = await lookupKeyFromCatalogs("Blinding Lights", "The Weeknd", {
       fetch: async (input) => {
         const url = String(input);
         if (url.includes("/v1/track/search")) {
@@ -59,7 +60,7 @@ describe("catalog fallbacks", () => {
   });
 
   it("falls through to MusicIWant then ReccoBeats features", async () => {
-    const hit = await lookupKeyFromCatalogs("Wonderwall", "Oasis", {
+    const { hit } = await lookupKeyFromCatalogs("Wonderwall", "Oasis", {
       fetch: async (input) => {
         const url = String(input);
         if (url.includes("api.reccobeats.com/v1/track/search")) {
@@ -86,7 +87,7 @@ describe("catalog fallbacks", () => {
   });
 
   it("uses FreqBlog when an API key is present and earlier catalogs miss", async () => {
-    const hit = await lookupKeyFromCatalogs("Black", "Pearl Jam", {
+    const { hit } = await lookupKeyFromCatalogs("Black", "Pearl Jam", {
       freqblogApiKey: "fb_test",
       fetch: async (input, init) => {
         const url = String(input);
@@ -110,7 +111,7 @@ describe("catalog fallbacks", () => {
   });
 
   it("uses GetSongBPM last when its key is configured", async () => {
-    const hit = await lookupKeyFromCatalogs("Black", "Pearl Jam", {
+    const { hit } = await lookupKeyFromCatalogs("Black", "Pearl Jam", {
       getsongbpmApiKey: "gsb_test",
       fetch: async (input) => {
         const url = String(input);
@@ -201,6 +202,68 @@ describe("lookup-song worker", () => {
         catalogsTried: true,
         song: null,
       });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("searches catalogs with the cleaned title and artist, not the raw announcement", async () => {
+    const originalFetch = globalThis.fetch;
+    const searched: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/v1/track/search")) {
+        searched.push(new URL(url).searchParams.get("searchText") ?? "");
+        return jsonResponse({
+          content: [
+            {
+              id: "recco-noisy",
+              trackTitle: "Numb",
+              popularity: 90,
+              href: "https://open.spotify.com/track/numb1",
+              artists: [{ name: "Linkin Park" }],
+            },
+          ],
+        });
+      }
+      if (url.includes("/v1/audio-features")) {
+        return jsonResponse({ content: [{ key: 6, mode: 1 }] });
+      }
+      return originalFetch(input as RequestInfo, init);
+    }) as typeof fetch;
+
+    try {
+      const request = new IncomingRequest(
+        "http://example.com/lookup-song?title=" +
+          encodeURIComponent("Linkin Park - Numb (Official Video) [HD]") +
+          "&artist=" +
+          encodeURIComponent("Linkin Park - Topic"),
+      );
+      const ctx = createExecutionContext();
+      const response = await worker.fetch(request, env, ctx);
+      await waitOnExecutionContext(ctx);
+      expect(searched).toEqual(["Numb"]);
+      await expect(response.json()).resolves.toMatchObject({
+        found: true,
+        song: { musical_key: "F#", mode: "major" },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("answers an empty title or artist without touching the catalogs", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      throw new Error("no catalog call expected");
+    }) as typeof fetch;
+    try {
+      const request = new IncomingRequest("http://example.com/lookup-song?title=&artist=Nobody");
+      const ctx = createExecutionContext();
+      const response = await worker.fetch(request, env, ctx);
+      await waitOnExecutionContext(ctx);
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({ found: false, catalogsTried: false });
     } finally {
       globalThis.fetch = originalFetch;
     }

@@ -411,9 +411,17 @@ def _load_wav_mono(path: str, target_sr: int) -> tuple[np.ndarray, int]:
 
 def main() -> int:
     if "--serve" in sys.argv:
-        # One-time readiness line so the parent can confirm the process is alive.
+        # One-time readiness line so the parent can confirm the process can actually analyse.
+        # `ready` must mean "a backend is usable", not merely "the process started" —
+        # otherwise the parent reports a healthy analyzer that returns nothing but errors.
+        ready_reason = None
+        if es is None and np is None:
+            ready_reason = "no_analyzer_backend_available"
+        elif es is None:
+            ready_reason = "essentia_not_available_numpy_fallback_only"
         ready = {
-            "ready": True,
+            "ready": es is not None or np is not None,
+            "readyReason": ready_reason,
             "essentiaAvailable": es is not None,
             "numpyAvailable": np is not None,
             "librosaAvailable": False,
@@ -422,8 +430,8 @@ def main() -> int:
             "essentiaError": es_err,
         }
         _log(
-            f"ready essentiaAvailable={ready['essentiaAvailable']} numpyAvailable={ready['numpyAvailable']} "
-            f"essentiaError={ready['essentiaError']}"
+            f"ready={ready['ready']} reason={ready_reason} essentiaAvailable={ready['essentiaAvailable']} "
+            f"numpyAvailable={ready['numpyAvailable']} essentiaError={ready['essentiaError']}"
         )
         print(json.dumps(ready), flush=True)
 
@@ -527,24 +535,59 @@ def main() -> int:
         if not raw:
             print(json.dumps({"windows": [], "backendUsed": "unavailable", "fallbackReason": "empty_request"}))
             return 0
-        req = json.loads(raw.decode("utf-8"))
-        sample_rate_hz = int(req.get("sampleRateHz", 44100))
-        window_seconds = int(req.get("windowSeconds", 12))
-        hop_seconds = int(req.get("hopSeconds", 4))
-        profiles = [str(p) for p in req.get("profileTypes", ["bgate", "krumhansl", "shaath"])]
-        samples = np.asarray(req.get("samplesMonoF32", []), dtype=np.float32)
-        windows, backend_used, fallback_reason = _analyze_with_backend(
-            samples, sample_rate_hz, window_seconds, hop_seconds, profiles
-        )
-        print(
-            json.dumps(
-                {
-                    "windows": [w.to_wire() for w in windows],
-                    "backendUsed": backend_used,
-                    "fallbackReason": fallback_reason,
-                }
+        # Every failure past this point must still leave valid JSON on stdout; the parent
+        # parses stdout unconditionally and a traceback there reads as a protocol violation.
+        try:
+            if np is None:
+                _log("numpy backend unavailable")
+                print(
+                    json.dumps(
+                        {
+                            "windows": [],
+                            "error": "numpy_not_available",
+                            "backendUsed": "unavailable",
+                            "fallbackReason": "numpy_not_available",
+                        }
+                    )
+                )
+                return 0
+            req = json.loads(raw.decode("utf-8"))
+            sample_rate_hz = int(req.get("sampleRateHz", 44100))
+            window_seconds = int(req.get("windowSeconds", 12))
+            hop_seconds = int(req.get("hopSeconds", 4))
+            profiles = [str(p) for p in req.get("profileTypes", ["bgate", "krumhansl", "shaath"])]
+            wav_path = req.get("wavPath", None)
+            if wav_path:
+                samples, sr = _load_wav_mono(wav_path, sample_rate_hz)
+                if sr != sample_rate_hz:
+                    sample_rate_hz = sr
+            else:
+                samples = np.asarray(req.get("samplesMonoF32", []), dtype=np.float32)
+            windows, backend_used, fallback_reason = _analyze_with_backend(
+                samples, sample_rate_hz, window_seconds, hop_seconds, profiles
             )
-        )
+            print(
+                json.dumps(
+                    {
+                        "windows": [w.to_wire() for w in windows],
+                        "backendUsed": backend_used,
+                        "fallbackReason": fallback_reason,
+                    }
+                )
+            )
+        except Exception as exc:
+            _log(f"analysis exception: {exc}")
+            _log(traceback.format_exc().strip())
+            print(
+                json.dumps(
+                    {
+                        "windows": [],
+                        "error": str(exc),
+                        "backendUsed": "unavailable",
+                        "fallbackReason": "analysis_exception",
+                    }
+                )
+            )
         return 0
 
     print(json.dumps({"windows": []}))

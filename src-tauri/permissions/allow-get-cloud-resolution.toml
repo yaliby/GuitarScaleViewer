@@ -1,0 +1,5 @@
+# Application permission: read back the currently applied cloud key-resolution state.
+[[permission]]
+identifier = "allow-get-cloud-resolution"
+description = "Allows the get_cloud_resolution command for inspecting the cloud resolution control the engine is using."
+commands.allow = ["get_cloud_resolution"]

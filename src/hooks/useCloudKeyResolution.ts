@@ -2,8 +2,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import type { DetectedKeyState } from './useDetectedKey';
 import type { MediaSessionUiState } from './useMediaSession';
-import { lookupSongKey, submitSongKeySuggestion, type KeyLookupSource } from '../services/songKeyApi';
-import { buildTrackIdentity } from '../services/trackIdentity';
+import {
+  lookupSongKey,
+  normalizeLookupKey,
+  submitSongKeySuggestion,
+  type KeyLookupSource,
+  type LookupSongResult,
+} from '../services/songKeyApi';
+import { buildLookupInputs } from '../services/trackIdentity';
+import { trace } from '../services/debugLog';
 
 type CloudState = 'idle' | 'lookup_pending' | 'hit' | 'miss' | 'error';
 type ResolutionState =
@@ -49,25 +56,83 @@ type CloudControlWire = {
 
 type SuggestionStatus = 'idle' | 'submitting' | 'success' | 'error';
 
-function isActiveSession(media: MediaSessionUiState): boolean {
-  return media.playbackStatus !== 'none' && media.playbackStatus !== 'media_session_unavailable';
+/**
+ * A throttled or unreachable catalog is not an answer about the track. The lookup is retried
+ * in place while the same track is still on, because the effect only re-runs when the track
+ * changes — without this, one 429 leaves the song keyless for as long as it plays.
+ */
+const TRANSIENT_RETRY_DELAYS_MS = [3_000, 8_000];
+
+function wasIncomplete(result: LookupSongResult): boolean {
+  return !result.found && result.incomplete === true;
 }
 
-function isPlaying(media: MediaSessionUiState): boolean {
-  return media.playbackStatus === 'playing';
+function delay(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new DOMException('The operation was aborted.', 'AbortError'));
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    function onAbort() {
+      clearTimeout(timer);
+      reject(new DOMException('The operation was aborted.', 'AbortError'));
+    }
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
-function isPausedOrStopped(media: MediaSessionUiState): boolean {
-  return ['paused', 'stopped', 'closed', 'opened', 'changing'].includes(media.playbackStatus);
+async function lookupWithTransientRetries(
+  input: { title: string; artist: string },
+  signal: AbortSignal,
+): Promise<LookupSongResult> {
+  let result = await lookupSongKey(input, signal);
+  for (const ms of TRANSIENT_RETRY_DELAYS_MS) {
+    if (!wasIncomplete(result)) {
+      return result;
+    }
+    trace('cloud', 'lookup.retry', `Catalogs never answered — retrying in ${ms}ms`, {
+      ...input,
+      inMs: ms,
+      why: 'incomplete',
+    }, 'decide');
+    await delay(ms, signal);
+    result = await lookupSongKey(input, signal);
+  }
+  return result;
 }
+
+let loggedNotTauriControl = false;
 
 async function syncCloudControl(control: CloudControlWire): Promise<void> {
   if (!isTauri()) {
+    if (!loggedNotTauriControl) {
+      loggedNotTauriControl = true;
+      trace('cloud', 'control.skip', 'Not running inside Tauri — Rust will not pause the local detector', {
+        state: control.state,
+        why: 'not_tauri',
+      }, 'skip');
+    }
     return;
   }
   try {
     await invoke<boolean>('set_cloud_resolution', { control });
+    trace('cloud', 'control.sync', `Told Rust cloud state=${control.state}`, {
+      trackIdentity: control.track_identity,
+      state: control.state,
+      key: control.key,
+      mode: control.mode,
+    });
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    trace('cloud', 'control.sync_fail', `Could not tell Rust the cloud state — local detector may keep running`, {
+      state: control.state,
+      why: 'invoke_failed',
+      error: message,
+    }, 'fail');
     console.warn('cloud control sync failed', error);
   }
 }
@@ -85,7 +150,10 @@ export function useCloudKeyResolution(media: MediaSessionUiState, detectedKey: D
   const abortRef = useRef<AbortController | null>(null);
   const activeTrackRef = useRef<string | null>(null);
 
-  const trackIdentity = useMemo(() => buildTrackIdentity(media), [media]);
+  const { trackIdentity, title, artist, hasSession, playing, paused } = useMemo(
+    () => buildLookupInputs(media),
+    [media],
+  );
 
   useEffect(() => {
     const now = Date.now();
@@ -97,13 +165,10 @@ export function useCloudKeyResolution(media: MediaSessionUiState, detectedKey: D
   }, [trackIdentity]);
 
   useEffect(() => {
-    const hasSession = isActiveSession(media);
-    const playing = isPlaying(media);
-    const paused = isPausedOrStopped(media);
-    const title = media.title?.trim() ?? '';
-    const artist = media.artist?.trim() ?? '';
-
     if (!hasSession) {
+      trace('cloud', 'session.none', 'No media session from the OS — lookup and local detection stay idle', {
+        why: 'no_session',
+      }, 'skip');
       activeTrackRef.current = null;
       abortRef.current?.abort();
       setCloudState('idle');
@@ -121,11 +186,21 @@ export function useCloudKeyResolution(media: MediaSessionUiState, detectedKey: D
     }
 
     if (paused) {
+      trace('cloud', 'session.paused', 'Playback is paused/stopped — holding the last key, not starting a new lookup', {
+        trackIdentity,
+        title,
+        artist,
+        why: 'paused',
+      }, 'skip');
       setResolutionState('paused');
       return;
     }
 
     if (!playing) {
+      trace('cloud', 'session.not_playing', `Playback status is not 'playing' — waiting`, {
+        trackIdentity,
+        why: 'not_playing',
+      }, 'skip');
       return;
     }
 
@@ -137,10 +212,21 @@ export function useCloudKeyResolution(media: MediaSessionUiState, detectedKey: D
       setCloudError(null);
       setSuggestionStatus('idle');
       setSuggestionMessage(null);
-      console.info('key_resolution: track identity changed', trackIdentity);
+      trace('cloud', 'track.changed', 'Track identity changed — aborting any in-flight lookup so it cannot cache a miss for the previous song', {
+        trackIdentity,
+        title,
+        artist,
+        why: 'identity_changed',
+      }, 'decide');
     }
 
     if (!trackIdentity || !title || !artist) {
+      trace('cloud', 'lookup.skip', 'Session is playing but title or artist is empty — local detector only', {
+        trackIdentity,
+        title,
+        artist,
+        why: 'missing_metadata',
+      }, 'skip');
       setCloudState('miss');
       setResolutionState('cloud_miss_local_detecting');
       void syncCloudControl({
@@ -174,7 +260,14 @@ export function useCloudKeyResolution(media: MediaSessionUiState, detectedKey: D
           mode: hit.mode,
           error: null,
         });
-        console.info('key_resolution: cloud cache hit', trackIdentity);
+        trace('cloud', 'cache.hit', `Using cached ${cached.key} ${cached.mode} (${cached.verified ? 'verified' : cached.sourceLabel})`, {
+          trackIdentity,
+          key: cached.key,
+          mode: cached.mode,
+          verified: cached.verified,
+          source: cached.source,
+          why: 'memory_cache',
+        }, 'ok');
       } else {
         setCloudState('miss');
         setResolutionState('cloud_miss_local_detecting');
@@ -185,7 +278,10 @@ export function useCloudKeyResolution(media: MediaSessionUiState, detectedKey: D
           mode: null,
           error: null,
         });
-        console.info('key_resolution: cloud cache miss', trackIdentity);
+        trace('cloud', 'cache.miss', 'Cached miss for this track — skipping catalogs, local detector runs', {
+          trackIdentity,
+          why: 'cached_miss',
+        }, 'skip');
       }
       return;
     }
@@ -203,18 +299,56 @@ export function useCloudKeyResolution(media: MediaSessionUiState, detectedKey: D
       mode: null,
       error: null,
     });
-    console.info('key_resolution: cloud lookup started', { trackIdentity, title, artist });
+    trace('cloud', 'lookup.begin', `Starting cloud lookup for "${title}" — ${artist}`, {
+      trackIdentity,
+      title,
+      artist,
+      requestId,
+    }, 'start');
 
     void (async () => {
       try {
-        const result = await lookupSongKey({ title, artist }, ac.signal);
-        if (requestRef.current !== requestId || activeTrackRef.current !== trackIdentity) {
-          console.info('key_resolution: stale cloud response ignored', { trackIdentity });
+        const result = await lookupWithTransientRetries({ title, artist }, ac.signal);
+        // An aborted lookup can still resolve: the catalog leg swallows its own fetch errors.
+        // Caching that as a miss would pin a wrong answer on the track for the next 5 minutes.
+        if (ac.signal.aborted || requestRef.current !== requestId || activeTrackRef.current !== trackIdentity) {
+          trace('cloud', 'lookup.stale', 'Ignoring a late lookup result — the track or request has already moved on', {
+            trackIdentity,
+            requestId,
+            why: 'stale_or_aborted',
+          }, 'skip');
           return;
         }
         if (result.found) {
-          const mode = result.song.mode.toLowerCase() === 'major' ? 'major' : 'minor';
-          const key = result.song.musical_key.toUpperCase();
+          // Upper-casing the stored key would turn "Bb" into "BB" and leave the board stuck on
+          // the previous root; normalise it, and treat an unreadable key as a miss.
+          const parsed = normalizeLookupKey(result.song);
+          if (!parsed) {
+            trace('cloud', 'lookup.unparsable', 'Lookup returned a key that cannot be read — treating as a miss so the local detector can run', {
+              trackIdentity,
+              musical_key: result.song.musical_key,
+              mode: result.song.mode,
+              source: result.song.source,
+              why: 'unparsable_key',
+            }, 'fail');
+            cacheRef.current.set(trackIdentity, {
+              state: 'miss',
+              expiresAt: Date.now() + 5 * 60_000,
+            });
+            setCloudState('miss');
+            setCloudHit(null);
+            setCloudError(null);
+            setResolutionState('cloud_miss_local_detecting');
+            void syncCloudControl({
+              track_identity: trackIdentity,
+              state: 'miss',
+              key: null,
+              mode: null,
+              error: null,
+            });
+            return;
+          }
+          const { key, mode } = parsed;
           cacheRef.current.set(trackIdentity, {
             state: 'hit',
             key,
@@ -243,18 +377,28 @@ export function useCloudKeyResolution(media: MediaSessionUiState, detectedKey: D
             mode,
             error: null,
           });
-          console.info('key_resolution: catalog lookup hit', {
+          trace('cloud', 'lookup.hit', `Lookup hit: ${key} ${mode} from ${result.song.sourceLabel}${result.song.verified ? ' (verified)' : ''}`, {
             trackIdentity,
             key,
             mode,
             source: result.song.source,
             verified: result.song.verified,
-          });
+            why: result.song.verified ? 'verified_db' : 'catalog',
+          }, 'ok');
         } else {
-          cacheRef.current.set(trackIdentity, {
-            state: 'miss',
-            expiresAt: Date.now() + 5 * 60_000,
-          });
+          // Only a real "the catalogs know this song and it has no key" is worth caching.
+          // Caching an unanswered lookup would pin the track as keyless for five minutes.
+          if (!wasIncomplete(result)) {
+            cacheRef.current.set(trackIdentity, {
+              state: 'miss',
+              expiresAt: Date.now() + 5 * 60_000,
+            });
+          } else {
+            trace('cloud', 'lookup.incomplete', 'Catalogs still unreachable — not caching a miss, so the next play can retry', {
+              trackIdentity,
+              why: 'incomplete_not_cached',
+            }, 'fail');
+          }
           setCloudState('miss');
           setCloudHit(null);
           setCloudError(null);
@@ -266,14 +410,20 @@ export function useCloudKeyResolution(media: MediaSessionUiState, detectedKey: D
             mode: null,
             error: null,
           });
-          console.info('key_resolution: cloud lookup miss', { trackIdentity });
+          trace('cloud', 'lookup.miss', 'No catalog key — handing off to the local detector', {
+            trackIdentity,
+            why: 'complete_miss',
+          }, 'skip');
         }
       } catch (error) {
         if (ac.signal.aborted) {
           return;
         }
         if (requestRef.current !== requestId || activeTrackRef.current !== trackIdentity) {
-          console.info('key_resolution: stale cloud error ignored', { trackIdentity });
+          trace('cloud', 'lookup.stale_error', 'Ignoring a late lookup error — the track or request has already moved on', {
+            trackIdentity,
+            why: 'stale_error',
+          }, 'skip');
           return;
         }
         const message = error instanceof Error ? error.message : String(error);
@@ -288,6 +438,11 @@ export function useCloudKeyResolution(media: MediaSessionUiState, detectedKey: D
           mode: null,
           error: message,
         });
+        trace('cloud', 'lookup.error', `Lookup threw (${message}) — falling back to local detection`, {
+          trackIdentity,
+          error: message,
+          why: 'exception',
+        }, 'fail');
         console.warn('key_resolution: cloud lookup error, fallback to local', message);
       }
     })();
@@ -295,7 +450,7 @@ export function useCloudKeyResolution(media: MediaSessionUiState, detectedKey: D
     return () => {
       ac.abort();
     };
-  }, [media, trackIdentity]);
+  }, [artist, hasSession, paused, playing, title, trackIdentity]);
 
   useEffect(() => {
     if (cloudState === 'hit') {
@@ -353,7 +508,7 @@ export function useCloudKeyResolution(media: MediaSessionUiState, detectedKey: D
         await submitSongKeySuggestion({ title, artist, key, mode, user: 'anonymous' });
         setSuggestionStatus('success');
         setSuggestionMessage('Suggestion submitted (pending review).');
-        console.info('key_resolution: suggestion submitted', { title, artist, key, mode });
+        trace('cloud', 'suggest.ok', 'User suggestion submitted', { title, artist, key, mode }, 'ok');
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         setSuggestionStatus('error');

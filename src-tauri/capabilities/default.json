@@ -8,7 +8,10 @@
   "permissions": [
     "core:default",
     "allow-get-current-media",
+    "allow-get-media-sessions-debug",
     "allow-get-detected-key",
-    "allow-reset-detected-key"
+    "allow-reset-detected-key",
+    "allow-set-cloud-resolution",
+    "allow-get-cloud-resolution"
   ]
 }

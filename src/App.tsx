@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
 import GuitarScaleView from './GuitarScaleView';
+import { relativeKey } from './scaleSpell';
 import {
   getBrainDefaultScale,
   tryNormalizeRoot,
@@ -7,6 +8,7 @@ import {
   type ScaleContext,
   type ScaleType,
 } from './scaleDataProvider';
+import { trace } from './services/debugLog';
 
 export default function App() {
   const [rootInput, setRootInput] = useState('A');
@@ -32,13 +34,42 @@ export default function App() {
 
   const resetToBrainKey = () => {
     const d = getBrainDefaultScale();
+    trace('ui', 'reset', `Restoring the board to the brain default ${d.root} ${d.scaleType}`, {
+      root: d.root,
+      scaleType: d.scaleType,
+    }, 'decide');
     setRootInput(d.root);
     setScaleType(d.scaleType);
   };
 
   const applyDetectedKey = (root: string, detectedScale: 'major' | 'minor') => {
+    trace('ui', 'board.key', `Fretboard root/scale set to ${root} ${detectedScale}`, {
+      root,
+      scaleType: detectedScale,
+      previousRoot: rootForBoard,
+      previousScale: scaleType,
+    }, 'ok');
     setRootInput(root);
     setScaleType(detectedScale);
+  };
+
+  /* Reads off the board as shown, so a flip after an invalid keystroke still uses a real root. */
+  const flipRelative = () => {
+    const relative = relativeKey(rootForBoard, scaleType);
+    if (relative === null) {
+      trace('ui', 'relative.skip', `No relative key for ${rootForBoard} ${scaleType}`, {
+        root: rootForBoard,
+        scaleType,
+        why: 'no_relative',
+      }, 'skip');
+      return;
+    }
+    trace('ui', 'relative.flip', `Flipped ${rootForBoard} ${scaleType} → ${relative.root} ${relative.scaleType}`, {
+      from: `${rootForBoard} ${scaleType}`,
+      to: `${relative.root} ${relative.scaleType}`,
+    }, 'ok');
+    setRootInput(relative.root);
+    setScaleType(relative.scaleType);
   };
 
   return (
@@ -52,6 +83,7 @@ export default function App() {
         onScaleTypeChange={setScaleType}
         onResetToBrainKey={resetToBrainKey}
         onApplyDetectedKey={applyDetectedKey}
+        onFlipRelative={flipRelative}
       />
     </div>
   );

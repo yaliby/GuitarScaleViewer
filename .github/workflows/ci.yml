@@ -1,0 +1,171 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend (G1, G2, tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: G1 type-check
+        run: npx tsc -b --force
+      - name: Frontend unit tests
+        run: npm test
+      - name: G2 build
+        run: npx vite build
+      - name: G7 packaging consistency (frontendDist matches the Vite output)
+        run: |
+          dist_dir=$(node -p "require('./src-tauri/tauri.conf.json').build.frontendDist")
+          resolved="src-tauri/${dist_dir}"
+          test -f "${resolved}/index.html" \
+            || { echo "frontendDist '${dist_dir}' has no index.html after vite build"; exit 1; }
+
+  worker:
+    name: Worker (G3, G4)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: chordsync-api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: chordsync-api/package-lock.json
+      - run: npm ci
+      - name: G3 type-check
+        run: npm run typecheck
+      - name: G4 tests
+        run: npm test
+
+  rust:
+    name: Rust / Tauri (G5, G6, lint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
+            libgtk-3-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev
+      - name: G5 cargo check
+        working-directory: src-tauri
+        run: cargo check --all-targets
+      - name: G6 cargo test
+        working-directory: src-tauri
+        run: cargo test
+      - name: clippy
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+      - name: rustfmt
+        working-directory: src-tauri
+        run: cargo fmt --check
+
+  sidecar:
+    name: Python analyzer sidecar
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install numpy scipy
+      - name: Sidecar answers with JSON in both modes, backends present or not
+        working-directory: src-tauri
+        run: |
+          set -euo pipefail
+          req='{"sampleRateHz":44100,"windowSeconds":12,"hopSeconds":4,"profileTypes":["bgate"],"samplesMonoF32":[0.0,0.1,0.2]}'
+          for mode in --analyze --serve; do
+            printf '%s\n' "$req" \
+              | timeout 60 python3 sidecars/key_analyzer/key_analyzer.py "$mode" \
+              | while read -r line; do
+                  python3 -c "import json,sys; json.loads(sys.argv[1])" "$line" \
+                    || { echo "non-JSON on stdout in $mode: $line"; exit 1; }
+                done
+          done
+      - name: ready must not claim true without a backend
+        working-directory: src-tauri
+        run: |
+          set -euo pipefail
+          echo '' \
+            | timeout 60 python3 sidecars/key_analyzer/key_analyzer.py --serve \
+            | head -n 1 > /tmp/ready.json
+          python3 - /tmp/ready.json <<'PY'
+          import json, sys
+          r = json.load(open(sys.argv[1]))
+          expected = r["essentiaAvailable"] or r["numpyAvailable"]
+          assert r["ready"] == expected, f"ready={r['ready']} but backends give {expected}: {r}"
+          print("ready flag consistent:", r["ready"])
+          PY
+
+  acl:
+    name: G8 ACL consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Every registered command is permitted and every frontend invoke is allowed
+        run: |
+          set -euo pipefail
+          registered=$(sed -n '/generate_handler!\[/,/\]/p' src-tauri/src/lib.rs \
+            | tail -n +2 | grep -oE '[a-z_0-9]+::[a-z_0-9]+' | cut -d: -f3 | sort -u)
+          allowed=$(node -p "
+            require('./src-tauri/capabilities/default.json').permissions
+              .filter(p => p.startsWith('allow-'))
+              .map(p => p.replace(/^allow-/, '').replace(/-/g, '_'))
+              .join('\n')
+          " | sort -u)
+          invoked=$(grep -rhoE "invoke(<[^>]*>)?[(]'[^']*'" src/ \
+            | sed "s/.*('//;s/'//" | sort -u)
+
+          fail=0
+          for cmd in $registered; do
+            test -f "src-tauri/permissions/allow-${cmd//_/-}.toml" \
+              || { echo "::error::command '$cmd' has no permissions/allow-${cmd//_/-}.toml"; fail=1; }
+            grep -qx "$cmd" <<<"$allowed" \
+              || { echo "::error::command '$cmd' is not in capabilities/default.json"; fail=1; }
+          done
+          for cmd in $invoked; do
+            grep -qx "$cmd" <<<"$allowed" \
+              || { echo "::error::frontend invokes '$cmd' but the ACL does not allow it"; fail=1; }
+            grep -qx "$cmd" <<<"$registered" \
+              || { echo "::error::frontend invokes '$cmd' but Rust does not register it"; fail=1; }
+          done
+          exit $fail
+
+  events:
+    name: Tauri emit/listen contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Emitted and listened event names must match exactly
+        run: |
+          set -euo pipefail
+          emitted=$(grep -rhoE 'emit[_a-z]*\("[^"]*"' src-tauri/src/ | sed 's/.*("//;s/"//' | sort -u)
+          listened=$(grep -rhoE "listen[^(]*\('[^']*'" src/ | sed "s/.*('//;s/'//" | sort -u)
+          if [ "$emitted" != "$listened" ]; then
+            echo "::error::emit/listen mismatch"
+            diff <(echo "$emitted") <(echo "$listened") || true
+            exit 1
+          fi
+          echo "$emitted"

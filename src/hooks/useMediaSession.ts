@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { trace } from '../services/debugLog';
 
 /** Payload from Rust (`serde` default: snake_case keys). */
 type MediaSessionWire = {
@@ -45,6 +46,10 @@ function wireToUi(w: MediaSessionWire): MediaSessionUiState {
   };
 }
 
+function mediaIdentity(state: MediaSessionUiState): string {
+  return [state.sourceApp, state.title, state.artist, state.album, state.playbackStatus].join('|');
+}
+
 /**
  * Subscribes to Tauri `media-session-update` (no React-side polling).
  * Windows uses GSMTC; Linux uses MPRIS. Phase 2 may extend this path with
@@ -54,9 +59,29 @@ export function useMediaSession(): MediaSessionUiState {
   const [state, setState] = useState<MediaSessionUiState>(() =>
     isTauri() ? { ...BROWSER_FALLBACK, playbackStatus: 'none' } : BROWSER_FALLBACK,
   );
+  const lastIdentityRef = useRef<string | null>(null);
+
+  const apply = (next: MediaSessionUiState) => {
+    const identity = mediaIdentity(next);
+    if (lastIdentityRef.current !== identity) {
+      lastIdentityRef.current = identity;
+      trace('media', 'session', `Now playing: ${[next.artist, next.title].filter(Boolean).join(' — ') || '(none)'} [${next.playbackStatus}]`, {
+        title: next.title,
+        artist: next.artist,
+        album: next.album,
+        sourceApp: next.sourceApp,
+        playbackStatus: next.playbackStatus,
+        durationMs: next.durationMs,
+      }, next.playbackStatus === 'media_session_unavailable' ? 'fail' : 'info');
+    }
+    setState(next);
+  };
 
   useEffect(() => {
     if (!isTauri()) {
+      trace('media', 'unavailable', 'Not running inside Tauri — OS media session is unavailable', {
+        why: 'not_tauri',
+      }, 'skip');
       setState(BROWSER_FALLBACK);
       return;
     }
@@ -68,15 +93,21 @@ export function useMediaSession(): MediaSessionUiState {
       try {
         const initial = await invoke<MediaSessionWire>('get_current_media');
         if (!cancelled) {
-          setState(wireToUi(initial));
+          apply(wireToUi(initial));
         }
 
         unlisten = await listen<MediaSessionWire>('media-session-update', (event) => {
           if (!cancelled) {
-            setState(wireToUi(event.payload));
+            apply(wireToUi(event.payload));
           }
         });
-      } catch {
+        trace('media', 'subscribed', 'Listening for media-session-update from Rust', undefined, 'ok');
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        trace('media', 'subscribe_fail', `Could not read the OS media session (${message})`, {
+          why: 'invoke_or_listen_failed',
+          error: message,
+        }, 'fail');
         if (!cancelled) {
           setState(BROWSER_FALLBACK);
         }

@@ -1,0 +1,5 @@
+# Application permission: enumerate every OS media session for diagnostics.
+[[permission]]
+identifier = "allow-get-media-sessions-debug"
+description = "Allows the get_media_sessions_debug command listing all detected media sessions and which one was selected."
+commands.allow = ["get_media_sessions_debug"]

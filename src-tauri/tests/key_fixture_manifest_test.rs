@@ -50,6 +50,9 @@ fn fixture_manifest_is_well_formed() {
         "relative_ground_truth_minor_center",
     ];
     for cls in required {
-        assert!(classes.contains(cls), "missing required fixture class: {cls}");
+        assert!(
+            classes.contains(cls),
+            "missing required fixture class: {cls}"
+        );
     }
 }

@@ -98,8 +98,8 @@ mod win {
 
     use sysinfo::{ProcessRefreshKind, RefreshKind, System};
     use wasapi::{
-        initialize_mta, AudioClient, DeviceEnumerator, Direction, SampleType, SessionState, StreamMode,
-        WaveFormat,
+        initialize_mta, AudioClient, DeviceEnumerator, Direction, SampleType, SessionState,
+        StreamMode, WaveFormat,
     };
 
     const CAPTURE_CHUNK_FRAMES: usize = 4096;
@@ -137,7 +137,11 @@ mod win {
                             frame[base + 2],
                             frame[base + 3],
                         ]);
-                        if v.is_finite() { v } else { 0.0 }
+                        if v.is_finite() {
+                            v
+                        } else {
+                            0.0
+                        }
                     }
                     (SampleType::Int, 2) => {
                         i16::from_le_bytes([frame[base], frame[base + 1]]) as f32 / 32768.0
@@ -168,7 +172,11 @@ mod win {
                                 frame[base + 2],
                                 frame[base + 3],
                             ]);
-                            if v.is_finite() { v } else { 0.0 }
+                            if v.is_finite() {
+                                v
+                            } else {
+                                0.0
+                            }
                         } else {
                             0.0
                         }
@@ -309,7 +317,9 @@ mod win {
     }
 
     fn resolve_pid_for_source_app(source_app: &str) -> Option<u32> {
-        if let Some(exe) = likely_exe_name(source_app).or_else(|| guess_exe_from_friendly_name(source_app)) {
+        if let Some(exe) =
+            likely_exe_name(source_app).or_else(|| guess_exe_from_friendly_name(source_app))
+        {
             if let Some(pid) = find_process_id_by_exe(&exe) {
                 return Some(pid);
             }
@@ -431,8 +441,8 @@ mod win {
     fn create_audio_client(source: &CaptureSource) -> Result<AudioClient, String> {
         match source {
             CaptureSource::EndpointLoopback => {
-                let enumerator =
-                    DeviceEnumerator::new().map_err(|e| format!("create device enumerator: {e}"))?;
+                let enumerator = DeviceEnumerator::new()
+                    .map_err(|e| format!("create device enumerator: {e}"))?;
                 let render_device = enumerator
                     .get_default_device(&Direction::Render)
                     .map_err(|e| format!("default render device: {e}"))?;
@@ -440,15 +450,16 @@ mod win {
                     .get_iaudioclient()
                     .map_err(|e| format!("render get_iaudioclient: {e}"))
             }
-            CaptureSource::ProcessLoopback { pid } => AudioClient::new_application_loopback_client(
-                *pid,
-                true,
-            )
-            .map_err(|e| format!("new_application_loopback_client pid={pid}: {e}")),
+            CaptureSource::ProcessLoopback { pid } => {
+                AudioClient::new_application_loopback_client(*pid, true)
+                    .map_err(|e| format!("new_application_loopback_client pid={pid}: {e}"))
+            }
         }
     }
 
-    fn spawn_worker(source: CaptureSource) -> Result<(CaptureWorkerHandle, Receiver<CapturePacket>), String> {
+    fn spawn_worker(
+        source: CaptureSource,
+    ) -> Result<(CaptureWorkerHandle, Receiver<CapturePacket>), String> {
         let (tx, rx) = mpsc::sync_channel::<CapturePacket>(CAPTURE_CHANNEL_CAPACITY);
         let stop = Arc::new(AtomicBool::new(false));
         let stop_for_thread = stop.clone();
@@ -490,18 +501,91 @@ mod win {
 
 #[cfg(target_os = "linux")]
 mod linux {
-    use super::{CapturePacket, CaptureWorkerHandle, CAPTURE_CHANNEL_CAPACITY, ANALYZER_SAMPLE_RATE_HZ};
+    use super::{
+        CapturePacket, CaptureWorkerHandle, ANALYZER_SAMPLE_RATE_HZ, CAPTURE_CHANNEL_CAPACITY,
+    };
+    use libpulse_binding::context::{Context, FlagSet as ContextFlagSet, State as ContextState};
+    use libpulse_binding::mainloop::standard::{IterateResult, Mainloop};
     use libpulse_binding::sample::{Format, Spec};
     use libpulse_binding::stream::Direction;
     use libpulse_simple_binding::Simple;
+    use std::cell::RefCell;
+    use std::rc::Rc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc::{self, Receiver};
     use std::sync::Arc;
     use std::thread;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     const CAPTURE_CHUNK_FRAMES: usize = 4096;
     const CAPTURE_CHANNELS: u8 = 1;
+
+    /// How long the server-info probe may take before we give up and use the alias.
+    const SERVER_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
+    /// Ask the sound server which sink is default, and name that sink's monitor outright.
+    ///
+    /// `@DEFAULT_MONITOR@` is the documented alias for exactly this and it works on PulseAudio
+    /// proper. Under PipeWire's Pulse compatibility layer it does not: the stream opens, reads
+    /// succeed, and every sample comes back 0.0. At the capture layer that is indistinguishable
+    /// from "nothing is playing", so local detection silently never produced a key on a
+    /// PipeWire desktop no matter what was on the speakers. Resolving the name ourselves skips
+    /// the alias, and the caller still falls back to it if this probe cannot answer.
+    fn default_monitor_source_name() -> Option<String> {
+        let mut mainloop = Mainloop::new()?;
+        let mut context = Context::new(&mainloop, "guitar-scale-viewer-probe")?;
+        context.connect(None, ContextFlagSet::NOFLAGS, None).ok()?;
+
+        let deadline = Instant::now() + SERVER_PROBE_TIMEOUT;
+        loop {
+            if Instant::now() >= deadline {
+                context.disconnect();
+                return None;
+            }
+            match mainloop.iterate(false) {
+                IterateResult::Success(_) => {}
+                IterateResult::Quit(_) | IterateResult::Err(_) => return None,
+            }
+            match context.get_state() {
+                ContextState::Ready => break,
+                ContextState::Failed | ContextState::Terminated => return None,
+                _ => thread::sleep(Duration::from_millis(5)),
+            }
+        }
+
+        let sink = Rc::new(RefCell::new(None::<String>));
+        let done = Rc::new(RefCell::new(false));
+        {
+            let sink = sink.clone();
+            let done = done.clone();
+            context.introspect().get_server_info(move |info| {
+                *sink.borrow_mut() = info.default_sink_name.as_ref().map(|n| n.to_string());
+                *done.borrow_mut() = true;
+            });
+        }
+
+        while !*done.borrow() {
+            if Instant::now() >= deadline {
+                context.disconnect();
+                return None;
+            }
+            match mainloop.iterate(false) {
+                IterateResult::Success(_) => {}
+                IterateResult::Quit(_) | IterateResult::Err(_) => {
+                    context.disconnect();
+                    return None;
+                }
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        context.disconnect();
+
+        let name = sink.borrow().clone()?;
+        if name.is_empty() {
+            return None;
+        }
+        Some(format!("{name}.monitor"))
+    }
 
     fn open_monitor_stream() -> Result<Simple, String> {
         let spec = Spec {
@@ -513,34 +597,49 @@ mod linux {
             return Err("pulse sample spec invalid".to_string());
         }
 
-        // `@DEFAULT_MONITOR@` is the Pulse/PipeWire equivalent of WASAPI endpoint loopback.
-        let first = Simple::new(
-            None,
-            "guitar-scale-viewer",
-            Direction::Record,
-            Some("@DEFAULT_MONITOR@"),
-            "system-audio-capture",
-            &spec,
-            None,
-            None,
-        );
-        match first {
-            Ok(simple) => Ok(simple),
+        let connect = |device: Option<&str>| {
+            Simple::new(
+                None,
+                "guitar-scale-viewer",
+                Direction::Record,
+                device,
+                "system-audio-capture",
+                &spec,
+                None,
+                None,
+            )
+        };
+
+        // Preferred: the default sink's monitor, named explicitly. See the probe's comment for
+        // why the `@DEFAULT_MONITOR@` alias below is not enough on PipeWire.
+        if let Some(monitor) = default_monitor_source_name() {
+            match connect(Some(monitor.as_str())) {
+                Ok(simple) => {
+                    log::info!("audio_capture: pulse capturing from {monitor}");
+                    return Ok(simple);
+                }
+                Err(err) => log::warn!(
+                    "audio_capture: pulse monitor {monitor} failed ({err}); trying @DEFAULT_MONITOR@"
+                ),
+            }
+        } else {
+            log::warn!(
+                "audio_capture: could not resolve the default sink; trying @DEFAULT_MONITOR@"
+            );
+        }
+
+        match connect(Some("@DEFAULT_MONITOR@")) {
+            Ok(simple) => {
+                log::info!("audio_capture: pulse capturing from @DEFAULT_MONITOR@");
+                Ok(simple)
+            }
             Err(err) => {
                 log::warn!(
                     "audio_capture: pulse @DEFAULT_MONITOR@ failed ({err}); trying default source"
                 );
-                Simple::new(
-                    None,
-                    "guitar-scale-viewer",
-                    Direction::Record,
-                    None,
-                    "system-audio-capture",
-                    &spec,
-                    None,
-                    None,
-                )
-                .map_err(|e| format!("pulse simple record: {e}"))
+                let simple = connect(None).map_err(|e| format!("pulse simple record: {e}"))?;
+                log::info!("audio_capture: pulse capturing from the default source");
+                Ok(simple)
             }
         }
     }
@@ -745,7 +844,9 @@ impl AudioCaptureManager {
                     self.mode_reason = Some("endpoint_unavailable".to_string());
                     self.worker = None;
                     self.receiver = None;
-                    log::error!("audio_capture: sustained pulse monitor failures; mode set to unavailable");
+                    log::error!(
+                        "audio_capture: sustained pulse monitor failures; mode set to unavailable"
+                    );
                 }
             }
         }
@@ -774,7 +875,6 @@ impl AudioCaptureManager {
                 self.stop_worker();
             }
             self.start_linux_monitor(preserve_buffer);
-            return;
         }
 
         #[cfg(windows)]
@@ -812,7 +912,9 @@ impl AudioCaptureManager {
                     target_app
                 );
             } else if target_app.is_none() {
-                log::debug!("audio_capture: no target app for process loopback; using endpoint fallback");
+                log::debug!(
+                    "audio_capture: no target app for process loopback; using endpoint fallback"
+                );
             }
             self.requested_mode = if target_app.is_some() {
                 CaptureMode::ProcessLoopback
@@ -892,7 +994,9 @@ impl AudioCaptureManager {
                         self.mode_reason = Some("endpoint_unavailable".to_string());
                         self.worker = None;
                         self.receiver = None;
-                        log::error!("audio_capture: sustained endpoint failures; mode set to unavailable");
+                        log::error!(
+                            "audio_capture: sustained endpoint failures; mode set to unavailable"
+                        );
                     }
                 }
             }

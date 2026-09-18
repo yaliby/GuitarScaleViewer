@@ -48,17 +48,34 @@ struct AnalyzeResponse {
     error: Option<String>,
 }
 
+/// `py` is the Windows launcher and does not exist elsewhere; the app itself already
+/// picks per-platform in `default_python_command`, and the test must match it.
+fn default_python_command() -> String {
+    std::env::var("KEY_ANALYZER_PYTHON")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| {
+            if cfg!(windows) {
+                "py".to_string()
+            } else {
+                "python3".to_string()
+            }
+        })
+}
+
 fn resolve_sidecar_python() -> (String, PathBuf) {
     if let Ok(sidecar) = std::env::var("KEY_ANALYZER_SIDECAR") {
         let path = PathBuf::from(&sidecar);
         if sidecar.to_ascii_lowercase().ends_with(".py") {
-            let py = std::env::var("KEY_ANALYZER_PYTHON").unwrap_or_else(|_| "py".to_string());
-            return (py, path);
+            return (default_python_command(), path);
         }
     }
     (
-        "py".to_string(),
-        PathBuf::from("sidecars").join("key_analyzer").join("key_analyzer.py"),
+        default_python_command(),
+        PathBuf::from("sidecars")
+            .join("key_analyzer")
+            .join("key_analyzer.py"),
     )
 }
 
@@ -147,13 +164,14 @@ fn analyze_with_sidecar(sample_rate_hz: u32, samples: &[f32]) -> AnalyzeResponse
     serde_json::from_slice(&out.stdout).expect("decode sidecar response")
 }
 
+/// Needs the python analyzer stack (numpy, ideally essentia) and the 33MB wav fixtures,
+/// so it is `#[ignore]`d rather than silently returning early — an early `return` reports
+/// `ok` for a test that checked nothing.
+///
+/// Run it with: `cargo test -- --ignored --nocapture`
 #[test]
+#[ignore = "requires the python analyzer stack and local wav fixtures; run with --ignored"]
 fn fixture_regression_with_real_sidecar() {
-    if std::env::var("RUN_KEY_FIXTURES").ok().as_deref() != Some("1") {
-        eprintln!("skipping key fixture regression (set RUN_KEY_FIXTURES=1 to run)");
-        return;
-    }
-
     let raw =
         std::fs::read_to_string("tests/key_fixtures_manifest.json").expect("read fixture manifest");
     let fixtures: Vec<FixtureSpec> = serde_json::from_str(&raw).expect("parse fixture manifest");
@@ -205,12 +223,10 @@ fn fixture_regression_with_real_sidecar() {
                 fixture.id
             );
         }
-        let alternative_match = fixture.acceptable_alternatives.iter().any(|alt| {
-            (
-                alt.key.to_ascii_uppercase(),
-                alt.scale.to_ascii_lowercase(),
-            ) == top_key
-        });
+        let alternative_match = fixture
+            .acceptable_alternatives
+            .iter()
+            .any(|alt| (alt.key.to_ascii_uppercase(), alt.scale.to_ascii_lowercase()) == top_key);
 
         assert!(
             top_key == expected_primary || alternative_match,

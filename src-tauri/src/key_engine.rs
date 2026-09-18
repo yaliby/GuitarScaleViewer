@@ -89,14 +89,16 @@ pub fn set_cloud_resolution(control: CloudResolutionControl) -> bool {
     if let Ok(mut lock) = cloud_control_cell().lock() {
         *lock = control.clone();
         log::info!(
-            "key_engine: cloud resolution updated state={} track={:?} key={:?} mode={:?}",
+            "key_engine: cloud resolution updated state={} track={:?} key={:?} mode={:?} error={:?}",
             control.state,
             control.track_identity,
             control.key,
-            control.mode
+            control.mode,
+            control.error
         );
         true
     } else {
+        log::warn!("key_engine: cloud resolution update dropped — lock poisoned");
         false
     }
 }
@@ -117,7 +119,11 @@ pub fn get_cloud_resolution() -> CloudResolutionControl {
 
 fn state_cell() -> Arc<Mutex<DetectedKeyPayload>> {
     LATEST_DETECTED_KEY
-        .get_or_init(|| Arc::new(Mutex::new(DetectedKeyPayload::unavailable("engine_not_started"))))
+        .get_or_init(|| {
+            Arc::new(Mutex::new(DetectedKeyPayload::unavailable(
+                "engine_not_started",
+            )))
+        })
         .clone()
 }
 
@@ -147,7 +153,6 @@ enum EngineLifecycleState {
 fn normalize_track_field(value: Option<&str>) -> String {
     value
         .unwrap_or("")
-        .trim()
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
@@ -177,12 +182,10 @@ fn find_existing_path(candidates: &[PathBuf]) -> Option<PathBuf> {
 fn apply_capture_degrade(mut payload: DetectedKeyPayload) -> DetectedKeyPayload {
     if payload.capture_mode == CaptureMode::EndpointLoopback {
         payload.confidence *= 0.85;
-        payload.reason = Some(
-            payload
-                .reason
-                .clone()
-                .unwrap_or_else(|| "system loopback fallback may include unrelated audio".to_string()),
-        );
+        payload.reason =
+            Some(payload.reason.clone().unwrap_or_else(|| {
+                "system loopback fallback may include unrelated audio".to_string()
+            }));
     }
     payload.ready_to_apply = payload.confidence >= MIN_CONFIDENCE_READY
         && payload.stability >= MIN_STABILITY_READY
@@ -234,12 +237,7 @@ fn circular_interval(a: i32, b: i32) -> i32 {
     d.min(12 - d)
 }
 
-fn is_relative_major_minor(
-    key_a: &str,
-    scale_a: &str,
-    key_b: &str,
-    scale_b: &str,
-) -> bool {
+fn is_relative_major_minor(key_a: &str, scale_a: &str, key_b: &str, scale_b: &str) -> bool {
     let (Some(pc_a), Some(pc_b)) = (tonic_to_pc(key_a), tonic_to_pc(key_b)) else {
         return false;
     };
@@ -457,9 +455,11 @@ fn window_disagreement_metrics(results: &[WindowAnalysisResult]) -> WindowDisagr
 fn recent_key_sequence_from_results(results: &[WindowAnalysisResult]) -> Vec<String> {
     let mut by_window: BTreeMap<u64, (&str, &str, f32)> = BTreeMap::new();
     for r in results {
-        let e = by_window
-            .entry(r.window_start_ms)
-            .or_insert((r.key.as_str(), r.scale.as_str(), r.strength));
+        let e = by_window.entry(r.window_start_ms).or_insert((
+            r.key.as_str(),
+            r.scale.as_str(),
+            r.strength,
+        ));
         if r.strength > e.2 {
             *e = (r.key.as_str(), r.scale.as_str(), r.strength);
         }
@@ -500,7 +500,9 @@ fn window_winners_from_results(results: &[WindowAnalysisResult]) -> Vec<WindowWi
             score,
             rel,
         };
-        let entry = by_window.entry(r.window_start_ms).or_insert(candidate.clone());
+        let entry = by_window
+            .entry(r.window_start_ms)
+            .or_insert(candidate.clone());
         if candidate.score > entry.score {
             *entry = candidate;
         }
@@ -587,7 +589,12 @@ fn save_debug_artifacts(
         sample_format: hound::SampleFormat::Int,
     };
     if let Ok(mut writer) = hound::WavWriter::create(&wav_path, spec) {
-        for s in samples.iter().rev().take((sample_rate_hz as usize * 12).min(samples.len())).rev() {
+        for s in samples
+            .iter()
+            .rev()
+            .take((sample_rate_hz as usize * 12).min(samples.len()))
+            .rev()
+        {
             let s16 = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
             let _ = writer.write_sample(s16);
         }
@@ -682,8 +689,9 @@ fn aggregate_results(
         let first = ranked[0].clone();
         let second = ranked[1].clone();
         if is_relative_major_minor(&first.0, &first.1, &second.0, &second.1) {
-            relative_pair_label_value =
-                Some(relative_pair_label(&first.0, &first.1, &second.0, &second.1));
+            relative_pair_label_value = Some(relative_pair_label(
+                &first.0, &first.1, &second.0, &second.1,
+            ));
             let pair_total = (first.3 + second.3).max(1e-6);
             let first_share = first.3 / pair_total;
             let second_share = second.3 / pair_total;
@@ -724,7 +732,8 @@ fn aggregate_results(
                     pair_raw_total += 1;
                     if choice == minor_choice {
                         pair_minor_raw += 1;
-                        pair_minor_rel_sum += r.first_to_second_relative_strength.unwrap_or(0.0).max(0.0);
+                        pair_minor_rel_sum +=
+                            r.first_to_second_relative_strength.unwrap_or(0.0).max(0.0);
                     }
                 }
             }
@@ -752,8 +761,9 @@ fn aggregate_results(
                 ranked.swap(0, 1);
                 relative_pair_selected_minor = true;
             } else {
-                relative_pair_unresolved =
-                    relative_pair_margin <= 0.34 || minor_total_share >= 0.25 || minor_early_share >= 0.50;
+                relative_pair_unresolved = relative_pair_margin <= 0.34
+                    || minor_total_share >= 0.25
+                    || minor_early_share >= 0.50;
             }
             log::info!(
                 "key_engine: relative-pair analysis detected={} pair={} pairMargin={:.3} minorChoice={} minorTotalShare={:.3} minorEarlyShare={:.3} minorLateShare={:.3} minorProfileShare={:.3} minorMarginAvg={:.3} minorScore={:.3} selectedMinor={} unresolved={}",
@@ -933,8 +943,10 @@ fn apply_ready_streak_gate(
             && payload.stability >= MIN_STABILITY_LIKELY
             && !payload.ambiguous
             && payload.enough_audio;
-        let strong_enough = strong_enough && payload.confidence >= min_conf && payload.stability >= min_stab;
-        let diverse_tonics = tonic_entropy > MAX_TONIC_ENTROPY || dominant_share < MIN_DOMINANCE_SHARE;
+        let strong_enough =
+            strong_enough && payload.confidence >= min_conf && payload.stability >= min_stab;
+        let diverse_tonics =
+            tonic_entropy > MAX_TONIC_ENTROPY || dominant_share < MIN_DOMINANCE_SHARE;
         if !strong_enough || diverse_tonics {
             payload.ready_to_apply = false;
             payload.reason = Some(format!(
@@ -958,6 +970,9 @@ fn apply_ready_streak_gate(
     payload
 }
 
+// The gate weighs every independent signal the engine tracks; bundling them into a
+// struct would only move the same list one level out.
+#[allow(clippy::too_many_arguments)]
 fn enforce_apply_gate(
     mut payload: DetectedKeyPayload,
     backend_used: &str,
@@ -989,21 +1004,22 @@ fn enforce_apply_gate(
         && backend_used == "essentia"
         && payload.confidence >= MIN_CONFIDENCE_READY
         && payload.stability >= MIN_STABILITY_READY;
-    let apply_allowed = hold_apply_allowed || (backend_used == "essentia"
-        && payload.state == "likely_key"
-        && !payload.ambiguous
-        && payload.confidence >= MIN_CONFIDENCE_READY
-        && payload.stability >= MIN_STABILITY_READY
-        && capture_stable
-        && session_stable
-        && repeated_key
-        && likely_streak >= MIN_READY_STREAK
-        && !contradiction_active
-        && !contradiction_cooldown
-        && !recent_silence
-        && !cm.contradiction_burst
-        && endpoint_conservative_ok
-        && stable_horizon);
+    let apply_allowed = hold_apply_allowed
+        || (backend_used == "essentia"
+            && payload.state == "likely_key"
+            && !payload.ambiguous
+            && payload.confidence >= MIN_CONFIDENCE_READY
+            && payload.stability >= MIN_STABILITY_READY
+            && capture_stable
+            && session_stable
+            && repeated_key
+            && likely_streak >= MIN_READY_STREAK
+            && !contradiction_active
+            && !contradiction_cooldown
+            && !recent_silence
+            && !cm.contradiction_burst
+            && endpoint_conservative_ok
+            && stable_horizon);
     if !apply_allowed {
         payload.ready_to_apply = false;
         if payload.reason.is_none() {
@@ -1040,7 +1056,10 @@ fn enforce_apply_gate(
 }
 
 fn relative_pair_from_payload(payload: &DetectedKeyPayload) -> (bool, Option<String>, f32) {
-    let (Some(pk), Some(ps)) = (payload.primary_key.as_deref(), payload.primary_scale.as_deref()) else {
+    let (Some(pk), Some(ps)) = (
+        payload.primary_key.as_deref(),
+        payload.primary_scale.as_deref(),
+    ) else {
         return (false, None, 0.0);
     };
     for alt in &payload.alternatives {
@@ -1070,26 +1089,55 @@ fn default_python_command() -> String {
         })
 }
 
-fn analyzer_executable_candidates(cwd: &std::path::Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    if cfg!(windows) {
-        out.push(cwd.join("sidecars").join("key_analyzer").join("key_analyzer.exe"));
-        out.push(
-            cwd.join("src-tauri")
-                .join("sidecars")
-                .join("key_analyzer")
-                .join("key_analyzer.exe"),
-        );
-    } else {
-        out.push(cwd.join("sidecars").join("key_analyzer").join("key_analyzer"));
-        out.push(
-            cwd.join("src-tauri")
-                .join("sidecars")
-                .join("key_analyzer")
-                .join("key_analyzer"),
-        );
+/// Directories that may contain a bundled `sidecars/` tree.
+///
+/// A packaged build is launched with an arbitrary cwd (a desktop launcher, `cd /tmp && app`),
+/// so cwd-relative lookup alone loses the analyzer. The executable's own location is the only
+/// anchor that survives packaging, and the extra hops cover where each bundler drops resources.
+fn analyzer_search_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    let mut push = |p: PathBuf| {
+        if !roots.contains(&p) {
+            roots.push(p);
+        }
+    };
+
+    if let Ok(cwd) = std::env::current_dir() {
+        push(cwd.join("src-tauri"));
+        push(cwd);
     }
-    out
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            push(exe_dir.to_path_buf());
+            // macOS app bundle: Contents/MacOS/<bin> -> Contents/Resources
+            push(exe_dir.join("../Resources"));
+            // Linux .deb/.rpm: /usr/bin/<bin> -> /usr/lib/<bin>
+            if let Some(stem) = exe.file_stem() {
+                push(exe_dir.join("../lib").join(stem));
+            }
+            push(exe_dir.join("../lib").join("guitar-scale-viewer"));
+            // Dev build: target/debug/<bin> -> src-tauri
+            push(exe_dir.join("../.."));
+        }
+    }
+
+    roots
+}
+
+fn analyzer_file_candidates(file_name: &str) -> Vec<PathBuf> {
+    analyzer_search_roots()
+        .into_iter()
+        .map(|root| root.join("sidecars").join("key_analyzer").join(file_name))
+        .collect()
+}
+
+fn analyzer_executable_candidates() -> Vec<PathBuf> {
+    analyzer_file_candidates(if cfg!(windows) {
+        "key_analyzer.exe"
+    } else {
+        "key_analyzer"
+    })
 }
 
 fn build_current_detector() -> Box<dyn KeyDetector> {
@@ -1117,18 +1165,11 @@ fn build_current_detector() -> Box<dyn KeyDetector> {
         return Box::new(SidecarKeyDetector::from_executable(path));
     }
 
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    if let Some(exe) = find_existing_path(&analyzer_executable_candidates(&cwd)) {
+    if let Some(exe) = find_existing_path(&analyzer_executable_candidates()) {
         return Box::new(SidecarKeyDetector::from_executable(exe));
     }
 
-    let py_candidates = [
-        cwd.join("sidecars").join("key_analyzer").join("key_analyzer.py"),
-        cwd.join("src-tauri")
-            .join("sidecars")
-            .join("key_analyzer")
-            .join("key_analyzer.py"),
-    ];
+    let py_candidates = analyzer_file_candidates("key_analyzer.py");
     if let Some(py_script) = find_existing_path(&py_candidates) {
         let python = default_python_command();
         return Box::new(SidecarKeyDetector::from_python_script(&python, py_script));
@@ -1154,10 +1195,37 @@ fn build_libkeyfinder_detector() -> Option<Box<dyn KeyDetector>> {
         let cli = cli.trim().to_string();
         if !cli.is_empty() {
             log::info!("key_engine: using libkeyfinder analyzer via native CLI");
-            return Some(Box::new(LibKeyFinderDetector::from_executable(PathBuf::from(cli))));
+            return Some(Box::new(LibKeyFinderDetector::from_executable(
+                PathBuf::from(cli),
+            )));
         }
     }
+    // libkeyfinder is the default backend, so find a locally built CLI without making the
+    // user export KEY_ANALYZER_LIBKEYFINDER_CLI by hand (see sidecars/libkeyfinder_cli/build.sh).
+    if let Some(cli) = find_existing_path(&libkeyfinder_cli_candidates()) {
+        log::info!(
+            "key_engine: using libkeyfinder analyzer discovered at {}",
+            cli.display()
+        );
+        return Some(Box::new(LibKeyFinderDetector::from_executable(cli)));
+    }
     None
+}
+
+fn libkeyfinder_cli_candidates() -> Vec<PathBuf> {
+    let exe_name = if cfg!(windows) {
+        "gsv-libkeyfinder-cli.exe"
+    } else {
+        "gsv-libkeyfinder-cli"
+    };
+    let mut out = Vec::new();
+    for root in analyzer_search_roots() {
+        let cli_dir = root.join("sidecars").join("libkeyfinder_cli");
+        out.push(cli_dir.join("build").join(exe_name));
+        out.push(cli_dir.join(exe_name));
+        out.push(root.join("bin").join(exe_name));
+    }
+    out
 }
 
 fn build_detector() -> Box<dyn KeyDetector> {
@@ -1170,13 +1238,17 @@ fn build_detector() -> Box<dyn KeyDetector> {
             return det;
         }
         log::warn!(
-            "key_engine: KEY_ANALYZER_BACKEND=libkeyfinder but no CLI configured; falling back to current analyzer"
+            "key_engine: KEY_ANALYZER_BACKEND=libkeyfinder but no CLI was found (set \
+             KEY_ANALYZER_LIBKEYFINDER_CLI or run sidecars/libkeyfinder_cli/build.sh); \
+             falling back to the python analyzer"
         );
     }
     build_current_detector()
 }
 
-fn top_from_windows(windows: &[WindowAnalysisResult]) -> (Option<String>, Option<String>, Option<String>, f32) {
+fn top_from_windows(
+    windows: &[WindowAnalysisResult],
+) -> (Option<String>, Option<String>, Option<String>, f32) {
     if windows.is_empty() {
         return (None, None, None, 0.0);
     }
@@ -1267,6 +1339,7 @@ pub fn spawn_key_engine(app: AppHandle) {
     std::thread::Builder::new()
         .name("key-engine".to_string())
         .spawn(move || {
+            log::info!("key_engine: thread started; waiting for media session + cloud control");
             let detector = build_detector();
             let ab_enabled = std::env::var("KEY_ANALYZER_AB")
                 .ok()
@@ -2483,9 +2556,10 @@ pub fn spawn_key_engine(app: AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::{
-        aggregate_results, apply_ready_streak_gate, contradiction_metrics_from_history,
-        enforce_apply_gate, with_switch_hysteresis, ContradictionMetrics,
-        track_identity,
+        aggregate_results, analyzer_executable_candidates, analyzer_file_candidates,
+        analyzer_search_roots, apply_ready_streak_gate, contradiction_metrics_from_history,
+        enforce_apply_gate, libkeyfinder_cli_candidates, track_identity, with_switch_hysteresis,
+        ContradictionMetrics,
     };
     use crate::audio_models::CaptureMode;
     use crate::audio_models::WindowAnalysisResult;
@@ -2789,13 +2863,11 @@ mod tests {
         };
         let first = apply_ready_streak_gate(payload.clone(), 1, "essentia", 0.0, 1.0);
         assert!(!first.ready_to_apply);
-        assert!(
-            first
-                .reason
-                .as_deref()
-                .unwrap_or_default()
-                .starts_with("waiting_for_stability_confirmation")
-        );
+        assert!(first
+            .reason
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with("waiting_for_stability_confirmation"));
         let second = apply_ready_streak_gate(payload, 6, "essentia", 0.0, 1.0);
         assert!(second.ready_to_apply);
     }
@@ -2858,18 +2930,7 @@ mod tests {
         cm.contradiction_burst = true;
         cm.competing_tonics = 3;
         let gated = enforce_apply_gate(
-            payload,
-            "essentia",
-            true,
-            true,
-            true,
-            true,
-            true,
-            false,
-            0.9,
-            1,
-            &cm,
-            8,
+            payload, "essentia", true, true, true, true, true, false, 0.9, 1, &cm, 8,
         );
         assert!(!gated.ready_to_apply);
         assert!(gated.reason.is_some());
@@ -2947,7 +3008,10 @@ mod tests {
             9,
         );
         assert!(!gated.ready_to_apply);
-        assert!(gated.reason.unwrap_or_default().contains("recentSilence=true"));
+        assert!(gated
+            .reason
+            .unwrap_or_default()
+            .contains("recentSilence=true"));
     }
 
     #[test]
@@ -2988,6 +3052,56 @@ mod tests {
         assert_eq!(
             gated.reason.as_deref(),
             Some("paused_hold_last_good_apply_grace")
+        );
+    }
+
+    #[test]
+    fn analyzer_search_roots_do_not_depend_on_cwd_alone() {
+        let roots = analyzer_search_roots();
+        let exe_dir = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+            .expect("test binary has a parent directory");
+        assert!(
+            roots.contains(&exe_dir),
+            "the executable's own directory must be searched so a packaged app started from \
+             an arbitrary cwd still finds the sidecar; got {roots:?}"
+        );
+    }
+
+    #[test]
+    fn analyzer_candidates_cover_both_the_script_and_the_frozen_binary() {
+        let script = analyzer_file_candidates("key_analyzer.py");
+        assert!(!script.is_empty());
+        assert!(script
+            .iter()
+            .all(|p| p.ends_with("sidecars/key_analyzer/key_analyzer.py")));
+
+        let binaries = analyzer_executable_candidates();
+        assert_eq!(binaries.len(), script.len());
+        let expected_name = if cfg!(windows) {
+            "key_analyzer.exe"
+        } else {
+            "key_analyzer"
+        };
+        assert!(binaries
+            .iter()
+            .all(|p| p.file_name().map(|n| n == expected_name).unwrap_or(false)));
+    }
+
+    #[test]
+    fn libkeyfinder_candidates_include_the_documented_build_output() {
+        let exe_name = if cfg!(windows) {
+            "gsv-libkeyfinder-cli.exe"
+        } else {
+            "gsv-libkeyfinder-cli"
+        };
+        let candidates = libkeyfinder_cli_candidates();
+        assert!(
+            candidates
+                .iter()
+                .any(|p| p.ends_with(format!("sidecars/libkeyfinder_cli/build/{exe_name}"))),
+            "build.sh writes the CLI to sidecars/libkeyfinder_cli/build/; got {candidates:?}"
         );
     }
 }

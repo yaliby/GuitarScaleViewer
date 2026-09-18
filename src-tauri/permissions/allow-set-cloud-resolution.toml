@@ -1,0 +1,5 @@
+# Application permission: let the UI push cloud key-resolution results into the engine.
+[[permission]]
+identifier = "allow-set-cloud-resolution"
+description = "Allows the set_cloud_resolution command so the frontend can hand cloud/catalog key results to the detection engine."
+commands.allow = ["set_cloud_resolution"]

@@ -1,31 +1,39 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "guitar-scale-viewer",
+  "productName": "Guitar Scale Viewer",
+  "mainBinaryName": "guitar-scale-viewer",
   "version": "0.1.0",
-  "identifier": "com.tauri.dev",
+  "identifier": "com.yaliby.guitarscaleviewer",
   "build": {
-    "frontendDist": "../build",
-    "devUrl": "http://localhost:5173",
+    "frontendDist": "../dist",
+    "devUrl": "http://127.0.0.1:1420",
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build"
   },
   "app": {
     "windows": [
       {
-        "title": "guitar-scale-viewer",
-        "width": 800,
-        "height": 600,
+        "title": "Guitar Scale Viewer",
+        "width": 1280,
+        "height": 860,
+        "minWidth": 900,
+        "minHeight": 640,
         "resizable": true,
         "fullscreen": false
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: http://asset.localhost; font-src 'self' data:; connect-src 'self' https: ipc: http://ipc.localhost; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
     }
   },
   "bundle": {
     "active": true,
     "targets": "all",
+    "resources": [
+      "sidecars/key_analyzer/key_analyzer.py",
+      "sidecars/libkeyfinder_cli/main.cpp",
+      "sidecars/libkeyfinder_cli/CMakeLists.txt"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

@@ -1,8 +1,10 @@
+import { parseSpotifyStyleKey, type ParsedKey } from './keyParse';
 import {
   catalogProviderLabel,
   lookupKeyFromCatalogs,
   type CatalogProvider,
 } from './catalogKeyLookup';
+import { trace } from './debugLog';
 
 const DEFAULT_API_BASE = 'https://chordsync-api.yali-chordsync.workers.dev';
 const API_BASE_OVERRIDE_KEY = 'gsv_api_base_override';
@@ -80,7 +82,16 @@ export type LookupSongHit = {
 
 export type LookupSongResult =
   | { found: true; song: LookupSongHit }
-  | { found: false; song: null; catalogsTried: boolean };
+  | {
+      found: false;
+      song: null;
+      catalogsTried: boolean;
+      /**
+       * The catalogs were asked but never answered — throttled, timed out or unreachable.
+       * This is not "the song has no key", and the caller must not cache it as one.
+       */
+      incomplete?: boolean;
+    };
 
 export type SuggestionInput = {
   title: string;
@@ -104,7 +115,7 @@ function isCatalogProvider(value: string): value is CatalogProvider {
 function hitFromCatalog(
   title: string,
   artist: string,
-  catalog: NonNullable<Awaited<ReturnType<typeof lookupKeyFromCatalogs>>>,
+  catalog: NonNullable<Awaited<ReturnType<typeof lookupKeyFromCatalogs>>['hit']>,
 ): LookupSongHit {
   return {
     id: `${catalog.provider}:${catalog.remoteId}`,
@@ -128,25 +139,56 @@ async function lookupOwnDatabase(
   url.searchParams.set('title', title);
   url.searchParams.set('artist', artist);
 
+  const started = Date.now();
   try {
+    trace('cloud', 'own_db.send', `Asking verified DB at ${url.origin}`, {
+      url: url.toString(),
+      title,
+      artist,
+    }, 'start');
     const res = await fetch(url.toString(), { method: 'GET', signal });
+    const elapsedMs = Date.now() - started;
     if (!res.ok) {
+      trace('cloud', 'own_db.http_fail', `Worker returned HTTP ${res.status} — not a song miss; falling through to client catalogs`, {
+        status: res.status,
+        elapsedMs,
+        why: 'http_not_ok',
+      }, 'fail');
       return 'network_error';
     }
     const data = (await res.json()) as unknown;
     if (!data || typeof data !== 'object') {
+      trace('cloud', 'own_db.bad_body', 'Worker returned a non-object body — treating as network_error', {
+        elapsedMs,
+        why: 'invalid_json_shape',
+      }, 'fail');
       return 'network_error';
     }
     const found = (data as { found?: unknown }).found;
     const catalogsTried = Boolean((data as { catalogsTried?: unknown }).catalogsTried);
     if (found === false) {
+      trace('cloud', 'own_db.miss', catalogsTried
+        ? 'Worker already walked catalogs and found nothing'
+        : 'Verified DB miss; Worker did not try catalogs (client will)', {
+        catalogsTried,
+        elapsedMs,
+        why: catalogsTried ? 'worker_complete_miss' : 'worker_db_miss',
+      }, 'skip');
       return { found: false, song: null, catalogsTried };
     }
     if (found !== true) {
+      trace('cloud', 'own_db.bad_found', `Worker 'found' field was ${String(found)} — treating as network_error`, {
+        elapsedMs,
+        why: 'invalid_found_field',
+      }, 'fail');
       return 'network_error';
     }
     const song = (data as { song?: unknown }).song;
     if (!song || typeof song !== 'object') {
+      trace('cloud', 'own_db.bad_song', 'Worker said found=true but sent no song object', {
+        elapsedMs,
+        why: 'missing_song',
+      }, 'fail');
       return 'network_error';
     }
     const rawSource = asOptionalString((song as { source?: unknown }).source) ?? asOptionalString((data as { source?: unknown }).source);
@@ -168,11 +210,24 @@ async function lookupOwnDatabase(
         asOptionalString((data as { sourceLabel?: unknown }).sourceLabel) ||
         (source === 'verified_db' ? 'Verified database' : catalogProviderLabel(source)),
     };
+    trace('cloud', 'own_db.hit', `Verified/Worker hit: ${hit.musical_key} ${hit.mode} from ${hit.sourceLabel}`, {
+      source: hit.source,
+      verified: hit.verified,
+      musical_key: hit.musical_key,
+      mode: hit.mode,
+      elapsedMs: Date.now() - started,
+    }, 'ok');
     return { found: true, song: hit };
   } catch (error) {
     if (signal?.aborted) {
+      trace('cloud', 'own_db.aborted', 'Verified DB lookup cancelled', { why: 'caller_aborted' }, 'skip');
       throw error;
     }
+    const message = error instanceof Error ? error.message : String(error);
+    trace('cloud', 'own_db.transport', `Worker fetch failed (${message}) — falling through to client catalogs`, {
+      why: 'fetch_threw',
+      error: message,
+    }, 'fail');
     return 'network_error';
   }
 }
@@ -181,12 +236,32 @@ function asOptionalString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
+/**
+ * Verified rows come straight out of the database, so the key may be hand-entered as "Bb",
+ * "F# minor" or a Spotify-style pitch class. Returns the key spelled the way it is written —
+ * flats stay flat — or null when the stored value cannot be read as a key at all.
+ */
+export function normalizeLookupKey(song: Pick<LookupSongHit, 'musical_key' | 'mode'>): ParsedKey | null {
+  return parseSpotifyStyleKey(song.musical_key, song.mode);
+}
+
 export async function lookupSongKey(input: LookupSongInput, signal?: AbortSignal): Promise<LookupSongResult> {
   const title = input.title.trim();
   const artist = input.artist.trim();
   if (!title || !artist) {
+    trace('cloud', 'lookup.skip', 'Empty title or artist — no request will be sent', {
+      title,
+      artist,
+      why: 'empty_metadata',
+    }, 'skip');
     return { found: false, song: null, catalogsTried: true };
   }
+
+  trace('cloud', 'lookup.start', `Resolving key for "${title}" — ${artist}`, {
+    title,
+    artist,
+    apiBase: currentApiBase(),
+  }, 'start');
 
   const own = await lookupOwnDatabase({ title, artist }, signal);
   if (own !== 'network_error') {
@@ -194,29 +269,65 @@ export async function lookupSongKey(input: LookupSongInput, signal?: AbortSignal
       return own;
     }
     if (own.catalogsTried) {
+      trace('cloud', 'lookup.done', 'Worker already finished the catalog walk — not repeating it on the client', {
+        why: 'worker_catalogs_tried',
+      }, 'skip');
       return own;
     }
+    trace('cloud', 'lookup.fallback', 'Verified DB miss and Worker skipped catalogs — walking client catalogs', {
+      why: 'worker_db_miss_no_catalogs',
+    }, 'decide');
+  } else {
+    trace('cloud', 'lookup.fallback', 'Worker unreachable — walking client catalogs', {
+      why: 'worker_network_error',
+    }, 'decide');
   }
 
   const catalog = await lookupKeyFromCatalogs(title, artist, {
     signal,
     freqblogApiKey: getFreqblogApiKeyForDev(),
     getsongbpmApiKey: getGetSongBpmApiKeyForDev(),
+    onTrace: (event, message, detail) => {
+      const level =
+        event.endsWith('.fail') || event === 'http.exhausted' || event === 'http.transport'
+          ? 'fail'
+          : event.endsWith('.hit') || event === 'http.ok'
+            ? 'ok'
+            : event.endsWith('.skip') || event.endsWith('.miss') || event === 'http.retry'
+              ? 'skip'
+              : event === 'chain.start' || event === 'provider.start' || event === 'http.send'
+                ? 'start'
+                : 'info';
+      trace('catalog', event, message, detail, level);
+    },
   });
-  if (catalog) {
-    return { found: true, song: hitFromCatalog(title, artist, catalog) };
+  if (catalog.hit) {
+    return { found: true, song: hitFromCatalog(title, artist, catalog.hit) };
   }
-  return { found: false, song: null, catalogsTried: true };
+  trace('cloud', 'lookup.done', catalog.incomplete
+    ? 'Client catalogs never answered — caller must not cache this as a miss'
+    : 'Client catalogs answered and none had a key', {
+    incomplete: catalog.incomplete,
+    why: catalog.incomplete ? 'incomplete' : 'complete_miss',
+  }, catalog.incomplete ? 'fail' : 'skip');
+  return { found: false, song: null, catalogsTried: true, incomplete: catalog.incomplete };
 }
 
 export async function submitSongKeySuggestion(input: SuggestionInput): Promise<void> {
   const payload = {
     title: input.title.trim(),
     artist: input.artist.trim(),
-    key: input.key.trim().toUpperCase(),
+    // Same trap as the lookup path: `.toUpperCase()` alone turns "Bb" into "BB".
+    key: parseSpotifyStyleKey(input.key, input.mode)?.key ?? input.key.trim(),
     mode: input.mode,
     user: input.user?.trim() || 'anonymous',
   };
+  trace('cloud', 'suggest.send', `Submitting ${payload.key} ${payload.mode} for "${payload.title}"`, {
+    title: payload.title,
+    artist: payload.artist,
+    key: payload.key,
+    mode: payload.mode,
+  }, 'start');
   const res = await fetch(`${currentApiBase()}/submit-suggestion`, {
     method: 'POST',
     headers: {
@@ -225,6 +336,11 @@ export async function submitSongKeySuggestion(input: SuggestionInput): Promise<v
     body: JSON.stringify(payload),
   });
   if (!res.ok) {
+    trace('cloud', 'suggest.fail', `submit-suggestion failed: HTTP ${res.status}`, {
+      status: res.status,
+      why: 'http_not_ok',
+    }, 'fail');
     throw new Error(`submit-suggestion failed: HTTP ${res.status}`);
   }
+  trace('cloud', 'suggest.ok', 'Suggestion accepted by the Worker', undefined, 'ok');
 }
