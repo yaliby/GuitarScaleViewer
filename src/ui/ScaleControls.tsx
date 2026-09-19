@@ -17,20 +17,20 @@ export type ScaleControlsProps = {
   onFlipRelative: () => void;
 };
 
-/** One labelled control cell. Keeps the legend/field rhythm identical across the whole panel. */
+/** One labelled control cell. Keeps the legend/field rhythm identical across the whole row. */
 function Field({
   label,
   children,
-  className = '',
+  style,
   hint,
 }: {
   label: string;
   children: React.ReactNode;
-  className?: string;
+  style?: React.CSSProperties;
   hint?: string;
 }) {
   return (
-    <label className={`flex min-w-0 flex-col gap-1.5 ${className}`}>
+    <label style={style}>
       <Legend>{label}</Legend>
       {children}
       {hint ? <span className="text-[10px] leading-tight text-led-fault/90">{hint}</span> : null}
@@ -38,7 +38,11 @@ function Field({
   );
 }
 
-/** The tonic, scale, tuning and capo — everything that decides what the neck draws. */
+/**
+ * The tonic, scale, tuning and capo — everything that decides what the neck draws. Opened from the
+ * neck heading like Jam's manual row, but the fields stay milled into the panel: this is the one
+ * place in the Lab where you set the instrument up, and it should still feel like one.
+ */
 export function ScaleControls({
   rootInput,
   onRootInputChange,
@@ -54,10 +58,12 @@ export function ScaleControls({
 }: ScaleControlsProps) {
   const hasRelative = scaleType === 'major' || scaleType === 'minor';
   return (
-    <div className="flex w-full min-w-0 flex-wrap items-start gap-x-3 gap-y-3">
+    <div className="lab-setup">
+      <span className="lab-setup-caption">Make it yours</span>
+
       <Field
         label="Root"
-        className="w-[5.5rem] shrink-0"
+        style={{ width: '5.5rem', flexShrink: 0 }}
         hint={rootInvalid ? 'A–G with # or b' : undefined}
       >
         <GearInput
@@ -72,7 +78,7 @@ export function ScaleControls({
         />
       </Field>
 
-      <Field label="Scale" className="min-w-[11rem] flex-1 basis-48">
+      <Field label="Scale" style={{ flex: '1 1 13rem', minWidth: '11rem' }}>
         <GearSelect value={scaleType} onChange={(e) => onScaleTypeChange(e.target.value as ScaleType)}>
           {SCALE_TYPES_ORDERED.map((t) => (
             <option key={t} value={t}>
@@ -82,7 +88,7 @@ export function ScaleControls({
         </GearSelect>
       </Field>
 
-      <Field label="Tuning" className="min-w-[11rem] flex-1 basis-48">
+      <Field label="Tuning" style={{ flex: '1 1 13rem', minWidth: '11rem' }}>
         <GearSelect value={tuningId} onChange={(e) => onTuningChange(e.target.value)}>
           {TUNING_PRESETS.map((t) => (
             <option key={t.id} value={t.id}>
@@ -92,7 +98,7 @@ export function ScaleControls({
         </GearSelect>
       </Field>
 
-      <Field label="Capo" className="w-[6.5rem] shrink-0">
+      <Field label="Capo" style={{ width: '7rem', flexShrink: 0 }}>
         <GearSelect value={String(capo)} onChange={(e) => onCapoChange(Number(e.target.value))}>
           <option value="0">None</option>
           {Array.from({ length: 12 }, (_, i) => i + 1).map((f) => (
@@ -103,27 +109,30 @@ export function ScaleControls({
         </GearSelect>
       </Field>
 
-      <div className="flex flex-col gap-1.5 self-start">
-        <Legend className="opacity-0" aria-hidden="true">
-          .
-        </Legend>
-        <div className="flex items-center gap-2">
-          <GearButton
-            onClick={onFlipRelative}
-            disabled={!hasRelative}
-            title={
-              hasRelative
-                ? 'Switch to the relative major/minor: same notes, root moved a third'
-                : 'Only major and minor have a relative key'
-            }
-          >
-            Relative
-          </GearButton>
-          <GearButton onClick={onRestoreDefault} title="Back to the engine default key, standard tuning, no capo">
-            Restore
-          </GearButton>
-        </div>
+      <div className="lab-setup-actions">
+        <GearButton
+          onClick={onFlipRelative}
+          disabled={!hasRelative}
+          title={
+            hasRelative
+              ? 'Switch to the relative major/minor: same notes, root moved a third'
+              : 'Only major and minor have a relative key'
+          }
+        >
+          Relative
+        </GearButton>
+        <GearButton
+          onClick={onRestoreDefault}
+          title="Back to the engine default key, standard tuning, no capo"
+        >
+          Restore
+        </GearButton>
       </div>
+
+      <small className="lab-setup-hint">
+        Typing a root here is a manual choice — the neck stops following the detected key until they agree
+        again.
+      </small>
     </div>
   );
 }

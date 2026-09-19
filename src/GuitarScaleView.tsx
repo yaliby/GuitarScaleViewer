@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
+import { Layers3, Radio, SlidersHorizontal, Waves } from 'lucide-react';
 import type { ScaleContext, ScaleType } from './scaleDataProvider';
 import { ChordLibrarySection } from './ChordLibrarySection';
 import type { ScaleChordWithVoicings } from './chords/chordTypes';
@@ -8,16 +10,18 @@ import { useMediaSession } from './hooks/useMediaSession';
 import { useDetectedKey, type DetectedKeyState } from './hooks/useDetectedKey';
 import { useCloudKeyResolution } from './hooks/useCloudKeyResolution';
 import { autoApplyConfidencePct as computeApplyConfidencePct } from './services/applyConfidence';
+import { resolveShownKey } from './services/resolveShownKey';
 import { trace } from './services/debugLog';
 import { Fretboard } from './fretboard/Fretboard';
 import type { FretboardViewMode } from './fretboard/geometry';
-import { Led, Panel, Screw, Seam } from './ui/gear';
-import { keySourceLabel } from './ui/statusLabels';
+import { Led } from './ui/gear';
+import { deckStatusLabel, detectionLed, keySourceLabel } from './ui/statusLabels';
 import { KeyReadout } from './ui/KeyReadout';
 import { SourceStrip } from './ui/SourceStrip';
 import { ScaleControls } from './ui/ScaleControls';
 import { ViewModeSwitch } from './ui/ViewModeSwitch';
 import { DevDrawer } from './ui/DevDrawer';
+import './ui/lab-jam.css';
 
 /** Open + 24 fretted positions (extend via props later). */
 const DEFAULT_NUM_FRETS = 24;
@@ -38,8 +42,9 @@ type Props = {
 };
 
 /**
- * The chassis. Owns app state and lays out three bays: the control face, the neck, and the chord
- * bank. Rendering the neck itself belongs to `Fretboard`; diagnostics belong to `DevDrawer`.
+ * The chassis, wearing the Live Jam dress. The layout language is Jam's — an editorial heading, a
+ * deck row, toggle cards, one framed bay — but the materials, the controls and the neck itself are
+ * the Lab's, and the neck still gets the entire width of the window.
  */
 export default function GuitarScaleView({
   scale,
@@ -65,6 +70,10 @@ export default function GuitarScaleView({
   const [devMockTitle, setDevMockTitle] = useState('Numb');
   const [devMockArtist, setDevMockArtist] = useState('Linkin Park');
   const [devOpen, setDevOpen] = useState(false);
+  /* Chrome state: what the setup row, the chord bank and the focus switch are doing. */
+  const [setupOpen, setSetupOpen] = useState(true);
+  const [bankOpen, setBankOpen] = useState(true);
+  const [focus, setFocus] = useState(false);
   const lastAutoAppliedSignatureRef = useRef<string | null>(null);
   const lastAutoDecisionRef = useRef<string>('');
 
@@ -84,9 +93,18 @@ export default function GuitarScaleView({
   );
   const cloudResolution = useCloudKeyResolution(cloudMediaInput, detectedKey);
   const effectiveDetectedKey = lockDetected && lockedDetectedSnapshot ? lockedDetectedSnapshot : detectedKey;
-  const activePrimaryKey = cloudResolution.cloudHit?.key ?? effectiveDetectedKey.primaryKey;
-  const activePrimaryScale = cloudResolution.cloudHit?.mode ?? effectiveDetectedKey.primaryScale;
-  const activeDisplayName = cloudResolution.cloudHit?.displayName ?? effectiveDetectedKey.displayName;
+  /* See services/resolveShownKey: an unverified catalog key does not outrank a confident local one. */
+  const shownKey = useMemo(
+    () => resolveShownKey({ cloudHit: cloudResolution.cloudHit, detected: effectiveDetectedKey }),
+    [cloudResolution.cloudHit, effectiveDetectedKey],
+  );
+  const activePrimaryKey = shownKey.key;
+  const activePrimaryScale = shownKey.scale;
+  const activeDisplayName = shownKey.displayName;
+  /* Only the hit that actually reached the screen may label or price the shown key. */
+  const shownCloudHit = shownKey.source === 'verified' || shownKey.source === 'catalog'
+    ? cloudResolution.cloudHit
+    : null;
 
   useEffect(() => {
     setSelectedChord(null);
@@ -128,10 +146,10 @@ export default function GuitarScaleView({
   const autoApplyConfidencePctNow = useMemo(
     () =>
       computeApplyConfidencePct({
-        cloudHit: cloudResolution.cloudHit,
+        cloudHit: shownCloudHit,
         detected: effectiveDetectedKey,
       }),
-    [cloudResolution.cloudHit, effectiveDetectedKey],
+    [shownCloudHit, effectiveDetectedKey],
   );
 
   const handleApplyDetected = () => {
@@ -224,85 +242,210 @@ export default function GuitarScaleView({
     onApplyDetectedKey,
   ]);
 
+  const desktop = mediaSession.playbackStatus !== 'media_session_unavailable';
+  const playing = mediaSession.playbackStatus === 'playing';
+  const det = detectionLed(effectiveDetectedKey.state);
+  const status = deckStatusLabel({
+    playbackStatus: mediaSession.playbackStatus,
+    detectionState: effectiveDetectedKey.state,
+    resolutionState: cloudResolution.resolutionState,
+    hasCloudHit: !!shownCloudHit,
+    showingProposedKey,
+    locked: lockDetected,
+  });
+
   return (
-    <div className="relative flex min-h-[100dvh] flex-1 flex-col bg-gear-void">
-      {/* Rack strip: brand plate, power lamp, engineering latch. */}
-      <header className="gear-brushed relative z-10 flex shrink-0 items-center justify-between gap-3 px-4 py-2">
-        <Screw className="left-2 top-1/2 -translate-y-1/2" />
-        <Screw className="right-2 top-1/2 -translate-y-1/2" />
-        <div className="flex min-w-0 items-center gap-2.5 pl-4">
-          <Led tone="live" size={6} label="Power" />
-          <span className="truncate text-[11px] font-bold uppercase tracking-[0.28em] text-gear-legend">
-            Fretboard Lab
+    <div className={`lab-screen ${focus ? 'lab-focused' : ''}`}>
+      <header className="lab-heading">
+        <div>
+          <span className="lab-kicker">
+            <span className="lab-index">01</span>
+            <span>Fretboard Lab</span>
+            <span>· One key, the whole neck.</span>
           </span>
+          <h1>
+            Every note, <em>in its place.</em>
+          </h1>
         </div>
-        <button
-          type="button"
-          onClick={() => setDevOpen(true)}
-          className="legend mr-5 flex shrink-0 items-center gap-1.5 rounded-[3px] bg-[linear-gradient(180deg,#2a2a31_0%,#212127_48%,#171a1c_100%)] px-2.5 py-[5px] shadow-raised transition-[filter,transform] hover:brightness-125 active:translate-y-px focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-gear-accent/70"
-          aria-haspopup="dialog"
-          aria-expanded={devOpen}
-          title="Diagnostics and lab switches"
-        >
-          <Led tone={devOpen ? 'data' : 'off'} size={5} />
-          Eng
-        </button>
+        <div className="lab-heading-actions">
+          <span className={`lab-status ${playing ? 'on' : ''}`}>
+            <Led tone={det.tone} pulse={det.pulse} />
+            {status}
+          </span>
+          <button
+            type="button"
+            className="lab-eng"
+            onClick={() => setDevOpen(true)}
+            aria-haspopup="dialog"
+            aria-expanded={devOpen}
+            title="Diagnostics and lab switches"
+          >
+            <Led tone={devOpen ? 'data' : 'off'} size={5} />
+            Eng
+          </button>
+        </div>
       </header>
-      <Seam />
 
-      {/* Control face. */}
-      <div className="shrink-0 px-3 pt-3 sm:px-5 lg:px-8">
-        <Panel className="p-3 sm:p-4">
-          <div className="grid min-w-0 gap-3 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1fr)]">
-            <KeyReadout
-              root={scale.root}
-              scaleType={scaleType}
-              notes={notes}
-              sourceLabel={keySourceLabel({
-                resolutionState: cloudResolution.resolutionState,
-                hasCloudHit: !!cloudResolution.cloudHit,
-                showingProposedKey,
-              })}
-            />
-            <SourceStrip
-              mediaSession={mediaSession}
-              detected={effectiveDetectedKey}
-              resolutionState={cloudResolution.resolutionState}
-              hasCloudHit={!!cloudResolution.cloudHit}
-              proposedKeyName={activeDisplayName}
-              confidence={effectiveDetectedKey.confidence}
-              canApply={canApplyDetected}
-              onApply={handleApplyDetected}
-              locked={lockDetected}
-              onToggleLock={toggleLockDetected}
-              onResetDetection={() => {
-                void resetDetection();
-              }}
-            />
+      {/* Deck: the record, what the machine hears, and the key now on the neck. */}
+      <div className="lab-deck">
+        <div className={`lab-record ${playing ? 'spinning' : ''}`} aria-hidden="true">
+          <div className="lab-record-orbit" />
+          <div className="lab-vinyl">
+            <div className="lab-vinyl-label">
+              <Waves size={30} />
+              <span>
+                FRETBOARD
+                <br />
+                LAB
+              </span>
+              <i />
+            </div>
           </div>
+          <span className="lab-record-caption">Six strings. Twenty-four frets.</span>
+        </div>
 
-          <Seam className="my-3.5" />
+        <SourceStrip
+          mediaSession={mediaSession}
+          detected={effectiveDetectedKey}
+          resolutionState={cloudResolution.resolutionState}
+          hasCloudHit={!!shownCloudHit}
+          proposedKeyName={activeDisplayName}
+          confidence={effectiveDetectedKey.confidence}
+          canApply={canApplyDetected}
+          onApply={handleApplyDetected}
+          locked={lockDetected}
+          onToggleLock={toggleLockDetected}
+          onResetDetection={() => {
+            void resetDetection();
+          }}
+        />
 
-          <ScaleControls
-            rootInput={rootInput}
-            onRootInputChange={onRootInputChange}
-            rootInvalid={rootInvalid}
-            scaleType={scaleType}
-            onScaleTypeChange={onScaleTypeChange}
-            tuningId={tuningId}
-            onTuningChange={setTuningId}
-            capo={capo}
-            onCapoChange={setCapoFret}
-            onRestoreDefault={handleRestoreDefault}
-            onFlipRelative={onFlipRelative}
-          />
-        </Panel>
+        <KeyReadout
+          root={scale.root}
+          scaleType={scaleType}
+          notes={notes}
+          sourceLabel={keySourceLabel({
+            resolutionState: cloudResolution.resolutionState,
+            hasCloudHit: !!shownCloudHit,
+            showingProposedKey,
+          })}
+        />
       </div>
 
+      <div className="lab-control-strip">
+        <button
+          type="button"
+          className={`lab-control ${autoApplyEnabled ? 'selected' : ''}`}
+          aria-pressed={autoApplyEnabled}
+          disabled={!desktop}
+          onClick={() => setAutoApplyEnabled(!autoApplyEnabled)}
+        >
+          <Radio size={19} />
+          <span>
+            <strong>Follow the song</strong>
+            <small>
+              {!desktop
+                ? 'Needs the desktop app'
+                : autoApplyEnabled
+                  ? `Applies on its own from ${autoApplyConfidencePct}%`
+                  : 'Apply detected keys by hand'}
+            </small>
+          </span>
+          <i className="lab-switch" />
+        </button>
+        <button
+          type="button"
+          className={`lab-control ${bankOpen ? 'selected' : ''}`}
+          aria-pressed={bankOpen}
+          aria-controls="lab-chord-bank"
+          onClick={() => {
+            setBankOpen(!bankOpen);
+            setSelectedChord(null);
+          }}
+        >
+          <Layers3 size={19} />
+          <span>
+            <strong>Chord bank</strong>
+            <small>Shapes that live in this key</small>
+          </span>
+          <i className="lab-switch" />
+        </button>
+        <button
+          type="button"
+          className={`lab-control ${focus ? 'selected' : ''}`}
+          aria-pressed={focus}
+          onClick={() => setFocus(!focus)}
+        >
+          <Waves size={19} />
+          <span>
+            <strong>Neck focus</strong>
+            <small>Clear the deck off the bench</small>
+          </span>
+          <i className="lab-switch" />
+        </button>
+      </div>
+
+      {!desktop && (
+        <p className="lab-notice">
+          Listening runs in the desktop app: it reads the OS media session and analyses what is playing.
+          Everything else — root, scale, tuning, capo and the chord bank — works here.
+        </p>
+      )}
+
       {/* Neck bay: the one place on the chassis with nothing competing for attention. */}
-      <div className="flex min-h-0 w-full flex-1 flex-col justify-center px-3 pt-5 sm:px-5 lg:px-8">
-        {/* Cancel only the right padding so the neck can touch the screen edge without rescaling. */}
-        <div className="-mr-3 flex min-h-[14rem] flex-1 items-center sm:-mr-5 lg:-mr-8">
+      <div className="lab-map">
+        <div className="lab-map-heading">
+          <div>
+            <span className="lab-module-label">The whole neck, connected</span>
+            <h2>
+              {title}
+              <span>
+                {numFrets} frets · {tuning.label}
+              </span>
+            </h2>
+          </div>
+          <div className="lab-map-actions">
+            <ViewModeSwitch value={viewMode} onChange={setViewMode} />
+            <button
+              type="button"
+              className={`lab-icon-button ${setupOpen ? 'is-active' : ''}`}
+              aria-label="Root, scale, tuning and capo"
+              aria-expanded={setupOpen}
+              aria-controls="lab-setup"
+              onClick={() => setSetupOpen(!setupOpen)}
+            >
+              <SlidersHorizontal size={17} />
+            </button>
+          </div>
+        </div>
+
+        <AnimatePresence initial={false}>
+          {setupOpen && (
+            <motion.div
+              id="lab-setup"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.15 }}
+            >
+              <ScaleControls
+                rootInput={rootInput}
+                onRootInputChange={onRootInputChange}
+                rootInvalid={rootInvalid}
+                scaleType={scaleType}
+                onScaleTypeChange={onScaleTypeChange}
+                tuningId={tuningId}
+                onTuningChange={setTuningId}
+                capo={capo}
+                onCapoChange={setCapoFret}
+                onRestoreDefault={handleRestoreDefault}
+                onFlipRelative={onFlipRelative}
+              />
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <div className="lab-neck">
           <Fretboard
             root={scale.root}
             scaleType={scaleType}
@@ -316,26 +459,56 @@ export default function GuitarScaleView({
             title={title}
           />
         </div>
+
+        <div className="lab-map-footer">
+          <div className="lab-legend">
+            <span>
+              <i className="dot-root" />
+              Root / home
+            </span>
+            <span>
+              <i className="dot-scale" />
+              {selectedChord ? `${selectedChord.chordName} chord tones` : 'Scale tones'}
+            </span>
+          </div>
+          <span>
+            {capo ? `Capo ${capo} · frets counted from the nut · ` : ''}Amber rings mark the root, everywhere
+            it falls
+          </span>
+        </div>
       </div>
 
-      {/* Display bank, directly under the thing it drives. */}
-      <div className="shrink-0 px-3 pt-4 sm:px-5 lg:px-8">
-        <Panel className="px-3 py-2.5 sm:px-4">
-          <ViewModeSwitch value={viewMode} onChange={setViewMode} />
-        </Panel>
-      </div>
-
-      <ChordLibrarySection
-        root={scale.root}
-        scaleType={scaleType}
-        tuningId={tuningId}
-        openStringPcs={tuning.openStringPcs}
-        tuningLabel={tuning.label}
-        stringLabels={tuning.stringLabels}
-        capo={capo}
-        selectedChord={selectedChord}
-        onChordSelect={setSelectedChord}
-      />
+      <AnimatePresence initial={false}>
+        {bankOpen && (
+          <motion.section
+            id="lab-chord-bank"
+            className="lab-bank"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+          >
+            <div className="lab-bank-heading">
+              <div>
+                <span className="lab-module-label">A palette to play with</span>
+                <h2>Chords that live in this key.</h2>
+                <p>One module per degree of the scale, with every shape that fits your tuning and capo.</p>
+              </div>
+              <Layers3 size={27} />
+            </div>
+            <ChordLibrarySection
+              root={scale.root}
+              scaleType={scaleType}
+              tuningId={tuningId}
+              openStringPcs={tuning.openStringPcs}
+              tuningLabel={tuning.label}
+              stringLabels={tuning.stringLabels}
+              capo={capo}
+              selectedChord={selectedChord}
+              onChordSelect={setSelectedChord}
+            />
+          </motion.section>
+        )}
+      </AnimatePresence>
 
       <DevDrawer
         open={devOpen}

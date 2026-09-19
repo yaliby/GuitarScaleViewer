@@ -3061,19 +3061,27 @@ html {
   overscroll-behavior: none;
 }
 
+/* Sits above the Lab screen, so it wears the same pill as the status chip in its heading. */
 .classic-shell-back {
   align-self: flex-start;
-  margin: 0.75rem 0 0 0.75rem;
-  padding: 0.35rem 0.75rem;
-  border-radius: 0.375rem;
-  font-size: 0.8125rem;
+  margin: 14px 0 0 26px;
+  padding: 9px 14px;
+  border-radius: 30px;
+  border: 1px solid #2d2d35;
+  background: linear-gradient(180deg, #1c1c21, #141418);
+  font-size: 11px;
   color: var(--gear-legend);
-  background: var(--gear-panel);
-  box-shadow: var(--bevel-raised);
 }
 
 .classic-shell-back:hover {
   color: var(--gear-text);
+  border-color: #3d3d47;
+}
+
+@media (max-width: 900px) {
+  .classic-shell-back {
+    margin-left: 14px;
+  }
 }
 
 @layer components {

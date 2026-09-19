@@ -1,5 +1,5 @@
 import type { FretboardViewMode } from '../fretboard/geometry';
-import { GearToggle, Legend } from './gear';
+import { Led } from './gear';
 
 const MODES: ReadonlyArray<{ mode: FretboardViewMode; label: string }> = [
   { mode: 'scale-all', label: 'All' },
@@ -10,8 +10,8 @@ const MODES: ReadonlyArray<{ mode: FretboardViewMode; label: string }> = [
 ];
 
 /**
- * The neck's display mode, as a bank of latching toggles. Sits directly under the neck because
- * that is the only thing it affects.
+ * The neck's display mode, as a segmented bar in the neck's own heading — right beside the only
+ * thing it affects. The engaged segment keeps its lamp, so the bank still reads as a switch bank.
  */
 export function ViewModeSwitch({
   value,
@@ -21,15 +21,19 @@ export function ViewModeSwitch({
   onChange: (mode: FretboardViewMode) => void;
 }) {
   return (
-    <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2" role="group" aria-label="Fretboard display mode">
-      <Legend className="shrink-0">Display</Legend>
-      <div className="flex min-w-0 flex-wrap gap-1.5">
-        {MODES.map(({ mode, label }) => (
-          <GearToggle key={mode} engaged={value === mode} onClick={() => onChange(mode)}>
-            {label}
-          </GearToggle>
-        ))}
-      </div>
+    <div className="lab-segmented" role="group" aria-label="Fretboard display mode">
+      {MODES.map(({ mode, label }) => (
+        <button
+          key={mode}
+          type="button"
+          className={value === mode ? 'selected' : ''}
+          aria-pressed={value === mode}
+          onClick={() => onChange(mode)}
+        >
+          <Led tone={value === mode ? 'hold' : 'off'} size={5} />
+          {label}
+        </button>
+      ))}
     </div>
   );
 }

@@ -374,19 +374,29 @@ export default function App() {
   const cloudRoot = cloud.cloudHit
     ? tryNormalizeRoot(cloud.cloudHit.key)
     : null;
-  const candidate: DetectionCandidate | null = useMemo(
-    () =>
-      cloud.cloudHit && cloudRoot
-        ? { root: cloudRoot, scaleType: cloud.cloudHit.mode, automatic: true }
-        : localRoot && localScale
-          ? {
-              root: localRoot,
-              scaleType: localScale,
-              automatic: canAutoApply(detectedKey),
-            }
-          : null,
-    [cloud.cloudHit, cloudRoot, detectedKey, localRoot, localScale],
-  );
+  /*
+   * An unverified catalog row is an estimate too, and it carries the relative-major bias the
+   * local engine resolves with real evidence — so it proposes a key, it does not overrule one.
+   * See services/resolveShownKey.
+   */
+  const candidate: DetectionCandidate | null = useMemo(() => {
+    const localConfident = !!(localRoot && localScale && canAutoApply(detectedKey));
+    if (cloud.cloudHit && cloudRoot && (cloud.cloudHit.verified || !localConfident)) {
+      return {
+        root: cloudRoot,
+        scaleType: cloud.cloudHit.mode,
+        automatic: cloud.cloudHit.verified,
+      };
+    }
+    if (localRoot && localScale) {
+      return {
+        root: localRoot,
+        scaleType: localScale,
+        automatic: canAutoApply(detectedKey),
+      };
+    }
+    return null;
+  }, [cloud.cloudHit, cloudRoot, detectedKey, localRoot, localScale]);
   const applyCandidate = useCallback(() => {
     if (!candidate || locked) return;
     if (

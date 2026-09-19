@@ -53,6 +53,23 @@ export function resolutionStateLabel(state: string): string {
   return labels[state] ?? state;
 }
 
+/** `m:ss` off the media-session clock; an em dash when the player reports no time. */
+export function clockLabel(ms: number | null): string {
+  if (ms === null || !Number.isFinite(ms)) {
+    return '—';
+  }
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+}
+
+/** How far into the track the player is, 0–100, or null when there is nothing to measure against. */
+export function playbackProgressPct(positionMs: number | null, durationMs: number | null): number | null {
+  if (positionMs === null || durationMs === null || !(durationMs > 0)) {
+    return null;
+  }
+  return Math.min(100, Math.max(0, (positionMs / durationMs) * 100));
+}
+
 export function abLine(label: string, result: DetectedKeyAbState['current']): string {
   if (result.error) {
     return `${label}: error (${result.error})`;
@@ -162,6 +179,55 @@ export function resolutionLed(state: string): { tone: LedTone; pulse: boolean } 
       return { tone: 'off', pulse: false };
     default:
       return { tone: 'hold', pulse: false };
+  }
+}
+
+/**
+ * One line for the heading pill: what the pipeline is doing right now, phrased for a player rather
+ * than for the log. Ordered by what overrides what — a held snapshot beats everything, a key the
+ * neck already shows beats a lookup still in flight.
+ */
+export function deckStatusLabel({
+  playbackStatus,
+  detectionState,
+  resolutionState,
+  hasCloudHit,
+  showingProposedKey,
+  locked,
+}: {
+  playbackStatus: string;
+  detectionState: string;
+  resolutionState: string;
+  hasCloudHit: boolean;
+  showingProposedKey: boolean;
+  locked: boolean;
+}): string {
+  if (locked) {
+    return 'Detection held';
+  }
+  if (playbackStatus === 'media_session_unavailable') {
+    return 'Manual key';
+  }
+  if (showingProposedKey) {
+    return hasCloudHit ? 'Following the library' : 'Following the song';
+  }
+  if (resolutionState === 'cloud_lookup') {
+    return 'Checking the library';
+  }
+  switch (detectionState) {
+    case 'likely_key':
+      return 'Key ready to apply';
+    case 'ambiguous':
+      return 'Comparing possible keys';
+    case 'listening':
+    case 'warming_up':
+      return 'Listening for harmony';
+    case 'paused_hold':
+      return 'Holding the last key';
+    case 'unavailable':
+      return 'Listening unavailable';
+    default:
+      return 'Manual key';
   }
 }
 
