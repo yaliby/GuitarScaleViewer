@@ -40,6 +40,10 @@ pub struct AnalysisOutput {
     pub windows: Vec<WindowAnalysisResult>,
     pub backend_used: String,
     pub fallback_reason: Option<String>,
+    /// The twelve pitch classes of this pass, summed over every octave. `None` from any backend
+    /// that does not report one. `key_engine::tonic_is_supported` reads it to decide whether the
+    /// root on the neck is backed by evidence or is one end of a coin flip.
+    pub chroma: Option<Vec<f32>>,
 }
 
 #[derive(Debug)]
@@ -102,7 +106,9 @@ impl Drop for TempWav {
     fn drop(&mut self) { let _ = std::fs::remove_file(&self.0); }
 }
 
-fn hide_console(command: &mut Command) {
+/// Stops the sidecar flashing a console window on Windows. A no-op everywhere else, which is why
+/// the parameter is unused off-Windows rather than the signature being conditional.
+fn hide_console(#[cfg_attr(not(windows), allow(unused_variables))] command: &mut Command) {
     #[cfg(windows)] {
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x08000000); // CREATE_NO_WINDOW
@@ -152,6 +158,19 @@ struct LibKeyFinderResponse {
     backend_used: Option<String>,
     key: String,
     scale: String,
+    /// How well the chroma fits the key the CLI named. Absent on an older CLI build, in which
+    /// case the window keeps the legacy constant rather than reporting a fabricated zero.
+    #[serde(default)]
+    strength: Option<f32>,
+    /// The twelve pitch classes over every octave. `key_engine::tonic_is_supported` reads it.
+    ///
+    /// The CLI also emits `bassChroma` and `bassSegments`, and this struct deliberately does not
+    /// carry them: both were measured against the corpus as tonic discriminators and neither
+    /// beat a coin flip (see `docs/KEY_ACCURACY_BASELINE.md`). They stay in the CLI output as
+    /// diagnostics for the next attempt; serde drops them here rather than this file implying
+    /// they feed a decision.
+    #[serde(default)]
+    chroma: Option<Vec<f32>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -368,6 +387,9 @@ impl SidecarKeyDetector {
                 .backend_used
                 .unwrap_or_else(|| worker.backend.clone()),
             fallback_reason: parsed.fallback_reason,
+            // The python sidecar reports per-key candidate scores instead of a chroma, and the
+            // consensus already uses those; it does not need the tonic-evidence test.
+            chroma: None,
         })
     }
 
@@ -674,17 +696,26 @@ impl KeyDetector for LibKeyFinderDetector {
                 windows: Vec::new(),
                 backend_used: backend,
                 fallback_reason: Some("libkeyfinder_unknown_or_silence".to_string()),
+                chroma: None,
             });
         }
 
         let display = format!("{} {}", key, scale);
+        // The CLI now measures how well the chroma fits the key it named. Older builds do not,
+        // and for those the legacy constant is kept rather than inventing a zero — a zero would
+        // read as "no tonal fit at all" and trip the engine's weak-fit gate on every window.
+        let strength = parsed.strength.filter(|s| s.is_finite()).unwrap_or(0.90);
         Ok(AnalysisOutput {
             windows: vec![WindowAnalysisResult {
                 profile_type: "libkeyfinder".to_string(),
                 key,
                 scale,
                 display_name: display,
-                strength: 0.90,
+                strength,
+                // Still a constant: the CLI reports one verdict, not a ranking, so there is no
+                // measured runner-up to take a margin against. What used to be faked here — the
+                // question of whether a rival reading is in play — is now answered from the
+                // chroma by `key_engine::tonic_is_supported`.
                 first_to_second_relative_strength: Some(0.25),
                 candidates: None,
                 tuning_cents: None,
@@ -693,6 +724,9 @@ impl KeyDetector for LibKeyFinderDetector {
             }],
             backend_used: backend,
             fallback_reason: None,
+            chroma: parsed
+                .chroma
+                .filter(|c| c.len() == 12 && c.iter().all(|v| v.is_finite())),
         })
     }
 
@@ -733,11 +767,23 @@ fn write_temp_wav_f32_mono(
 mod tests {
     use super::*;
 
+    /// `python` is not a command on a stock Linux/macOS box — only `python3` is — and `py` is
+    /// the Windows launcher. Hardcoding `python` made these tests fail with a spawn error that
+    /// reads like a broken detector instead of a missing interpreter.
     fn python() -> String {
-        std::env::var("KEY_ANALYZER_PYTHON").unwrap_or_else(|_| "python".into())
+        std::env::var("KEY_ANALYZER_PYTHON")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| if cfg!(windows) { "py".into() } else { "python3".into() })
     }
 
+    /// Needs numpy (or essentia) installed for the python sidecar to report a backend at all.
+    /// `#[ignore]`d rather than left failing: a box without numpy is a supported configuration —
+    /// the shipped default backend is libkeyfinder — and a permanently red suite teaches you to
+    /// stop reading the output. CI runs it via `cargo test -- --ignored`.
     #[test]
+    #[ignore = "requires the python analyzer stack (numpy); run with --ignored"]
     fn numpy_worker_is_healthy_and_can_analyze_silence() {
         let detector = SidecarKeyDetector::from_python_script(&python(),
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("sidecars/key_analyzer/key_analyzer.py"));

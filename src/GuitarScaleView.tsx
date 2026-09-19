@@ -1,21 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Layers3, Menu, Radio, SlidersHorizontal, Waves, X } from 'lucide-react';
+import { Layers3, Menu, SlidersHorizontal, Waves, X } from 'lucide-react';
 import type { ScaleContext, ScaleType } from './scaleDataProvider';
 import { ChordLibrarySection } from './ChordLibrarySection';
 import type { ScaleChordWithVoicings } from './chords/chordTypes';
 import { buildScaleNotes, pitchClassForNoteLabel } from './scaleSpell';
 import { TUNING_PRESETS } from './tunings';
 import { useMediaSession } from './hooks/useMediaSession';
-import { useDetectedKey, type DetectedKeyState } from './hooks/useDetectedKey';
+import { useDetectedKey } from './hooks/useDetectedKey';
 import { useCloudKeyResolution } from './hooks/useCloudKeyResolution';
-import { autoApplyConfidencePct as computeApplyConfidencePct } from './services/applyConfidence';
-import { resolveShownKey } from './services/resolveShownKey';
+import { fuseKey, shouldRevise, type FusedKey } from './services/keyFusion';
 import { trace } from './services/debugLog';
 import { Fretboard } from './fretboard/Fretboard';
 import type { FretboardViewMode } from './fretboard/geometry';
 import { Led } from './ui/gear';
-import { deckStatusLabel, detectionLed, keySourceLabel } from './ui/statusLabels';
+import { keySourceLabel } from './ui/statusLabels';
 import { KeyReadout } from './ui/KeyReadout';
 import { SourceStrip } from './ui/SourceStrip';
 import { ScaleControls } from './ui/ScaleControls';
@@ -74,23 +73,24 @@ export default function GuitarScaleView({
 }: Props) {
   const [viewMode, setViewMode] = useState<FretboardViewMode>('scale-all');
   const [selectedChord, setSelectedChord] = useState<ScaleChordWithVoicings | null>(null);
+  /* Lock is the one control that acts on the pipeline, and it only ever *stops* it: the neck
+     follows the song unasked, and a player who wants it to stay put says so. Nothing has to be
+     pressed to get a key. */
   const [lockDetected, setLockDetected] = useState(false);
-  const [lockedDetectedSnapshot, setLockedDetectedSnapshot] = useState<DetectedKeyState | null>(null);
-  const [autoApplyEnabled, setAutoApplyEnabled] = useState(false);
-  const [autoApplyConfidencePct, setAutoApplyConfidencePct] = useState(85);
   const [devMockEnabled, setDevMockEnabled] = useState(false);
   const [devMockTitle, setDevMockTitle] = useState('Numb');
   const [devMockArtist, setDevMockArtist] = useState('Linkin Park');
   const [devOpen, setDevOpen] = useState(false);
-  /* Chrome state: what the setup row, the chord bank and the focus switch are doing. */
+  /* Chrome state: whether the setup row is open. The chord bank is always on now. */
   const [setupOpen, setSetupOpen] = useState(true);
-  const [bankOpen, setBankOpen] = useState(true);
-  const [focus, setFocus] = useState(false);
-  const lastAutoAppliedSignatureRef = useRef<string | null>(null);
+  /* The key the neck is currently drawing, and the evidence behind it. Held in state rather
+     than derived, because the revision policy compares the next reading against it. */
+  const [neckKey, setNeckKey] = useState<FusedKey | null>(null);
   const lastAutoDecisionRef = useRef<string>('');
+  const prevLockRef = useRef(lockDetected);
 
   const mediaSession = useMediaSession();
-  const { detectedKey, detectedKeyAb, resetDetection } = useDetectedKey();
+  const { detectedKey, detectedKeyAb } = useDetectedKey();
   const cloudMediaInput = useMemo(
     () =>
       devMockEnabled
@@ -104,19 +104,27 @@ export default function GuitarScaleView({
     [devMockArtist, devMockEnabled, devMockTitle, mediaSession],
   );
   const cloudResolution = useCloudKeyResolution(cloudMediaInput, detectedKey);
-  const effectiveDetectedKey = lockDetected && lockedDetectedSnapshot ? lockedDetectedSnapshot : detectedKey;
-  /* See services/resolveShownKey: an unverified catalog key does not outrank a confident local one. */
-  const shownKey = useMemo(
-    () => resolveShownKey({ cloudHit: cloudResolution.cloudHit, detected: effectiveDetectedKey }),
-    [cloudResolution.cloudHit, effectiveDetectedKey],
+
+  /* Library lookup is the bundled dictionary. A miss leaves the local engine as the remaining leg. */
+  const cloudHit = cloudResolution.cloudHit;
+  const verifiedCandidate = useMemo(
+    () => (cloudHit?.verified ? { key: cloudHit.key, mode: cloudHit.mode, displayName: cloudHit.displayName } : null),
+    [cloudHit],
   );
-  const activePrimaryKey = shownKey.key;
-  const activePrimaryScale = shownKey.scale;
-  const activeDisplayName = shownKey.displayName;
-  /* Only the hit that actually reached the screen may label or price the shown key. */
-  const shownCloudHit = shownKey.source === 'verified' || shownKey.source === 'catalog'
-    ? cloudResolution.cloudHit
-    : null;
+
+  /* See services/keyFusion. There is always an answer here — the only question is how sure. */
+  const fused = useMemo(
+    () =>
+      fuseKey({
+        verified: verifiedCandidate,
+        detected: detectedKey,
+        held: neckKey,
+        trackIdentity: cloudResolution.trackIdentity,
+      }),
+    [verifiedCandidate, detectedKey, neckKey, cloudResolution.trackIdentity],
+  );
+  const activeDisplayName = fused.displayName;
+  const shownCloudHit = fused.source === 'verified' ? cloudHit : null;
 
   useEffect(() => {
     setSelectedChord(null);
@@ -130,18 +138,17 @@ export default function GuitarScaleView({
   const notes = useMemo(() => buildScaleNotes(scale.root, scale.scaleType), [scale.root, scale.scaleType]);
   const title = scale.title || `${scale.root} ${scale.scaleType}`;
 
-  /* Compared by pitch class so an enharmonic spelling (G# vs Ab) still counts as the same key. */
+  /* Is the neck drawing the key the pipeline settled on? Compared by pitch class, so an
+     enharmonic spelling (G# vs Ab) still counts as the same key. False means the player
+     overrode it by hand in the setup row, and the readout says "Manual". */
   const showingProposedKey = useMemo(() => {
-    if (!activePrimaryKey || (activePrimaryScale !== 'major' && activePrimaryScale !== 'minor')) {
-      return false;
-    }
-    if (scaleType !== activePrimaryScale) {
+    if (!fused.root || !fused.scale || scaleType !== fused.scale) {
       return false;
     }
     const shown = pitchClassForNoteLabel(scale.root);
-    const proposed = pitchClassForNoteLabel(activePrimaryKey);
+    const proposed = pitchClassForNoteLabel(fused.root);
     return shown !== null && shown === proposed;
-  }, [activePrimaryKey, activePrimaryScale, scale.root, scaleType]);
+  }, [fused.root, fused.scale, scale.root, scaleType]);
 
   const handleRestoreDefault = () => {
     onResetToBrainKey();
@@ -150,150 +157,92 @@ export default function GuitarScaleView({
     setSelectedChord(null);
   };
 
-  const hasDetectedApplyCandidate =
-    !!activePrimaryKey && (activePrimaryScale === 'major' || activePrimaryScale === 'minor');
-  const canApplyDetected = hasDetectedApplyCandidate;
-
-  /* See services/applyConfidence: what the shown key is worth depends on where it came from. */
-  const autoApplyConfidencePctNow = useMemo(
-    () =>
-      computeApplyConfidencePct({
-        cloudHit: shownCloudHit,
-        detected: effectiveDetectedKey,
-      }),
-    [shownCloudHit, effectiveDetectedKey],
-  );
-
-  const handleApplyDetected = () => {
-    if (!hasDetectedApplyCandidate || !activePrimaryKey || !activePrimaryScale) {
-      return;
-    }
-    if (activePrimaryScale !== 'major' && activePrimaryScale !== 'minor') {
-      return;
-    }
-    trace('apply', 'manual', `User applied ${activePrimaryKey} ${activePrimaryScale} to the fretboard`, {
-      key: activePrimaryKey,
-      scale: activePrimaryScale,
-      source: cloudResolution.source,
-    }, 'ok');
-    onApplyDetectedKey(activePrimaryKey, activePrimaryScale);
-  };
-
   const toggleLockDetected = () => {
-    if (lockDetected) {
-      trace('apply', 'unlock', 'Unlocked the detected-key snapshot', undefined, 'decide');
-      setLockDetected(false);
-      setLockedDetectedSnapshot(null);
-      return;
-    }
-    trace('apply', 'lock', `Locked the detected-key snapshot at ${detectedKey.displayName ?? 'none'}`, {
-      key: detectedKey.primaryKey,
-      scale: detectedKey.primaryScale,
-    }, 'decide');
-    setLockedDetectedSnapshot(detectedKey);
-    setLockDetected(true);
+    const next = !lockDetected;
+    const drawn = `${scale.root} ${scaleType}`;
+    trace(
+      'apply',
+      next ? 'lock' : 'unlock',
+      next
+        ? `Locked the neck at ${drawn} — the song no longer moves it`
+        : `Unlocked: the neck follows the song again (${fused.displayName ?? 'waiting for a key'})`,
+      {
+        drawnRoot: scale.root,
+        drawnScale: scaleType,
+        fusedKey: fused.root,
+        fusedScale: fused.scale,
+        certainty: fused.certainty,
+      },
+      'decide',
+    );
+    setLockDetected(next);
   };
 
+  /**
+   * The neck follows the song. There is no switch to arm and no threshold to clear: the best
+   * currently available answer is always the one drawn, and a better one replaces it as soon as
+   * it clears the revision margin (see services/keyFusion).
+   *
+   * Unlock is the exception to the margin: "follow the song again" means put the pipeline's
+   * current answer on the board even if a leftover key (or a hand edit) is still sitting there.
+   * Without that, the deck can read A minor while the neck stays on G — the Stairway case.
+   */
   useEffect(() => {
-    const logDecision = (event: string, message: string, detail: Record<string, unknown>) => {
-      const sig = `${event}|${message}|${detail.key ?? ''}|${detail.confidence ?? ''}|${detail.threshold ?? ''}`;
-      if (lastAutoDecisionRef.current === sig) {
-        return;
-      }
+    const justUnlocked = prevLockRef.current && !lockDetected;
+    prevLockRef.current = lockDetected;
+    if (lockDetected) {
+      return;
+    }
+    if (!fused.root || !fused.scale) {
+      return;
+    }
+    if (!justUnlocked && !shouldRevise(neckKey, fused)) {
+      return;
+    }
+    const sig = `${fused.root}:${fused.scale}:${fused.certainty}`;
+    if (lastAutoDecisionRef.current !== sig || justUnlocked) {
       lastAutoDecisionRef.current = sig;
-      trace('apply', event, message, detail, event === 'auto.apply' ? 'ok' : 'skip');
-    };
-
-    if (!autoApplyEnabled || !hasDetectedApplyCandidate) {
-      if (!autoApplyEnabled) {
-        lastAutoAppliedSignatureRef.current = null;
-      }
-      return;
-    }
-    const detectedScale = activePrimaryScale;
-    if ((detectedScale !== 'major' && detectedScale !== 'minor') || !activePrimaryKey) {
-      return;
-    }
-    if (autoApplyConfidencePctNow < autoApplyConfidencePct) {
-      logDecision(
-        'auto.skip',
-        `Auto-apply skipped: shown key is worth ${autoApplyConfidencePctNow}% but the threshold is ${autoApplyConfidencePct}%`,
+      trace(
+        'apply',
+        'neck.follow',
+        justUnlocked
+          ? `Neck follows the song after unlock: ${fused.displayName} (${fused.certainty}, ${fused.confidencePct}%)`
+          : `Neck follows the song: ${fused.displayName} (${fused.certainty}, ${fused.confidencePct}%)`,
         {
-          key: activePrimaryKey,
-          scale: detectedScale,
-          confidence: autoApplyConfidencePctNow,
-          threshold: autoApplyConfidencePct,
-          source: cloudResolution.source,
-          why: 'below_threshold',
+          key: fused.root,
+          scale: fused.scale,
+          certainty: fused.certainty,
+          confidence: fused.confidencePct,
+          notesSettled: fused.notesSettled,
+          from: neckKey?.displayName ?? null,
+          why: justUnlocked ? 'unlock_reapply' : fused.why,
         },
+        'ok',
       );
-      return;
     }
-    const signature = `${activePrimaryKey}:${detectedScale}`;
-    if (lastAutoAppliedSignatureRef.current === signature) {
-      return;
-    }
-    logDecision('auto.apply', `Auto-applying ${activePrimaryKey} ${detectedScale} to the fretboard`, {
-      key: activePrimaryKey,
-      scale: detectedScale,
-      confidence: autoApplyConfidencePctNow,
-      threshold: autoApplyConfidencePct,
-      source: cloudResolution.source,
-      why: 'threshold_met',
-    });
-    onApplyDetectedKey(activePrimaryKey, detectedScale);
-    lastAutoAppliedSignatureRef.current = signature;
-  }, [
-    activePrimaryKey,
-    activePrimaryScale,
-    autoApplyEnabled,
-    autoApplyConfidencePct,
-    autoApplyConfidencePctNow,
-    cloudResolution.source,
-    hasDetectedApplyCandidate,
-    onApplyDetectedKey,
-  ]);
+    setNeckKey(fused);
+    onApplyDetectedKey(fused.root, fused.scale);
+  }, [fused, lockDetected, neckKey, onApplyDetectedKey]);
 
   const desktop = mediaSession.playbackStatus !== 'media_session_unavailable';
   const playing = mediaSession.playbackStatus === 'playing';
-  const det = detectionLed(effectiveDetectedKey.state);
-  const status = deckStatusLabel({
-    playbackStatus: mediaSession.playbackStatus,
-    detectionState: effectiveDetectedKey.state,
-    resolutionState: cloudResolution.resolutionState,
-    hasCloudHit: !!shownCloudHit,
-    showingProposedKey,
-    locked: lockDetected,
-  });
-
   return (
-    <div className={`lab-screen ${focus ? 'lab-focused' : ''}`}>
+    <div className="lab-screen">
       <header className="lab-heading">
-        <div>
-          <span className="lab-kicker">
-            <button
-              type="button"
-              className="lab-menu"
-              aria-label={menuOpen ? 'Close navigation menu' : 'Open navigation menu'}
-              aria-controls="studio-sidebar"
-              aria-expanded={menuOpen}
-              onClick={onToggleMenu}
-            >
-              {menuOpen ? <X size={17} /> : <Menu size={17} />}
-            </button>
-            <span className="lab-index">01</span>
-            <span>Fretboard Lab</span>
-            <span>· One key, the whole neck.</span>
-          </span>
-          <h1>
-            Every note, <em>in its place.</em>
-          </h1>
-        </div>
+        <button
+          type="button"
+          className="lab-menu"
+          aria-label={menuOpen ? 'Close navigation menu' : 'Open navigation menu'}
+          aria-controls="studio-sidebar"
+          aria-expanded={menuOpen}
+          onClick={onToggleMenu}
+        >
+          {menuOpen ? <X size={17} /> : <Menu size={17} />}
+        </button>
+        <h1>
+          Every note, <em>in its place.</em>
+        </h1>
         <div className="lab-heading-actions">
-          <span className={`lab-status ${playing ? 'on' : ''}`}>
-            <Led tone={det.tone} pulse={det.pulse} />
-            {status}
-          </span>
           <button
             type="button"
             className="lab-eng"
@@ -328,18 +277,16 @@ export default function GuitarScaleView({
 
         <SourceStrip
           mediaSession={mediaSession}
-          detected={effectiveDetectedKey}
+          detected={detectedKey}
           resolutionState={cloudResolution.resolutionState}
-          hasCloudHit={!!shownCloudHit}
-          proposedKeyName={activeDisplayName}
-          confidence={effectiveDetectedKey.confidence}
-          canApply={canApplyDetected}
-          onApply={handleApplyDetected}
+          keyName={activeDisplayName}
+          certainty={fused.certainty}
+          confidencePct={fused.confidencePct}
+          notesSettled={fused.notesSettled}
+          tonicSettled={fused.tonicSettled}
+          relativeAlternative={fused.relativeAlternative}
           locked={lockDetected}
           onToggleLock={toggleLockDetected}
-          onResetDetection={() => {
-            void resetDetection();
-          }}
         />
 
         <KeyReadout
@@ -347,64 +294,14 @@ export default function GuitarScaleView({
           scaleType={scaleType}
           notes={notes}
           sourceLabel={keySourceLabel({
-            resolutionState: cloudResolution.resolutionState,
             hasCloudHit: !!shownCloudHit,
             showingProposedKey,
           })}
+          /* A hand-picked root is settled by definition — the open-tonic treatment belongs to the
+             pipeline's own answer, not to a key the player chose. */
+          tonicSettled={!showingProposedKey || fused.tonicSettled}
+          relativeAlternative={showingProposedKey ? fused.relativeAlternative : null}
         />
-      </div>
-
-      <div className="lab-control-strip">
-        <button
-          type="button"
-          className={`lab-control ${autoApplyEnabled ? 'selected' : ''}`}
-          aria-pressed={autoApplyEnabled}
-          disabled={!desktop}
-          onClick={() => setAutoApplyEnabled(!autoApplyEnabled)}
-        >
-          <Radio size={19} />
-          <span>
-            <strong>Follow the song</strong>
-            <small>
-              {!desktop
-                ? 'Needs the desktop app'
-                : autoApplyEnabled
-                  ? `Applies on its own from ${autoApplyConfidencePct}%`
-                  : 'Apply detected keys by hand'}
-            </small>
-          </span>
-          <i className="lab-switch" />
-        </button>
-        <button
-          type="button"
-          className={`lab-control ${bankOpen ? 'selected' : ''}`}
-          aria-pressed={bankOpen}
-          aria-controls="lab-chord-bank"
-          onClick={() => {
-            setBankOpen(!bankOpen);
-            setSelectedChord(null);
-          }}
-        >
-          <Layers3 size={19} />
-          <span>
-            <strong>Chord bank</strong>
-            <small>Shapes that live in this key</small>
-          </span>
-          <i className="lab-switch" />
-        </button>
-        <button
-          type="button"
-          className={`lab-control ${focus ? 'selected' : ''}`}
-          aria-pressed={focus}
-          onClick={() => setFocus(!focus)}
-        >
-          <Waves size={19} />
-          <span>
-            <strong>Neck focus</strong>
-            <small>Clear the deck off the bench</small>
-          </span>
-          <i className="lab-switch" />
-        </button>
       </div>
 
       {!desktop && (
@@ -418,13 +315,7 @@ export default function GuitarScaleView({
       <div className="lab-map">
         <div className="lab-map-heading">
           <div>
-            <span className="lab-module-label">The whole neck, connected</span>
-            <h2>
-              {title}
-              <span>
-                {numFrets} frets · {tuning.label}
-              </span>
-            </h2>
+            <h2>{title}</h2>
           </div>
           <div className="lab-map-actions">
             <ViewModeSwitch value={viewMode} onChange={setViewMode} />
@@ -500,51 +391,37 @@ export default function GuitarScaleView({
         </div>
       </div>
 
-      <AnimatePresence initial={false}>
-        {bankOpen && (
-          <motion.section
-            id="lab-chord-bank"
-            className="lab-bank"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-          >
-            <div className="lab-bank-heading">
-              <div>
-                <span className="lab-module-label">A palette to play with</span>
-                <h2>Chords that live in this key.</h2>
-                <p>One module per degree of the scale, with every shape that fits your tuning and capo.</p>
-              </div>
-              <Layers3 size={27} />
-            </div>
-            <ChordLibrarySection
-              root={scale.root}
-              scaleType={scaleType}
-              tuningId={tuningId}
-              openStringPcs={tuning.openStringPcs}
-              tuningLabel={tuning.label}
-              stringLabels={tuning.stringLabels}
-              capo={capo}
-              selectedChord={selectedChord}
-              onChordSelect={setSelectedChord}
-            />
-          </motion.section>
-        )}
-      </AnimatePresence>
+      <section id="lab-chord-bank" className="lab-bank">
+        <div className="lab-bank-heading">
+          <div>
+            <h2>Chords that live in this key.</h2>
+            <p>One module per degree of the scale, with every shape that fits your tuning and capo.</p>
+          </div>
+          <Layers3 size={27} />
+        </div>
+        <ChordLibrarySection
+          root={scale.root}
+          scaleType={scaleType}
+          tuningId={tuningId}
+          openStringPcs={tuning.openStringPcs}
+          tuningLabel={tuning.label}
+          stringLabels={tuning.stringLabels}
+          capo={capo}
+          selectedChord={selectedChord}
+          onChordSelect={setSelectedChord}
+        />
+      </section>
 
       <DevDrawer
         open={devOpen}
         onClose={() => setDevOpen(false)}
         mediaSession={mediaSession}
-        detected={effectiveDetectedKey}
+        detected={detectedKey}
         detectedKeyAb={detectedKeyAb}
         cloudResolution={cloudResolution}
         activeDisplayName={activeDisplayName}
-        canApply={canApplyDetected}
-        autoApplyEnabled={autoApplyEnabled}
-        onAutoApplyEnabledChange={setAutoApplyEnabled}
-        autoApplyConfidencePct={autoApplyConfidencePct}
-        onAutoApplyConfidencePctChange={setAutoApplyConfidencePct}
+        fused={fused}
+        locked={lockDetected}
         devMockEnabled={devMockEnabled}
         onDevMockEnabledChange={setDevMockEnabled}
         devMockTitle={devMockTitle}

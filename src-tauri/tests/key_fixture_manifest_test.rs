@@ -27,7 +27,7 @@ fn fixture_manifest_is_well_formed() {
         serde_json::from_str(&raw).expect("manifest should be valid json");
     assert!(!fixtures.is_empty());
     let mut classes = std::collections::BTreeSet::new();
-    for fixture in fixtures {
+    for fixture in &fixtures {
         assert!(!fixture.id.is_empty());
         assert!(!fixture.r#class.is_empty());
         classes.insert(fixture.r#class.clone());
@@ -41,13 +41,26 @@ fn fixture_manifest_is_well_formed() {
             }
         }
     }
+    // A fixture that shares another's audio is not a sixth test case, it is the same test run
+    // twice under two names — and the manifest claimed six for exactly that reason until this
+    // assertion existed. Relative-major-over-minor ground truth is now covered far better by
+    // `key_accuracy_scoreboard.rs`, which runs all twelve minor keys through three progressions.
+    let mut seen_paths = std::collections::HashSet::new();
+    for fixture in &fixtures {
+        assert!(
+            seen_paths.insert(fixture.path.clone()),
+            "fixture {} reuses another fixture's wav: {}",
+            fixture.id,
+            fixture.path
+        );
+    }
+
     let required = [
         "easy_stable_major",
         "easy_stable_minor",
         "contradiction_prone",
         "dominant_bias_failure_case",
         "relative_major_minor_ambiguity",
-        "relative_ground_truth_minor_center",
     ];
     for cls in required {
         assert!(

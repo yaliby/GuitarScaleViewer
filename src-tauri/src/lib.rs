@@ -1,7 +1,9 @@
 mod audio_capture;
 mod audio_models;
 mod key_detection;
-mod key_engine;
+/// Public so the accuracy harness (`tests/key_accuracy_scoreboard.rs`) scores the *shipped*
+/// tonic-evidence gate rather than a copy of it that can drift away from the real one.
+pub mod key_engine;
 mod media_session;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

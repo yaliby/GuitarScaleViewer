@@ -6,25 +6,26 @@ import {
   LockKeyholeOpen,
   Radio,
   RefreshCw,
-  ArrowUpRight,
-  Cloud,
-  Check,
 } from "lucide-react";
 import type { DetectedKeyState } from "../hooks/useDetectedKey";
 import type { MediaSessionUiState } from "../hooks/useMediaSession";
 import type { useCloudKeyResolution } from "../hooks/useCloudKeyResolution";
+import type { FusedKey } from "../services/keyFusion";
 import { musicalLabel } from "./Fretboard";
 
 type Props = {
   media: MediaSessionUiState;
   detected: DetectedKeyState;
   cloud: ReturnType<typeof useCloudKeyResolution>;
+  /**
+   * The pipeline's single decision — the same object Live Jam draws from. Explore used to
+   * re-derive its own verdict from `detected` + `cloud`, which let the two screens disagree
+   * about the same song and left this panel telling the player to "apply" a key with a button
+   * that no longer exists.
+   */
+  fused: FusedKey;
   locked: boolean;
-  auto: boolean;
   onLock: () => void;
-  onAuto: (v: boolean) => void;
-  onApply: () => void;
-  canApply: boolean;
   onRetry: () => void;
   root: string;
   scale: string;
@@ -33,29 +34,28 @@ export function ListeningPanel({
   media,
   detected,
   cloud,
+  fused,
   locked,
-  auto,
   onLock,
-  onAuto,
-  onApply,
-  canApply,
   onRetry,
   root,
   scale,
 }: Props) {
   const [details, setDetails] = useState(false);
   const desktop = media.playbackStatus !== "media_session_unavailable";
-  const name = cloud.cloudHit?.displayName ?? detected.displayName;
-  const ready =
-    !!cloud.cloudHit || (detected.readyToApply && !detected.ambiguous);
+  const name = fused.displayName ?? cloud.cloudHit?.displayName ?? detected.displayName;
+  // The one case worth its own wording: the notes are right and only the root is open.
+  const tonicOpen = !fused.tonicSettled && !!fused.relativeAlternative;
   const status = !desktop
     ? "Desktop listening"
     : media.playbackStatus === "paused"
       ? "Playback paused"
       : name
-        ? ready
+        ? fused.certainty === "verified"
           ? "Key is ready"
-          : "Possible key"
+          : tonicOpen
+            ? "Notes sure, root open"
+            : "Possible key"
         : media.playbackStatus === "playing"
           ? "Listening to your music"
           : "Ready when you are";
@@ -85,16 +85,20 @@ export function ListeningPanel({
         <p>
           {!desktop
             ? "Open the desktop app to identify the key of music playing on your computer. All practice tools work here."
-            : cloud.cloudHit
+            : fused.certainty === "verified"
               ? "Found in the verified song library."
               : name
-                ? ready
-                  ? "Stable audio evidence. Apply it to explore this key."
-                  : "Still a suggestion. Listen to the alternatives before applying."
+                ? tonicOpen
+                  ? `The scale tones are settled — this reads equally as ${musicalLabel(fused.relativeAlternative!)}, which draws the same notes.`
+                  : "The neck is already following this. Nothing to press."
                 : "Start music in your player. You can always choose a key yourself."}
         </p>
       </div>
-      {detected.alternatives.length > 0 && !cloud.cloudHit && (
+      {tonicOpen ? (
+        <div className="alternatives" data-testid="explore-key-alt">
+          Same notes as: {musicalLabel(fused.relativeAlternative!)}
+        </div>
+      ) : detected.alternatives.length > 0 && fused.certainty !== "verified" ? (
         <div className="alternatives">
           Also possible:{" "}
           {detected.alternatives
@@ -102,16 +106,8 @@ export function ListeningPanel({
             .map((a) => musicalLabel(a.displayName))
             .join(" · ")}
         </div>
-      )}
+      ) : null}
       <div className="listening-actions">
-        <button
-          className="button accent"
-          disabled={!canApply || locked}
-          onClick={onApply}
-        >
-          {ready ? "Use this key" : "Try suggestion"}
-          <ArrowUpRight size={14} />
-        </button>
         <button
           className={`icon-button ${locked ? "is-active" : ""}`}
           onClick={onLock}
@@ -126,19 +122,6 @@ export function ListeningPanel({
           Holding {musicalLabel(root)} {scale}. Unlock to follow another key.
         </p>
       )}
-      <label className="switch-row">
-        <span>
-          Auto follow <small>Stable keys only</small>
-        </span>
-        <input
-          aria-label="Auto follow stable keys"
-          type="checkbox"
-          checked={auto}
-          onChange={(e) => onAuto(e.target.checked)}
-          disabled={!desktop}
-        />
-        <span className="switch-track" />
-      </label>
       <button
         className="details-toggle"
         aria-expanded={details}
@@ -151,7 +134,7 @@ export function ListeningPanel({
         <div className="diagnostics">
           <dl>
             <dt>Source</dt>
-            <dd>{cloud.cloudHit ? "Cloud library" : detected.source}</dd>
+            <dd>{cloud.cloudHit ? "Verified library" : detected.source}</dd>
             <dt>Analysis</dt>
             <dd>{detected.state.replaceAll("_", " ")}</dd>
             <dt>Evidence score</dt>
@@ -161,11 +144,10 @@ export function ListeningPanel({
             </dd>
             <dt>Audio collected</dt>
             <dd>{detected.bufferSeconds.toFixed(1)} seconds</dd>
-            <dt>Connection</dt>
+            <dt>Library</dt>
             <dd>{cloud.cloudState}</dd>
           </dl>
           {detected.reason && <p>{detected.reason.replaceAll("_", " ")}</p>}
-          {cloud.cloudError && <p>{cloud.cloudError}</p>}
           <button
             className="button subtle"
             onClick={onRetry}
@@ -174,28 +156,6 @@ export function ListeningPanel({
             <RefreshCw size={13} />
             Retry audio analysis
           </button>
-          {media.title &&
-            media.artist &&
-            (scale === "major" || scale === "minor") && (
-              <button
-                className="button subtle"
-                onClick={() => void cloud.submitSuggestion(root, scale)}
-                disabled={
-                  cloud.suggestionStatus === "submitting" ||
-                  cloud.suggestionStatus === "success"
-                }
-              >
-                {cloud.suggestionStatus === "success" ? (
-                  <Check size={13} />
-                ) : (
-                  <Cloud size={13} />
-                )}
-                Suggest current key
-              </button>
-            )}
-          {cloud.suggestionMessage && (
-            <p role="status">{cloud.suggestionMessage}</p>
-          )}
         </div>
       )}
     </section>

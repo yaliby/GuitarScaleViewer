@@ -22,3 +22,6 @@ docs/superpowers/
 docs/review-evidence/*
 !docs/review-evidence/key-accuracy-before.json
 !docs/review-evidence/key-accuracy-after.json
+
+# Generated key-accuracy corpus (187MB of build output, see tests/fixtures/generate_corpus.py)
+src-tauri/tests/fixtures/corpus/

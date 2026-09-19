@@ -11,7 +11,6 @@ const tauriMocks = vi.hoisted(() => ({
 
 const apiMocks = vi.hoisted(() => ({
   lookupSongKey: vi.fn(),
-  submitSongKeySuggestion: vi.fn(),
 }));
 
 vi.mock('@tauri-apps/api/core', () => ({
@@ -21,9 +20,8 @@ vi.mock('@tauri-apps/api/core', () => ({
 
 vi.mock('@tauri-apps/api/event', () => ({ listen: tauriMocks.listen }));
 
-// Only the network calls are stubbed. `normalizeLookupKey` is pure parsing that the hook
-// relies on to read a record, so the real one is kept — stubbing it out silently turned
-// every cloud hit into an error.
+// The library lookup is local. `normalizeLookupKey` is kept real so a readable
+// bundled key still reaches the neck.
 vi.mock('../services/songKeyApi', async () => {
   const actual = await vi.importActual<typeof import('../services/songKeyApi')>(
     '../services/songKeyApi',
@@ -72,17 +70,32 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+function libraryHit(key: string, mode: 'major' | 'minor') {
+  return {
+    found: true as const,
+    song: {
+      id: 'song-1',
+      title: PLAYING.title!,
+      artist: PLAYING.artist!,
+      musical_key: key,
+      mode,
+      verified: true as const,
+      source: 'verified_library' as const,
+      sourceLabel: 'Verified library',
+    },
+  };
+}
+
 beforeEach(() => {
   tauriMocks.isTauri.mockReturnValue(false);
   tauriMocks.invoke.mockReset();
   tauriMocks.listen.mockReset();
   apiMocks.lookupSongKey.mockReset();
-  apiMocks.submitSongKeySuggestion.mockReset();
 });
 
 describe('useCloudKeyResolution', () => {
-  it('does not restart a pending lookup for a position-only media update', async () => {
-    apiMocks.lookupSongKey.mockReturnValue(new Promise(() => undefined));
+  it('does not restart a lookup for a position-only media update', async () => {
+    apiMocks.lookupSongKey.mockReturnValue({ found: false, song: null });
     const { rerender } = renderHook(
       ({ media }) => useCloudKeyResolution(media, DETECTED),
       { initialProps: { media: PLAYING } },
@@ -96,62 +109,27 @@ describe('useCloudKeyResolution', () => {
     expect(apiMocks.lookupSongKey).toHaveBeenCalledTimes(1);
   });
 
-  it('preserves B-flat from a valid cloud result', async () => {
-    apiMocks.lookupSongKey.mockResolvedValue({
-      found: true,
-      song: {
-        id: 'song-1',
-        title: PLAYING.title,
-        artist: PLAYING.artist,
-        musical_key: 'Bb',
-        mode: 'major',
-        verified: true,
-      },
-    });
+  it('preserves B-flat from a valid library result', async () => {
+    apiMocks.lookupSongKey.mockReturnValue(libraryHit('Bb', 'major'));
     const { result } = renderHook(() => useCloudKeyResolution(PLAYING, DETECTED));
 
     await waitFor(() => expect(result.current.cloudState).toBe('hit'));
     expect(result.current.cloudHit).toMatchObject({ key: 'Bb', mode: 'major' });
   });
 
-  it('ignores a pending result after playback pauses', async () => {
-    const request = deferred<Awaited<ReturnType<typeof apiMocks.lookupSongKey>>>();
-    apiMocks.lookupSongKey.mockReturnValue(request.promise);
-    const { result, rerender } = renderHook(
-      ({ media }) => useCloudKeyResolution(media, DETECTED),
-      { initialProps: { media: PLAYING } },
+  it('does not apply a library hit while playback is paused', async () => {
+    apiMocks.lookupSongKey.mockReturnValue(libraryHit('C', 'major'));
+    const { result } = renderHook(() =>
+      useCloudKeyResolution({ ...PLAYING, playbackStatus: 'paused' }, DETECTED),
     );
-    await waitFor(() => expect(result.current.cloudState).toBe('lookup_pending'));
-
-    rerender({ media: { ...PLAYING, playbackStatus: 'paused' } });
-    request.resolve({
-      found: true,
-      song: {
-        id: 'song-1',
-        title: PLAYING.title!,
-        artist: PLAYING.artist!,
-        musical_key: 'C',
-        mode: 'major',
-        verified: true,
-      },
-    });
 
     await waitFor(() => expect(result.current.resolutionState).toBe('paused'));
     expect(result.current.cloudHit).toBeNull();
+    expect(apiMocks.lookupSongKey).not.toHaveBeenCalled();
   });
 
-  it('clears the previous cloud hit when the track changes while paused', async () => {
-    apiMocks.lookupSongKey.mockResolvedValue({
-      found: true,
-      song: {
-        id: 'song-1',
-        title: PLAYING.title,
-        artist: PLAYING.artist,
-        musical_key: 'Bb',
-        mode: 'major',
-        verified: true,
-      },
-    });
+  it('clears the previous library hit when the track changes while paused', async () => {
+    apiMocks.lookupSongKey.mockReturnValue(libraryHit('Bb', 'major'));
     const { result, rerender } = renderHook(
       ({ media }) => useCloudKeyResolution(media, DETECTED),
       { initialProps: { media: PLAYING } },
@@ -172,7 +150,7 @@ describe('useCloudKeyResolution', () => {
   });
 
   it('keeps the paused resolution state when a local result arrives', async () => {
-    apiMocks.lookupSongKey.mockRejectedValue(new Error('Request timed out after 8000ms'));
+    apiMocks.lookupSongKey.mockReturnValue({ found: false, song: null });
     const warming: DetectedKeyState = {
       ...DETECTED,
       primaryKey: null,
@@ -181,11 +159,8 @@ describe('useCloudKeyResolution', () => {
     };
     const { result, rerender } = renderHook(
       ({ media, detected }) => useCloudKeyResolution(media, detected),
-      { initialProps: { media: PLAYING, detected: warming } },
+      { initialProps: { media: { ...PLAYING, playbackStatus: 'paused' }, detected: warming } },
     );
-    await waitFor(() => expect(result.current.cloudState).toBe('error'));
-
-    rerender({ media: { ...PLAYING, playbackStatus: 'paused' }, detected: warming });
     await waitFor(() => expect(result.current.resolutionState).toBe('paused'));
 
     rerender({ media: { ...PLAYING, playbackStatus: 'paused' }, detected: DETECTED });
@@ -193,27 +168,15 @@ describe('useCloudKeyResolution', () => {
     expect(result.current.resolutionState).toBe('paused');
   });
 
-  it('ignores a pending result after the media session closes', async () => {
-    const request = deferred<Awaited<ReturnType<typeof apiMocks.lookupSongKey>>>();
-    apiMocks.lookupSongKey.mockReturnValue(request.promise);
+  it('clears the library hit after the media session closes', async () => {
+    apiMocks.lookupSongKey.mockReturnValue(libraryHit('C', 'major'));
     const { result, rerender } = renderHook(
       ({ media }) => useCloudKeyResolution(media, DETECTED),
       { initialProps: { media: PLAYING } },
     );
-    await waitFor(() => expect(result.current.cloudState).toBe('lookup_pending'));
+    await waitFor(() => expect(result.current.cloudState).toBe('hit'));
 
     rerender({ media: { ...PLAYING, playbackStatus: 'closed' } });
-    request.resolve({
-      found: true,
-      song: {
-        id: 'song-1',
-        title: PLAYING.title!,
-        artist: PLAYING.artist!,
-        musical_key: 'C',
-        mode: 'major',
-        verified: true,
-      },
-    });
 
     await waitFor(() => expect(result.current.resolutionState).toBe('no_session'));
     expect(result.current.cloudHit).toBeNull();

@@ -5,7 +5,7 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-files=(nameNormalize.ts keyParse.ts catalogKeyLookup.ts)
+files=(nameNormalize.ts keyParse.ts)
 
 for file in "${files[@]}"; do
   cp "$root/src/services/$file" "$root/chordsync-api/src/$file"

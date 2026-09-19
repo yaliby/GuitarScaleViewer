@@ -1,38 +1,29 @@
 import { expect, test } from "@playwright/test";
 
-test("the listening deck proposes an uncertain key and leaves the neck alone until Apply", async ({
+test("the neck is already on the song's key, with nothing pressed", async ({
   page,
 }) => {
-  await page.route("**/lookup-song?**", (route) =>
-    route.fulfill({ json: { found: false, song: null } }),
-  );
   await page.goto("/");
   await page.getByRole("button", { name: "Live Jam", exact: true }).click();
   await expect(
     page.getByRole("region", { name: "Live Jam workspace" }),
   ).toBeVisible();
-  /* The fixture reading is ambiguous, so it is offered, never taken. */
-  await expect(page.getByTestId("jam-key")).toHaveText("A");
-  await expect(page.locator(".lab-meter-head")).toContainText("D major");
-  await expect(
-    page.getByRole("button", { name: /Follow the song/ }),
-  ).toHaveAttribute("aria-pressed", "false");
-
-  await page.getByRole("button", { name: "Apply", exact: true }).click();
+  /* The iron rule, end to end: opening the screen is the whole interaction. There is no latch
+     to arm and no Apply to press — the fixture reading is already drawn. */
   await expect(page.getByTestId("jam-key")).toHaveText("D");
+  await expect(page.locator(".lab-meter-head")).toContainText("D major");
   await expect(page.locator(".lab-source")).toContainText("Detected");
+  await expect(
+    page.getByRole("button", { name: "Auto", exact: true }),
+  ).toHaveCount(0);
 });
 
-test("Live Jam follows the song when asked, and Lock freezes the neck through a key change", async ({
+test("Live Jam follows the song, and Lock freezes the neck through a key change", async ({
   page,
 }) => {
   await page.clock.setFixedTime(new Date(1_800_000_000_000));
-  await page.route("**/lookup-song?**", (route) =>
-    route.fulfill({ json: { found: false, song: null } }),
-  );
   await page.goto("/");
   await page.getByRole("button", { name: "Live Jam", exact: true }).click();
-  await page.getByRole("button", { name: /Follow the song/ }).click();
   await page.evaluate(() => {
     const host = window as any;
     host.testDetection = {
@@ -48,7 +39,7 @@ test("Live Jam follows the song when asked, and Lock freezes the neck through a 
   });
   await expect(page.getByTestId("jam-key")).toHaveText("D");
   await expect(page.getByRole("img", { name: /^Fretboard for D/ })).toBeVisible();
-  await expect(page.locator(".lab-map-heading")).toContainText("24 frets");
+  await expect(page.locator(".lab-map-heading")).toContainText("D");
   /* Let the key card finish its fade so the evidence shot is not caught mid-animation. */
   await page.waitForTimeout(400);
   await page.screenshot({
@@ -80,26 +71,19 @@ test("Live Jam follows the song when asked, and Lock freezes the neck through a 
 test("Live Jam trusts a verified library key over an ambiguous local reading", async ({
   page,
 }) => {
-  await page.route("**/lookup-song?**", (route) =>
-    route.fulfill({
-      json: {
-        found: true,
-        song: {
-          id: "fixture",
-          title: "Practice track",
-          artist: "Test artist",
-          musical_key: "Bb",
-          mode: "major",
-          verified: true,
-        },
-      },
-    }),
-  );
   await page.goto("/");
   await page.getByRole("button", { name: "Live Jam", exact: true }).click();
-  await expect(page.locator(".lab-meter-head")).toContainText("B");
-  await page.getByRole("button", { name: /Follow the song/ }).click();
-  await expect(page.getByTestId("jam-key")).toHaveText("Bb");
+  await page.evaluate(() => {
+    const host = window as any;
+    host.testMedia = {
+      ...host.testMedia,
+      title: "Every Breath You Take",
+      artist: "The Police",
+    };
+    host.testEmit("media-session-update", host.testMedia);
+  });
+  await expect(page.locator(".lab-meter-head")).toContainText("A");
+  await expect(page.getByTestId("jam-key")).toHaveText("Ab");
   await expect(page.locator(".lab-source")).toContainText("Verified");
 });
 
@@ -166,65 +150,102 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
-test("ambiguous high scores require explicit application", async ({ page }) => {
-  await page.route("**/lookup-song?**", (route) =>
-    route.fulfill({ json: { found: false, song: null } }),
-  );
+test("an unsure reading still reaches the neck, labelled unsure", async ({ page }) => {
+  // The fixture detection is flagged ambiguous with readyToApply false. The old pipeline held
+  // that back behind a button; a player with both hands on a guitar never pressed it. It is
+  // still the best information available, so it goes up — and says so.
   await page.goto("/");
-  await page.getByLabel("Auto follow stable keys").check();
+  await expect(page.getByLabel("Root note", { exact: true })).toHaveValue("D");
   await expect(
     page.getByRole("button", { name: "Try suggestion", exact: true }),
-  ).toBeEnabled();
-  await expect(page.getByLabel("Root note", { exact: true })).toHaveValue("A");
-  await page
-    .getByRole("button", { name: "Try suggestion", exact: true })
-    .click();
-  await expect(page.getByLabel("Root note", { exact: true })).toHaveValue("D");
+  ).toHaveCount(0);
+  await expect(page.getByLabel("Auto follow stable keys")).toHaveCount(0);
 });
 
-test("verified flat keys apply correctly and lock survives the next cloud track", async ({
+test("verified flat keys apply correctly and lock survives the next library track", async ({
   page,
 }) => {
-  let root = "Bb";
-  await page.route("**/lookup-song?**", (route) =>
-    route.fulfill({
-      json: {
-        found: true,
-        song: {
-          id: "fixture",
-          title: "Practice track",
-          artist: "Test artist",
-          musical_key: root,
-          mode: "major",
-          verified: true,
-        },
-      },
-    }),
-  );
   await page.goto("/");
-  await page.getByLabel("Auto follow stable keys").check();
-  await expect(page.getByLabel("Root note", { exact: true })).toHaveValue("Bb");
-  await expect(page.getByTestId("scale-title")).toHaveText("B♭ major");
+  await page.evaluate(() => {
+    const host = window as any;
+    host.testMedia = {
+      ...host.testMedia,
+      title: "Every Breath You Take",
+      artist: "The Police",
+    };
+    host.testEmit("media-session-update", host.testMedia);
+  });
+  await expect(page.getByLabel("Root note", { exact: true })).toHaveValue("Ab");
+  await expect(page.getByTestId("scale-title")).toHaveText("A♭ major");
   await page
     .getByRole("button", { name: "Lock practice key", exact: true })
     .click();
-  root = "C";
   await page.evaluate(() => {
     const host = window as any;
     host.testEmit("media-session-update", {
       ...host.testMedia,
-      title: "Next track",
+      title: "Imagine",
+      artist: "John Lennon",
     });
   });
   await expect(
     page.getByRole("region", { name: "Song key detection" }),
   ).toContainText("C major");
-  await expect(
-    page.getByRole("button", { name: "Use this key", exact: true }),
-  ).toBeDisabled();
-  await expect(page.getByLabel("Root note", { exact: true })).toHaveValue("Bb");
+  await expect(page.getByLabel("Root note", { exact: true })).toHaveValue("Ab");
   await page
     .getByRole("button", { name: "Unlock practice key", exact: true })
     .click();
   await expect(page.getByLabel("Root note", { exact: true })).toHaveValue("C");
+});
+
+test("a relative-pair hedge draws the notes and refuses to assert a root", async ({
+  page,
+}) => {
+  /* The engine's most common real failure, measured: 22 of its 24 misses on the 72-clip corpus
+     are the right seven notes under the wrong root (docs/KEY_ACCURACY_BASELINE.md). The screen
+     must keep the diagram — it is correct — while saying out loud that the root is a coin flip.
+     The old behaviour asserted one root and left the player to press `Relative`, which is a
+     touch, with a guitar in both hands, in the single most common case the engine gets wrong. */
+  await page.goto("/");
+  await page.getByRole("button", { name: "Live Jam", exact: true }).click();
+  await page.evaluate(() => {
+    const host = window as any;
+    host.testDetection = {
+      ...host.testDetection,
+      primaryKey: "G",
+      primaryScale: "major",
+      displayName: "G major",
+      alternatives: [
+        { key: "E", scale: "minor", displayName: "E minor", confidence: 0.58 },
+      ],
+      confidence: 0.62,
+      ambiguous: true,
+      state: "ambiguous",
+      reason: "relative_pair_ambiguity:pair=G major/E minor pairMargin=0.11",
+      readyToApply: false,
+      evidenceId: 9,
+    };
+    host.testEmit("detected-key-update", host.testDetection);
+  });
+
+  // The neck still commits to a diagram: a blank fretboard helps nobody.
+  await expect(page.getByTestId("jam-key")).toHaveText("G");
+  await expect(page.getByRole("img", { name: /^Fretboard for G/ })).toBeVisible();
+
+  // ...and it names the other reading rather than leaving the player to work it out.
+  await expect(page.getByTestId("jam-key-alt")).toContainText("E minor");
+  await expect(page.locator(".lab-meter-note")).toContainText("could be E minor");
+  await expect(page.locator(".lab-meter-head")).toContainText("notes sure, root open");
+
+  // The uncertainty is in the accessible name too, not carried by colour alone.
+  await expect(
+    page.getByLabel("Scale tones — root not yet resolved"),
+  ).toBeVisible();
+
+  /* Let the key card settle so the evidence shot is not caught mid-fade. */
+  await page.waitForTimeout(400);
+  await page.screenshot({
+    path: "docs/review-evidence/live-jam-tonic-open.png",
+    fullPage: true,
+  });
 });

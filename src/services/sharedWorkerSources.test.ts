@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest';
  * provider that reports key and mode in separate fields was silently dropped in production
  * while the local copy handled it fine.
  */
-const SHARED_FILES = ['nameNormalize.ts', 'keyParse.ts', 'catalogKeyLookup.ts'];
+const SHARED_FILES = ['nameNormalize.ts', 'keyParse.ts'];
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '../..');

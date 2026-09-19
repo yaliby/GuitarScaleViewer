@@ -23,6 +23,11 @@ const RECENT_SILENCE_BLOCK_WINDOW: Duration = Duration::from_secs(14);
 
 /// Prefer an audible process belonging to this player. A random helper process
 /// (or another application's audio session) can yield silence or the wrong music.
+///
+/// Its only caller is the Windows per-process loopback path; Linux captures from the PulseAudio
+/// monitor instead and never picks a PID. Kept compiled (and unit-tested) on every platform so
+/// the selection rule cannot rot while nobody is building for Windows.
+#[cfg_attr(not(windows), allow(dead_code))]
 fn choose_capture_pid(source: &str, expected_exe: Option<&str>, active: &[(u32, String)], named: &[u32]) -> Option<u32> {
     let source = source.to_ascii_lowercase();
     let matching: Vec<u32> = active.iter().filter_map(|(pid, name)| {

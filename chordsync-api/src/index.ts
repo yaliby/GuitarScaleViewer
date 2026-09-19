@@ -1,13 +1,10 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { catalogProviderLabel, lookupKeyFromCatalogs } from "./catalogKeyLookup";
 import { buildMatchKeys, foldName, type MatchKeys } from "./nameNormalize";
 
 interface Env {
   SUPABASE_URL?: string;
   SUPABASE_SERVICE_ROLE_KEY?: string;
   ADMIN_SECRET?: string;
-  FREQBLOG_API_KEY?: string;
-  GETSONGBPM_API_KEY?: string;
 }
 
 const MAX_TITLE_LENGTH = 300;
@@ -115,10 +112,6 @@ function workerLog(event: string, message: string, detail?: Record<string, unkno
   } else {
     console.info(`[GSV worker] ${event}  ${message}`);
   }
-}
-
-function catalogOnTrace(event: string, message: string, detail?: Record<string, unknown>): void {
-  workerLog(`catalog.${event}`, message, detail);
 }
 
 /**
@@ -237,9 +230,15 @@ async function handle(req: Request, env: Env): Promise<Response> {
 
           const song = error ? null : pickClosestSong(data, keys);
           if (error) {
-            workerLog("lookup.db_error", "Supabase verified query failed — falling through to catalogs", {
+            workerLog("lookup.db_error", "Supabase verified query failed", {
               error: error.message,
               why: "supabase_error",
+            });
+            return json({
+              found: false,
+              incomplete: true,
+              source: null,
+              song: null,
             });
           }
           if (song) {
@@ -250,64 +249,30 @@ async function handle(req: Request, env: Env): Promise<Response> {
             });
             return json({
               found: true,
-              catalogsTried: false,
               source: "verified_db",
+              sourceLabel: "Verified database",
               song,
             });
           }
-          workerLog("lookup.db_miss", "No verified row — walking catalogs", { why: "no_verified_row" });
+          workerLog("lookup.db_miss", "No verified row", { why: "no_verified_row" });
         } catch (error) {
-          workerLog("lookup.db_throw", "Supabase threw — falling through to catalogs", {
+          workerLog("lookup.db_throw", "Supabase threw", {
             error: error instanceof Error ? error.message : String(error),
             why: "supabase_threw",
           });
-          // Broken DB hosting should not skip catalog fallbacks.
+          return json({
+            found: false,
+            incomplete: true,
+            source: null,
+            song: null,
+          });
         }
       } else {
-        workerLog("lookup.no_db", "Supabase is not configured — catalogs only", { why: "no_supabase" });
+        workerLog("lookup.no_db", "Supabase is not configured", { why: "no_supabase" });
       }
 
-      const { hit: catalog, incomplete } = await lookupKeyFromCatalogs(keys.cleanTitle, keys.cleanArtist, {
-        freqblogApiKey: env.FREQBLOG_API_KEY,
-        getsongbpmApiKey: env.GETSONGBPM_API_KEY,
-        onTrace: catalogOnTrace,
-      });
-
-      if (catalog) {
-        workerLog("lookup.hit", `Catalog hit via ${catalog.provider}: ${catalog.key} ${catalog.mode}`, {
-          source: catalog.provider,
-          key: catalog.key,
-          mode: catalog.mode,
-        });
-        return json({
-          found: true,
-          catalogsTried: true,
-          source: catalog.provider,
-          sourceLabel: catalogProviderLabel(catalog.provider),
-          song: {
-            id: `${catalog.provider}:${catalog.remoteId}`,
-            title: catalog.title,
-            artist: catalog.artist,
-            musical_key: catalog.key,
-            mode: catalog.mode,
-            verified: false,
-          },
-        });
-      }
-
-      // A throttled or unreachable catalog is not an answer about this song. Reporting
-      // `catalogsTried: false` lets the client retry from its own network instead of caching
-      // a miss it would then sit on for minutes.
-      workerLog(
-        incomplete ? "lookup.incomplete" : "lookup.miss",
-        incomplete
-          ? "Catalogs never answered — telling the client not to cache a miss"
-          : "Catalogs answered and none had a key",
-        { incomplete, catalogsTried: !incomplete },
-      );
       return json({
         found: false,
-        catalogsTried: !incomplete,
         source: null,
         song: null,
       });

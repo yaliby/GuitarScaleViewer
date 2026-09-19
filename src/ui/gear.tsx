@@ -103,7 +103,7 @@ const BUTTON_TONE: Record<ButtonTone, string> = {
 
 /**
  * A momentary push button: it sits proud of the panel and physically depresses on press.
- * `primary` is the one amber-capped button on the panel — reserve it for Apply.
+ * `primary` is the one amber-capped button on the panel — reserve it for the main action.
  */
 export function GearButton({
   children,

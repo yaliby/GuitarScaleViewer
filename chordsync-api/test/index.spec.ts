@@ -1,6 +1,5 @@
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { lookupKeyFromCatalogs } from "../src/catalogKeyLookup";
 import { parseKeyAndMode, parseSpotifyStyleKey } from "../src/keyParse";
 import worker from "../src/index";
 
@@ -23,140 +22,15 @@ describe("key parsing", () => {
 
   it("parses ReccoBeats/Spotify style integers", () => {
     expect(parseSpotifyStyleKey(4, 0)).toEqual({ key: "E", mode: "minor" });
-    // Pitch class 1 as a major key is Db (five flats), not C# (seven sharps).
     expect(parseSpotifyStyleKey(1, 1)).toEqual({ key: "Db", mode: "major" });
   });
 });
 
-describe("catalog fallbacks", () => {
-  it("uses ReccoBeats when title and artist match", async () => {
-    const { hit } = await lookupKeyFromCatalogs("Blinding Lights", "The Weeknd", {
-      fetch: async (input) => {
-        const url = String(input);
-        if (url.includes("/v1/track/search")) {
-          return jsonResponse({
-            content: [
-              {
-                id: "recco-1",
-                trackTitle: "Blinding Lights",
-                popularity: 87,
-                href: "https://open.spotify.com/track/abc123",
-                artists: [{ name: "The Weeknd" }],
-              },
-            ],
-          });
-        }
-        if (url.includes("/v1/audio-features")) {
-          return jsonResponse({ content: [{ key: 1, mode: 0 }] });
-        }
-        return jsonResponse({ error: "unexpected " + url }, 500);
-      },
-    });
-    expect(hit).toMatchObject({
-      provider: "reccobeats",
-      key: "C#",
-      mode: "minor",
-    });
-  });
-
-  it("falls through to MusicIWant then ReccoBeats features", async () => {
-    const { hit } = await lookupKeyFromCatalogs("Wonderwall", "Oasis", {
-      fetch: async (input) => {
-        const url = String(input);
-        if (url.includes("api.reccobeats.com/v1/track/search")) {
-          return jsonResponse({ content: [] });
-        }
-        if (url.includes("musiciwant.com/api/v1/song")) {
-          return jsonResponse({
-            found: true,
-            song: { title: "Wonderwall", artist: "Oasis", spotify_id: "spot-1" },
-          });
-        }
-        if (url.includes("/v1/audio-features")) {
-          return jsonResponse({ content: [{ key: 2, mode: 1 }] });
-        }
-        return jsonResponse({ error: "unexpected " + url }, 500);
-      },
-    });
-    expect(hit).toMatchObject({
-      provider: "musiciwant",
-      key: "D",
-      mode: "major",
-      remoteId: "spot-1",
-    });
-  });
-
-  it("uses FreqBlog when an API key is present and earlier catalogs miss", async () => {
-    const { hit } = await lookupKeyFromCatalogs("Black", "Pearl Jam", {
-      freqblogApiKey: "fb_test",
-      fetch: async (input, init) => {
-        const url = String(input);
-        if (url.includes("api.reccobeats.com") || url.includes("musiciwant.com")) {
-          return jsonResponse({ found: false, content: [] });
-        }
-        if (url.includes("api.freqblog.com/lookup")) {
-          const headers = new Headers(init?.headers);
-          expect(headers.get("X-API-Key")).toBe("fb_test");
-          return jsonResponse({
-            track_name: "Black",
-            artist_name: "Pearl Jam",
-            key: "E-Minor",
-            isrc: "US123",
-          });
-        }
-        return jsonResponse({ error: "unexpected " + url }, 500);
-      },
-    });
-    expect(hit).toMatchObject({ provider: "freqblog", key: "E", mode: "minor" });
-  });
-
-  it("uses GetSongBPM last when its key is configured", async () => {
-    const { hit } = await lookupKeyFromCatalogs("Black", "Pearl Jam", {
-      getsongbpmApiKey: "gsb_test",
-      fetch: async (input) => {
-        const url = String(input);
-        if (url.includes("getsongbpm.com")) {
-          return jsonResponse({
-            search: [
-              {
-                id: "song-1",
-                song_title: "Black",
-                artist: { name: "Pearl Jam" },
-                key_of: "E",
-                mode: "minor",
-              },
-            ],
-          });
-        }
-        return jsonResponse({ found: false, content: [] });
-      },
-    });
-    expect(hit).toMatchObject({ provider: "getsongbpm", key: "E", mode: "minor" });
-  });
-});
-
 describe("lookup-song worker", () => {
-  it("returns a catalog hit when the verified database is unavailable", async () => {
+  it("returns a verified miss when the database is unavailable, without calling catalogs", async () => {
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.includes("/v1/track/search")) {
-        return jsonResponse({
-          content: [
-            {
-              id: "recco-db-miss",
-              trackTitle: "Black",
-              popularity: 70,
-              href: "https://open.spotify.com/track/black1",
-              artists: [{ name: "Pearl Jam" }],
-            },
-          ],
-        });
-      }
-      if (url.includes("/v1/audio-features")) {
-        return jsonResponse({ content: [{ key: 4, mode: 0 }] });
-      }
-      return originalFetch(input as RequestInfo, init);
+    globalThis.fetch = (async () => {
+      throw new Error("no catalog call expected");
     }) as typeof fetch;
 
     try {
@@ -167,26 +41,16 @@ describe("lookup-song worker", () => {
       const response = await worker.fetch(request, env, ctx);
       await waitOnExecutionContext(ctx);
       expect(response.status).toBe(200);
-      const body = (await response.json()) as {
-        found: boolean;
-        source: string;
-        catalogsTried: boolean;
-        song: { musical_key: string; mode: string; verified: boolean };
-      };
-      expect(body.found).toBe(true);
-      expect(body.source).toBe("reccobeats");
-      expect(body.catalogsTried).toBe(true);
-      expect(body.song).toMatchObject({
-        musical_key: "E",
-        mode: "minor",
-        verified: false,
+      await expect(response.json()).resolves.toMatchObject({
+        found: false,
+        song: null,
       });
     } finally {
       globalThis.fetch = originalFetch;
     }
   });
 
-  it("returns a catalog miss instead of 500 when nothing matches", async () => {
+  it("returns a miss instead of 500 when nothing matches", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async () => jsonResponse({ content: [], found: false })) as typeof fetch;
     try {
@@ -199,7 +63,6 @@ describe("lookup-song worker", () => {
       expect(response.status).toBe(200);
       await expect(response.json()).resolves.toMatchObject({
         found: false,
-        catalogsTried: true,
         song: null,
       });
     } finally {
@@ -207,52 +70,7 @@ describe("lookup-song worker", () => {
     }
   });
 
-  it("searches catalogs with the cleaned title and artist, not the raw announcement", async () => {
-    const originalFetch = globalThis.fetch;
-    const searched: string[] = [];
-    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.includes("/v1/track/search")) {
-        searched.push(new URL(url).searchParams.get("searchText") ?? "");
-        return jsonResponse({
-          content: [
-            {
-              id: "recco-noisy",
-              trackTitle: "Numb",
-              popularity: 90,
-              href: "https://open.spotify.com/track/numb1",
-              artists: [{ name: "Linkin Park" }],
-            },
-          ],
-        });
-      }
-      if (url.includes("/v1/audio-features")) {
-        return jsonResponse({ content: [{ key: 6, mode: 1 }] });
-      }
-      return originalFetch(input as RequestInfo, init);
-    }) as typeof fetch;
-
-    try {
-      const request = new IncomingRequest(
-        "http://example.com/lookup-song?title=" +
-          encodeURIComponent("Linkin Park - Numb (Official Video) [HD]") +
-          "&artist=" +
-          encodeURIComponent("Linkin Park - Topic"),
-      );
-      const ctx = createExecutionContext();
-      const response = await worker.fetch(request, env, ctx);
-      await waitOnExecutionContext(ctx);
-      expect(searched).toEqual(["Numb"]);
-      await expect(response.json()).resolves.toMatchObject({
-        found: true,
-        song: { musical_key: "F#", mode: "major" },
-      });
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
-  });
-
-  it("rejects an empty title or artist without touching the catalogs", async () => {
+  it("rejects an empty title or artist without touching the database", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async () => {
       throw new Error("no catalog call expected");
@@ -262,8 +80,6 @@ describe("lookup-song worker", () => {
       const ctx = createExecutionContext();
       const response = await worker.fetch(request, env, ctx);
       await waitOnExecutionContext(ctx);
-      // Empty metadata is a caller bug, not a song the catalogs could answer for,
-      // so it is refused up front rather than reported as a miss.
       expect(response.status).toBe(400);
       await expect(response.json()).resolves.toEqual({ error: "title is required" });
     } finally {

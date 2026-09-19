@@ -7,16 +7,36 @@ export type KeyReadoutProps = {
   root: string;
   scaleType: ScaleType;
   notes: ScaleNote[];
-  /** Where the shown key came from: "Verified", "Catalog" or "Detected". */
+  /** Where the shown key came from: "Verified" or "Detected". */
   sourceLabel: string;
+  /**
+   * False when the engine cannot separate this key from its relative. The seven notes below are
+   * right either way; the root marker and the degree ruler are the half that is a coin flip.
+   */
+  tonicSettled?: boolean;
+  /** The other reading of the same notes, shown so the player can judge it at a glance. */
+  relativeAlternative?: string | null;
 };
 
 /**
  * The instrument's main display, wearing the Jam key card. This is the single largest element on
  * the panel by design — a player glancing over from three metres away should be able to read the
  * key and nothing else. The milled degree ruler stays: it is the Lab's, not Jam's.
+ *
+ * When the tonic is open the card does not hide the answer and does not hedge the whole display:
+ * the note row stays at full strength because it is correct, and only the root marker and the
+ * degree numbers — the parts that actually depend on which note is home — step back. Asserting a
+ * root the engine did not earn is what sent players to the `Relative` button, and pressing a
+ * button is the one thing this app promises they will never have to do.
  */
-export function KeyReadout({ root, scaleType, notes, sourceLabel }: KeyReadoutProps) {
+export function KeyReadout({
+  root,
+  scaleType,
+  notes,
+  sourceLabel,
+  tonicSettled = true,
+  relativeAlternative = null,
+}: KeyReadoutProps) {
   const degreeLabels = SCALE_DEGREE_LABELS[scaleType];
 
   return (
@@ -37,15 +57,20 @@ export function KeyReadout({ root, scaleType, notes, sourceLabel }: KeyReadoutPr
             <span>{SCALE_TYPE_LABELS[scaleType]}</span>
           </motion.div>
         </AnimatePresence>
+        {!tonicSettled && relativeAlternative ? (
+          <p className="lab-key-alt" data-testid="jam-key-alt">
+            or <b>{relativeAlternative}</b> — same notes
+          </p>
+        ) : null}
       </div>
 
       {/* Scale tones as a milled ruler: fixed cells, degree engraved beneath each note. */}
       <div
-        className="lab-ruler"
+        className={`lab-ruler${tonicSettled ? '' : ' is-tonic-open'}`}
         style={{
           gridTemplateColumns: `repeat(${notes.length}, minmax(0, 1fr))`,
         }}
-        aria-label="Scale tones"
+        aria-label={tonicSettled ? 'Scale tones' : 'Scale tones — root not yet resolved'}
       >
         {notes.map((note, i) => (
           <motion.div

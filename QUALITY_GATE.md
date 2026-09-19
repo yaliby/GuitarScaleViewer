@@ -53,7 +53,7 @@
 - [ ] `npx vitest run` — הכל עובר. **ספור טסטים מדולגים; כל דילוג הוא ממצא.**
 - [ ] הפרד בדו"ח בין טסטים **hermetic** (רצים לא־מקוונים) לבין טסטים שתלויים ברשת חיה. טסט תלוי־רשת אינו רגרסיה אמינה — ציין אותו במפורש.
 - [ ] `compatibility_date` ב־`wrangler.jsonc` לא מקדים את ה־runtime המותקן. אם ה־build מדפיס `Falling back to "..."` — זה ממצא.
-- [ ] כל binding שהקוד קורא לו קיים ב־`.dev.vars.example`: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `ADMIN_SECRET`, `FREQBLOG_API_KEY`, `GETSONGBPM_API_KEY`. חוסר = `FAIL`.
+- [ ] כל binding שהקוד קורא לו קיים ב־`.dev.vars.example`: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `ADMIN_SECRET`. חוסר = `FAIL`.
 - [ ] **בדיקת חיים של הפריסה** (ראה §3.3) — לא מספיק שהקוד תקין; ה־Worker צריך לענות.
 
 ### 2.3 Rust / Tauri

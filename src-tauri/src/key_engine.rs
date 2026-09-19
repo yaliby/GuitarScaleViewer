@@ -320,6 +320,113 @@ fn relative_pair_label(key_a: &str, scale_a: &str, key_b: &str, scale_b: &str) -
     format!("{key_a} {scale_a} vs {key_b} {scale_b}")
 }
 
+/// The other name for the same seven notes: C major <-> A minor.
+pub fn relative_of(pc: i32, scale: &str) -> (i32, &'static str) {
+    if scale == "minor" {
+        ((pc + 3).rem_euclid(12), "major")
+    } else {
+        ((pc - 3).rem_euclid(12), "minor")
+    }
+}
+
+/// Share of chroma energy at the minor end's raised seventh below which the tonic is treated as
+/// unearned. Chosen from the corpus sweep in `docs/KEY_ACCURACY_BASELINE.md`: at 0.025 every one
+/// of the engine's 22 relative slips is caught, and the curve is flat from there to 0.040, so the
+/// value is not sitting on a cliff.
+const TONIC_EVIDENCE_MIN_SHARE: f32 = 0.025;
+
+/// Is there positive evidence for *which* end of a relative pair is home?
+///
+/// This deliberately does not try to predict whether the engine is wrong — measured on the
+/// 72-clip corpus, nothing in the chroma does: the correlation gap between a key and its relative
+/// has a median of 0.564 when the engine is right and 0.527 when it slips, and the best single
+/// threshold over it scores below the base rate. Bass magnitude is no better (it picks the true
+/// tonic in 1 of the 6 slips), and neither is weighting the bass by where it falls in time.
+///
+/// What *is* separable is whether the recording contains the one cue that distinguishes a minor
+/// key from its relative major at all: the **raised seventh** of the minor end, which arrives with
+/// harmonic minor's major V. Loops built from natural-minor chords do not have it, and in those
+/// the tonal centre genuinely is not determined by the harmony — a musician reading a lead sheet
+/// of Am-F-C-G with no melody could not call it either.
+///
+/// So the question this answers is "has the root been earned?", and a false answer means the
+/// readout says so rather than asserting one end. On the corpus that catches 22 of 22 slips, at
+/// the cost of hedging 24 of 48 correct answers.
+pub fn tonic_is_supported(chroma: &[f32], key: &str, scale: &str) -> Option<bool> {
+    if chroma.len() != 12 || !chroma.iter().all(|v| v.is_finite() && *v >= 0.0) {
+        return None;
+    }
+    let total: f32 = chroma.iter().sum();
+    if total <= f32::EPSILON {
+        return None;
+    }
+    let pc = tonic_to_pc(key)?;
+    // Whichever side of the pair is the minor one: its raised seventh is the cue.
+    let minor_pc = if scale == "minor" {
+        pc
+    } else {
+        relative_of(pc, scale).0
+    };
+    let raised_seventh = chroma[((minor_pc + 11).rem_euclid(12)) as usize] / total;
+    Some(raised_seventh > TONIC_EVIDENCE_MIN_SHARE)
+}
+
+const PITCH_NAMES: [&str; 12] = [
+    "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+];
+
+/// Marks the payload's tonic as unresolved when nothing in the audio earned it, and names the
+/// relative reading so the UI can offer it instead of the player hunting for it.
+///
+/// The seven notes are untouched: they are the same set either way, and on the corpus they are
+/// right 97.2% of the time. Only the claim about which one is home is withdrawn.
+fn apply_tonic_evidence(mut payload: DetectedKeyPayload, chroma: Option<&[f32]>) -> DetectedKeyPayload {
+    let (Some(chroma), Some(key), Some(scale)) = (
+        chroma,
+        payload.primary_key.clone(),
+        payload.primary_scale.clone(),
+    ) else {
+        return payload;
+    };
+    if !matches!(scale.as_str(), "major" | "minor") {
+        return payload;
+    }
+    match tonic_is_supported(chroma, &key, &scale) {
+        Some(false) => {}
+        _ => return payload,
+    }
+
+    let Some(pc) = tonic_to_pc(&key) else {
+        return payload;
+    };
+    let (rel_pc, rel_scale) = relative_of(pc, &scale);
+    let rel_key = PITCH_NAMES[rel_pc as usize];
+    let rel_display = format!("{rel_key} {rel_scale}");
+
+    // The relative goes at the head of the alternatives so the frontend's `relativeHedge()` finds
+    // it as the runner-up; anything the consensus already listed keeps its order behind it.
+    payload
+        .alternatives
+        .retain(|c| !(c.key == rel_key && c.scale == rel_scale));
+    payload.alternatives.insert(
+        0,
+        KeyCandidate {
+            key: rel_key.to_string(),
+            scale: rel_scale.to_string(),
+            display_name: rel_display.clone(),
+            confidence: payload.confidence.min(1.0),
+        },
+    );
+    payload.ambiguous = true;
+    payload.state = "ambiguous".to_string();
+    payload.ready_to_apply = false;
+    payload.reason = Some(format!(
+        "relative_pair_ambiguity:pair={} noLeadingTone=true",
+        relative_pair_label(&key, &scale, rel_key, rel_scale)
+    ));
+    payload
+}
+
 fn family_mixture_detected(tonic_counts: &BTreeMap<String, usize>) -> bool {
     if tonic_counts.len() < 3 {
         return false;
@@ -2129,6 +2236,10 @@ pub fn spawn_key_engine(app: AppHandle) {
                                 enough_audio,
                                 &decision_history,
                             );
+                            // Withdraw the root when the audio never earned it. Runs on the
+                            // consensus rather than on a single window so a chord that happens
+                            // to carry a leading tone cannot settle the whole song by itself.
+                            payload = apply_tonic_evidence(payload, output.chroma.as_deref());
                             if backend_used == "numpy_fallback" {
                                 // Preserve the measured consensus score for Live Jam's
                                 // estimate gate. This is evidence, not calibrated accuracy.
@@ -2650,6 +2761,131 @@ fn join_engine_before_deadline(handle: std::thread::JoinHandle<()>, deadline: Du
         std::thread::sleep(Duration::from_millis(10));
     }
     handle.join().is_ok()
+}
+
+#[cfg(test)]
+mod tonic_evidence_tests {
+    use super::*;
+
+    /// A chroma with the given pitch classes lit. Everything else sits at a small floor, the way
+    /// real spectral leakage does, so "has a leading tone" cannot be satisfied by literal silence.
+    fn chroma_with(strong: &[i32], strength: f32) -> Vec<f32> {
+        let mut chroma = vec![1.0_f32; 12];
+        for pc in strong {
+            chroma[pc.rem_euclid(12) as usize] = strength;
+        }
+        chroma
+    }
+
+    #[test]
+    fn a_raised_seventh_earns_the_tonic() {
+        // A minor with a G# in it: that G# only comes from the E major chord of harmonic minor,
+        // and it is the one thing C major cannot supply.
+        let chroma = chroma_with(&[9, 0, 4, 8], 20.0); // A, C, E, G#
+        assert_eq!(tonic_is_supported(&chroma, "A", "minor"), Some(true));
+    }
+
+    #[test]
+    fn a_natural_minor_loop_does_not_earn_it() {
+        // A minor with a G natural and no G#: the same seven notes as C major, with nothing in
+        // the audio to say which one is home.
+        let chroma = chroma_with(&[9, 0, 4, 7], 20.0); // A, C, E, G
+        assert_eq!(tonic_is_supported(&chroma, "A", "minor"), Some(false));
+    }
+
+    #[test]
+    fn the_cue_is_read_from_the_minor_end_whichever_side_was_named() {
+        // The question is about the pair, not about the name the engine happened to use, so
+        // C major and A minor must get the same verdict from the same audio.
+        let earned = chroma_with(&[9, 0, 4, 8], 20.0);
+        assert_eq!(
+            tonic_is_supported(&earned, "C", "major"),
+            tonic_is_supported(&earned, "A", "minor")
+        );
+        let unearned = chroma_with(&[9, 0, 4, 7], 20.0);
+        assert_eq!(
+            tonic_is_supported(&unearned, "C", "major"),
+            tonic_is_supported(&unearned, "A", "minor")
+        );
+    }
+
+    #[test]
+    fn nonsense_input_yields_no_verdict_rather_than_a_guess() {
+        assert_eq!(tonic_is_supported(&[1.0; 11], "A", "minor"), None);
+        assert_eq!(tonic_is_supported(&[0.0; 12], "A", "minor"), None);
+        assert_eq!(tonic_is_supported(&[f32::NAN; 12], "A", "minor"), None);
+        assert_eq!(tonic_is_supported(&[1.0; 12], "H", "minor"), None);
+    }
+
+    #[test]
+    fn relative_pairs_resolve_both_directions() {
+        assert_eq!(relative_of(0, "major"), (9, "minor")); // C major -> A minor
+        assert_eq!(relative_of(9, "minor"), (0, "major")); // A minor -> C major
+        assert_eq!(relative_of(2, "major"), (11, "minor")); // D major -> B minor
+    }
+
+    fn payload(key: &str, scale: &str) -> DetectedKeyPayload {
+        let mut p = DetectedKeyPayload::unavailable("test");
+        p.primary_key = Some(key.to_string());
+        p.primary_scale = Some(scale.to_string());
+        p.display_name = Some(format!("{key} {scale}"));
+        p.confidence = 0.9;
+        p.ambiguous = false;
+        p.state = "likely_key".to_string();
+        p.ready_to_apply = true;
+        p
+    }
+
+    #[test]
+    fn an_unearned_tonic_is_withdrawn_and_the_relative_is_offered() {
+        let chroma = chroma_with(&[9, 0, 4, 7], 20.0); // natural minor: no leading tone
+        let out = apply_tonic_evidence(payload("C", "major"), Some(&chroma));
+        assert!(out.ambiguous, "an unearned root must not be asserted");
+        assert_eq!(out.state, "ambiguous");
+        // The notes stay exactly where they were: they are right either way.
+        assert_eq!(out.primary_key.as_deref(), Some("C"));
+        assert_eq!(out.primary_scale.as_deref(), Some("major"));
+        // ...and the other reading is named, so the player never has to work it out.
+        let first = out.alternatives.first().expect("relative offered");
+        assert_eq!((first.key.as_str(), first.scale.as_str()), ("A", "minor"));
+        assert!(out.reason.unwrap().contains("relative_pair_ambiguity"));
+    }
+
+    #[test]
+    fn an_earned_tonic_is_left_alone() {
+        let chroma = chroma_with(&[9, 0, 4, 8], 20.0); // leading tone present
+        let out = apply_tonic_evidence(payload("A", "minor"), Some(&chroma));
+        assert!(!out.ambiguous);
+        assert!(out.alternatives.is_empty());
+    }
+
+    #[test]
+    fn a_backend_without_a_chroma_changes_nothing() {
+        // The python sidecar reports candidates instead of a chroma; it must pass through
+        // untouched rather than have its tonic silently withdrawn.
+        let before = payload("A", "minor");
+        let after = apply_tonic_evidence(before.clone(), None);
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn the_relative_is_not_listed_twice() {
+        let chroma = chroma_with(&[9, 0, 4, 7], 20.0);
+        let mut p = payload("C", "major");
+        p.alternatives.push(KeyCandidate {
+            key: "A".to_string(),
+            scale: "minor".to_string(),
+            display_name: "A minor".to_string(),
+            confidence: 0.4,
+        });
+        let out = apply_tonic_evidence(p, Some(&chroma));
+        let relatives = out
+            .alternatives
+            .iter()
+            .filter(|c| c.key == "A" && c.scale == "minor")
+            .count();
+        assert_eq!(relatives, 1);
+    }
 }
 
 #[cfg(test)]

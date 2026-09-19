@@ -99,6 +99,7 @@ describe('buildLookupInputs', () => {
       paused: true,
     });
     expect(buildLookupInputs(media({ playbackStatus: 'none' }))).toMatchObject({ hasSession: false });
+    expect(buildLookupInputs(media({ playbackStatus: 'closed' }))).toMatchObject({ hasSession: false });
     expect(buildLookupInputs(media({ playbackStatus: 'media_session_unavailable' }))).toMatchObject({
       hasSession: false,
     });

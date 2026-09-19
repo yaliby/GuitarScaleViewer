@@ -120,7 +120,7 @@ describe('pitchClassForNoteLabel', () => {
 });
 
 /**
- * Cloud and catalog keys now arrive spelled the way the key is written, so a flat root has to
+ * Cloud and library keys now arrive spelled the way the key is written, so a flat root has to
  * spell its scale with flats rather than fall back to the chromatic sharp names.
  */
 describe('flat key spelling', () => {

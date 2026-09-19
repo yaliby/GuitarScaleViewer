@@ -77,7 +77,7 @@ export function buildLookupInputs(media: MediaSessionUiState): LookupInputs {
     trackIdentity: buildTrackIdentity(media),
     title: media.title?.trim() ?? '',
     artist: media.artist?.trim() ?? '',
-    hasSession: status !== 'none' && status !== 'media_session_unavailable',
+    hasSession: status !== 'none' && status !== 'closed' && status !== 'media_session_unavailable',
     playing: status === 'playing',
     paused: PAUSED_STATUSES.includes(status),
   };

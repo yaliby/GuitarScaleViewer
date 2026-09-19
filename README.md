@@ -57,16 +57,17 @@ you want to stop the development process.
 
 1. Play music on the **same Windows PC**, for example in Spotify or a browser.
    The app captures computer playback, not music playing independently on a phone.
-2. Open **Live Jam**, turn **Follow the song** on, and leave **Lock** off.
-3. Let the music play while the app collects enough audio. Detection is not
-   immediate: a new track needs a sustained passage before a key is worth acting
-   on.
+2. Open **Live Jam**. That is the whole setup — there is nothing to switch on.
+3. The neck follows the song by itself. A key appears at once and sharpens as
+   the engine hears more: analysis is not instant chord recognition, so a new
+   track improves over its first minute rather than arriving finished.
 4. The **chord bank** below the neck holds every shape that lives in the key.
-   Use **Apply** to take a detection by hand, **Lock** to freeze the current
-   reading, or the setup row above the neck to choose a key, tuning and capo.
+   **Lock** freezes the neck where it is, and the setup row above the neck
+   overrides it by hand — both optional.
 
-If detection is uncertain, the deck says so and leaves the neck alone. The
-practice tools also work with a manually chosen key.
+If the pipeline is unsure it still shows its best answer and says how sure it
+is, rather than leaving the neck blank. The practice tools also work with a
+manually chosen key.
 
 ## Practice tools
 
@@ -75,7 +76,7 @@ practice tools also work with a manually chosen key.
 - Click or keyboard-activate notes to hear them. Play ascending, descending, or returning scale exercises with looping, a metronome, and adjustable tempo and volume.
 - Explore playable chord voicings and build progressions. Playback highlights the active chord and its notes on the fretboard.
 - Save named practice setups and restore your last session automatically on the same device.
-- Follow Windows media metadata and review local key suggestions. Lock the practice key while a song continues playing.
+- Follow the media session and put the song's key on the neck automatically. Lock the practice key while a song continues playing.
 - **Live Jam:** the full-window neck — all 24 frets, a listening deck, the chord bank for the current key, and its own setup row — with the navigation folded into the hamburger menu. It plays the same key, tuning and capo as the rest of the workspace, so a key you land on here is the key you practice.
 
 The interface supports smaller screens, keyboard navigation, and the operating system's reduced-motion preference. Audio starts only after interaction. Practice sounds use synthesized tones.
@@ -119,7 +120,7 @@ the commands above create the installer locally.
 
 `dev.sh` probes whichever analyzer backend is selected before starting and refuses to launch
 with none available. Set `ALLOW_DEGRADED_ANALYZER=1` to start anyway; the UI then reports
-`analyzer_unavailable` and Apply stays disabled. It also picks the first free port in
+`analyzer_unavailable` and the neck falls back to the cloud legs alone. It also picks the first free port in
 1420-1460 and hands the same number to both Vite and the webview's `devUrl`, so a stale dev
 server neither blocks startup nor gets loaded by mistake. Pin it with `GSV_DEV_PORT`.
 
@@ -132,10 +133,11 @@ GSMTC/WASAPI path on Windows.
 |---|---|
 | `src/` | React + Vite frontend (Studio shell, fretboard, chord library, key-resolution hooks) |
 | `src/LiveJamScreen.tsx` | Live Jam: the detailed neck chassis, driven by the workspace's shared session |
+| `src/services/keyFusion.ts` | The single decision: which key goes on the neck, and how certain it is |
+| `src/data/verifiedKeys.json` | Human-entered keys, bundled so they answer with no network call |
 | `src-tauri/` | Rust backend: audio capture, OS now-playing metadata, key-detection engine |
 | `src-tauri/sidecars/key_analyzer/` | Python analyzer sidecar (essentia, numpy fallback) |
 | `src-tauri/sidecars/libkeyfinder_cli/` | Native libKeyFinder CLI analyzer backend |
-| `chordsync-api/` | Cloudflare Worker: verified key database + catalog lookups |
 
 ## Key detection backends
 
@@ -163,7 +165,15 @@ GSMTC/WASAPI path on Windows.
 | `ALLOW_DEGRADED_ANALYZER` | Let `dev.sh`/`dev.ps1` start without an analyzer backend | `0` |
 | `GSV_LOG_DIR` | Where the Rust side writes logs | `logs/` |
 
-Worker secrets live in `chordsync-api/.dev.vars` — see `.dev.vars.example`.
+## The verified library
+
+`src/data/verifiedKeys.json` holds the keys a person entered. It is the only source in the
+pipeline that is a transcription rather than an estimate, so it outranks the local engine, and it is bundled with the app so a song somebody has already transcribed
+never waits on a network round-trip to reach the neck.
+
+There is no server in this app: lookup is that JSON file, and a miss leaves the local engine
+as the remaining leg. Hand-editing the JSON works — the loader parses rather than trusts it,
+and an unreadable row is skipped instead of putting a broken root on the neck.
 
 ## Troubleshooting startup
 
@@ -175,19 +185,28 @@ Worker secrets live in `chordsync-api/.dev.vars` — see `.dev.vars.example`.
 - **Audio detection is unavailable in the browser:** launch with
   `npm.cmd run desktop`; browser mode supports manual practice, not Windows
   playback capture.
-- **Song title appears but no key is accepted:** keep music playing and check
-  Live Jam's listening status. A title match alone does not establish the key;
-  choose a suggested or manual key if the audio remains ambiguous.
+- **The key on the neck looks wrong:** check the certainty next to it on the
+  listening deck. "estimated" or "unsure" means one leg is guessing and the
+  engine has not heard enough yet; "confirmed" means two independent legs agree.
+  A song you know is worth adding to the verified library, which outranks every
+  estimate from then on — see `scripts/export-verified-keys.mjs`.
 
 See [Windows setup](docs/NATIVE_SETUP.md) for additional native diagnostics.
 
 ## Key detection
 
-In **Live Jam**, start music in a desktop player and turn **Follow the song** on. A verified library row is worth 100% and applies immediately; an unverified catalog hit is worth 70% and proposes rather than overrules; a local estimate is worth its own confidence, and nothing at all while the engine calls it ambiguous. Only a key worth at least the auto-apply threshold (85% by default) moves the neck unattended — everything else waits for **Apply**. Analysis needs a stretch of music; it is not instant chord recognition. **Lock** freezes the current reading, **Reset** clears the detector, and the setup row above the neck always overrides both. In a browser, choose a key manually; desktop audio capture requires the Windows app.
+Start music in a desktop player. The neck follows it: there is no switch to arm and no **Apply** to press, because a player holding a guitar cannot reach the screen. The pipeline always commits to its best current answer and revises it as evidence improves.
 
-The bundled analyzer can be uncertain, especially between relative major and minor keys. The deck labels local results as estimates, and the chord bank offers shapes that fit the key rather than a transcription of the song. Explore's separate automatic path still requires a ready, unambiguous result from a supported analyzer or a validated cloud match, and the practice lock prevents it from changing your practice context.
+Two legs can answer, and `src/services/keyFusion.ts` weighs them by where they came from rather than by how loudly they answered:
 
-Cloud lookup and user-submitted corrections require a configured backend. Source fixes and setup instructions are in [chordsync-api](chordsync-api/README.md); changing this repository does not deploy that service. Corrections are submitted only when you click the suggestion button.
+| Leg | What it is | Standing |
+|---|---|---|
+| Verified library | A person transcribed it | Wins outright. Read from the bundled table |
+| Local engine | Heard *this* recording | The only leg that can be right about a capo, a slack tuning or a pitched-up upload |
+
+The engine can still be uncertain, especially between relative major and minor keys, which is exactly why the verified library matters: a key a person enters there outranks every estimate for that song. Both Explore and Live Jam settle the key through the same module, so the two screens cannot disagree about what is playing.
+
+**Lock** freezes the neck, **Reset** clears the detector, and the setup row overrides by hand — a manual choice stands until the song itself changes. In a browser, choose a key manually; desktop audio capture requires the desktop app.
 
 ## Checks
 

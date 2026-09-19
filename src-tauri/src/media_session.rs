@@ -950,12 +950,17 @@ mod linux_mpris_tests {
     use std::sync::OnceLock;
     use zbus::zvariant::{OwnedValue, Value};
 
+    /// Always a **private** bus, never the developer's.
+    ///
+    /// This used to reuse `DBUS_SESSION_BUS_ADDRESS` when one was already set, which put the mock
+    /// player on the real desktop session alongside Spotify, Brave and anything else running. The
+    /// assertions then depended on whether the developer happened to be listening to music: the
+    /// test passed with a paused browser and failed the moment that browser started playing,
+    /// reporting the real track's title instead of "Karma Police". A test whose result is decided
+    /// by what is in someone's headphones is not a test.
     fn ensure_session_bus() -> bool {
         static STARTED: OnceLock<bool> = OnceLock::new();
         *STARTED.get_or_init(|| {
-            if std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_some() {
-                return true;
-            }
             let mut child = match Command::new("dbus-daemon")
                 .args(["--session", "--print-address", "--nofork", "--nopidfile"])
                 .stdout(Stdio::piped())

@@ -55,6 +55,17 @@ export function formatTraceLine(record: Pick<TraceRecord, 'seq' | 'scope' | 'eve
   return `[GSV #${seqLabel} ${record.scope}] ${record.event}  ${record.message}`;
 }
 
+/** One pasteable dump of a run, including the JSON payload on every line that has one. */
+export function formatTraceDump(rows: readonly TraceRecord[]): string {
+  return rows
+    .map((row) => {
+      const time = new Date(row.t).toISOString();
+      const detail = row.detail ? ` ${JSON.stringify(row.detail)}` : '';
+      return `${time} ${formatTraceLine(row)}${detail}`;
+    })
+    .join('\n');
+}
+
 export function getTraceBuffer(): readonly TraceRecord[] {
   return snapshot;
 }

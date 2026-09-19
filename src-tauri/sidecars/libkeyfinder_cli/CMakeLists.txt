@@ -29,4 +29,12 @@ else()
   target_link_libraries(gsv-libkeyfinder-cli PRIVATE ${KEYFINDER_LIBRARY})
 endif()
 
+# The packaged app ships this binary next to a copy of libkeyfinder.so.2 (see build.sh), because
+# libKeyFinder is usually built from source into /usr/local/lib and an end user's machine has no
+# such file. `$ORIGIN` makes the loader look beside the executable first, so the bundle is
+# self-contained instead of depending on the build machine's prefix.
+set_target_properties(gsv-libkeyfinder-cli PROPERTIES
+  BUILD_RPATH "$ORIGIN"
+  INSTALL_RPATH "$ORIGIN")
+
 install(TARGETS gsv-libkeyfinder-cli RUNTIME DESTINATION bin)

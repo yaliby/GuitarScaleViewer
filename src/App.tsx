@@ -43,7 +43,6 @@ import { getPositionFrets, getPositionWindow } from "./music/positions";
 import {
   DEFAULT_SESSION,
   buildExercise,
-  canAutoApply,
   readFavorites,
   readSession,
   storeFavorites,
@@ -52,6 +51,7 @@ import {
   type Favorite,
   type PracticeSession,
 } from "./practice/session";
+import { fuseKey, shouldRevise, type FusedKey } from "./services/keyFusion";
 import {
   SCALE_TYPES_ORDERED,
   SCALE_TYPE_LABELS,
@@ -61,11 +61,6 @@ import {
 import { buildScaleNotes, SCALE_DEGREE_LABELS } from "./scaleSpell";
 import { TUNING_PRESETS } from "./tunings";
 
-type DetectionCandidate = {
-  root: string;
-  scaleType: "major" | "minor";
-  automatic: boolean;
-};
 
 const ROOTS = [
   "C",
@@ -163,7 +158,9 @@ export default function App() {
   const [setupName, setSetupName] = useState("");
   const [toast, setToast] = useState<string | null>(null);
   const [locked, setLocked] = useState(false);
-  const [auto, setAuto] = useState(false);
+  /* The key the pipeline put on the neck, kept so the revision margin has something to beat. */
+  const [neckKey, setNeckKey] = useState<FusedKey | null>(null);
+  const prevLockedRef = useRef(locked);
   const [selectedChord, setSelectedChord] = useState<number | null>(null);
   const [voicingIndex, setVoicingIndex] = useState(0);
   const [playbackMode, setPlaybackMode] = useState<PlaybackMode>("scale");
@@ -361,68 +358,47 @@ export default function App() {
     [audio.step.notes, auditionMidi],
   );
 
-  const localRoot = detectedKey.primaryKey
-    ? tryNormalizeRoot(detectedKey.primaryKey)
-    : null;
-  const localScale =
-    detectedKey.primaryScale === "major" || detectedKey.primaryScale === "minor"
-      ? detectedKey.primaryScale
-      : null;
-  const cloudRoot = cloud.cloudHit
-    ? tryNormalizeRoot(cloud.cloudHit.key)
-    : null;
   /*
-   * An unverified catalog row is an estimate too, and it carries the relative-major bias the
-   * local engine resolves with real evidence — so it proposes a key, it does not overrule one.
-   * See services/resolveShownKey.
+   * Explore and Live Jam settle the key the same way, through the same module: two screens that
+   * disagreed about what song is playing would be a bug the player could see. See
+   * services/keyFusion for how the legs are weighed.
    */
-  const candidate: DetectionCandidate | null = useMemo(() => {
-    const localConfident = !!(localRoot && localScale && canAutoApply(detectedKey));
-    if (cloud.cloudHit && cloudRoot && (cloud.cloudHit.verified || !localConfident)) {
-      return {
-        root: cloudRoot,
-        scaleType: cloud.cloudHit.mode,
-        automatic: cloud.cloudHit.verified,
-      };
-    }
-    if (localRoot && localScale) {
-      return {
-        root: localRoot,
-        scaleType: localScale,
-        automatic: canAutoApply(detectedKey),
-      };
-    }
-    return null;
-  }, [cloud.cloudHit, cloudRoot, detectedKey, localRoot, localScale]);
-  const applyCandidate = useCallback(() => {
-    if (!candidate || locked) return;
-    if (
-      session.root !== candidate.root ||
-      session.scaleType !== candidate.scaleType
-    ) {
-      updateSession({ root: candidate.root, scaleType: candidate.scaleType });
-    }
-  }, [candidate, locked, session.root, session.scaleType, updateSession]);
+  const fused = useMemo(
+    () =>
+      fuseKey({
+        verified: cloud.cloudHit?.verified
+          ? { key: cloud.cloudHit.key, mode: cloud.cloudHit.mode, displayName: cloud.cloudHit.displayName }
+          : null,
+        detected: detectedKey,
+        held: neckKey,
+        trackIdentity: cloud.trackIdentity,
+      }),
+    [cloud.cloudHit, cloud.trackIdentity, detectedKey, neckKey],
+  );
+  /* The neck follows the song unless the player has locked it. Nothing to arm, nothing to press.
+     Unlock reapplies the current fused key: a leftover or hand-edited board must not keep
+     showing G while the pipeline has already settled on A minor. */
   useEffect(() => {
-    if (
-      view !== "jam" &&
-      auto &&
-      !locked &&
-      candidate?.automatic &&
-      (session.root !== candidate.root ||
-        session.scaleType !== candidate.scaleType)
-    ) {
-      updateSession({ root: candidate.root, scaleType: candidate.scaleType });
+    const justUnlocked = prevLockedRef.current && !locked;
+    prevLockedRef.current = locked;
+    if (view === "jam" || locked) {
+      return;
     }
-  }, [
-    view,
-    auto,
-    candidate,
-    locked,
-    session.root,
-    session.scaleType,
-    updateSession,
-  ]);
+    if (!fused.root || !fused.scale) {
+      return;
+    }
+    if (!justUnlocked && !shouldRevise(neckKey, fused)) {
+      return;
+    }
+    const root = tryNormalizeRoot(fused.root);
+    if (!root) {
+      return;
+    }
+    setNeckKey(fused);
+    if (session.root !== root || session.scaleType !== fused.scale) {
+      updateSession({ root, scaleType: fused.scale });
+    }
+  }, [fused, locked, neckKey, session.root, session.scaleType, updateSession, view]);
 
   const audition = useCallback(
     (midi: readonly number[]) => {
@@ -535,7 +511,6 @@ export default function App() {
   };
   const loadFavorite = (favorite: Favorite) => {
     setSession(favorite.session);
-    setAuto(false);
     setSidebarOpen(false);
     setToast(`Loaded ${favorite.name}`);
   };
@@ -687,7 +662,6 @@ export default function App() {
         aria-label="Reset practice setup"
         onClick={() => {
           setSession(DEFAULT_SESSION);
-          setAuto(false);
         }}
       >
         <RotateCcw size={16} />
@@ -923,12 +897,9 @@ export default function App() {
       media={media}
       detected={detectedKey}
       cloud={cloud}
+      fused={fused}
       locked={locked}
-      auto={auto}
       onLock={() => setLocked((value) => !value)}
-      onAuto={setAuto}
-      onApply={applyCandidate}
-      canApply={candidate !== null}
       onRetry={() => void resetDetection()}
       root={session.root}
       scale={session.scaleType}

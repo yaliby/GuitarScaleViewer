@@ -1,5 +1,30 @@
 import type { DetectedKeyAbState } from '../hooks/useDetectedKey';
+import type { KeyCertainty } from '../services/keyFusion';
 import type { LedTone } from './gear';
+
+export type { KeyCertainty };
+
+/**
+ * How the deck words the pipeline's own certainty.
+ *
+ * The wording is deliberately about the evidence rather than about a score, because a number
+ * invites the player to decide whether to trust it — and deciding is exactly what they are not
+ * being asked to do. "Confirmed" says two independent legs agree; "estimated" says one leg is
+ * guessing; neither asks for a reply.
+ */
+export function certaintyLabel(certainty: KeyCertainty): string {
+  const labels: Record<KeyCertainty, string> = {
+    verified: 'verified',
+    lone: 'estimated',
+    // Not "unsure": the notes are settled and only the root is open. Wording it as doubt would
+    // send the player looking for a problem with a diagram that is already correct.
+    tonic_open: 'notes sure, root open',
+    hedged: 'unsure',
+    held: 'holding',
+    none: 'listening',
+  };
+  return labels[certainty] ?? 'listening';
+}
 
 export function mediaPlaybackDisplayLabel(status: string): string {
   const labels: Record<string, string> = {
@@ -41,10 +66,9 @@ export function resolutionStateLabel(state: string): string {
   const labels: Record<string, string> = {
     no_session: 'No active session',
     paused: 'Paused',
-    cloud_lookup: 'Checking cloud database and catalogs',
+    cloud_lookup: 'Checking verified library',
     cloud_hit: 'Verified key found',
-    catalog_hit: 'Catalog key found',
-    cloud_miss_local_detecting: 'No catalog key, detecting locally',
+    cloud_miss_local_detecting: 'Not in the library, detecting locally',
     local_detecting: 'Local detection fallback',
     ready: 'Ready',
     ambiguous: 'Ambiguous',
@@ -165,11 +189,10 @@ export function detectionLed(state: string): { tone: LedTone; pulse: boolean } {
   }
 }
 
-/** Lamp for the cloud/catalog lookup leg of the pipeline. */
+/** Lamp for the verified-library lookup leg of the pipeline. */
 export function resolutionLed(state: string): { tone: LedTone; pulse: boolean } {
   switch (state) {
     case 'cloud_hit':
-    case 'catalog_hit':
       return { tone: 'data', pulse: false };
     case 'cloud_lookup':
       return { tone: 'data', pulse: true };
@@ -237,11 +260,9 @@ export function deckStatusLabel({
  * "Manual" until the two agree, rather than claiming credit for a hand-typed key.
  */
 export function keySourceLabel({
-  resolutionState,
   hasCloudHit,
   showingProposedKey,
 }: {
-  resolutionState: string;
   hasCloudHit: boolean;
   showingProposedKey: boolean;
 }): string {
@@ -249,7 +270,7 @@ export function keySourceLabel({
     return 'Manual';
   }
   if (hasCloudHit) {
-    return resolutionState === 'catalog_hit' ? 'Catalog' : 'Verified';
+    return 'Verified';
   }
   return 'Detected';
 }

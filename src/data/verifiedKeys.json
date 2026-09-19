@@ -1,0 +1,390 @@
+{
+  "version": 1,
+  "generatedAt": null,
+  "entries": [
+    {
+      "title": "Smells Like Teen Spirit",
+      "artist": "Nirvana",
+      "key": "F",
+      "mode": "minor"
+    },
+    {
+      "title": "Billie Jean",
+      "artist": "Michael Jackson",
+      "key": "F#",
+      "mode": "minor"
+    },
+    {
+      "title": "Hotel California",
+      "artist": "Eagles",
+      "key": "B",
+      "mode": "minor"
+    },
+    {
+      "title": "Stairway to Heaven",
+      "artist": "Led Zeppelin",
+      "key": "A",
+      "mode": "minor"
+    },
+    {
+      "title": "Nothing Else Matters",
+      "artist": "Metallica",
+      "key": "E",
+      "mode": "minor"
+    },
+    {
+      "title": "Enter Sandman",
+      "artist": "Metallica",
+      "key": "E",
+      "mode": "minor"
+    },
+    {
+      "title": "Smoke on the Water",
+      "artist": "Deep Purple",
+      "key": "G",
+      "mode": "minor"
+    },
+    {
+      "title": "Another One Bites the Dust",
+      "artist": "Queen",
+      "key": "E",
+      "mode": "minor"
+    },
+    {
+      "title": "Rolling in the Deep",
+      "artist": "Adele",
+      "key": "C",
+      "mode": "minor"
+    },
+    {
+      "title": "Hello",
+      "artist": "Adele",
+      "key": "F",
+      "mode": "minor"
+    },
+    {
+      "title": "Shape of You",
+      "artist": "Ed Sheeran",
+      "key": "C#",
+      "mode": "minor"
+    },
+    {
+      "title": "Blinding Lights",
+      "artist": "The Weeknd",
+      "key": "F",
+      "mode": "minor"
+    },
+    {
+      "title": "Uptown Funk",
+      "artist": "Mark Ronson",
+      "key": "D",
+      "mode": "minor"
+    },
+    {
+      "title": "bad guy",
+      "artist": "Billie Eilish",
+      "key": "G",
+      "mode": "minor"
+    },
+    {
+      "title": "Numb",
+      "artist": "Linkin Park",
+      "key": "F#",
+      "mode": "minor"
+    },
+    {
+      "title": "In the End",
+      "artist": "Linkin Park",
+      "key": "E",
+      "mode": "minor"
+    },
+    {
+      "title": "Zombie",
+      "artist": "The Cranberries",
+      "key": "E",
+      "mode": "minor"
+    },
+    {
+      "title": "Seven Nation Army",
+      "artist": "The White Stripes",
+      "key": "E",
+      "mode": "minor"
+    },
+    {
+      "title": "Boulevard of Broken Dreams",
+      "artist": "Green Day",
+      "key": "F",
+      "mode": "minor"
+    },
+    {
+      "title": "Californication",
+      "artist": "Red Hot Chili Peppers",
+      "key": "A",
+      "mode": "minor"
+    },
+    {
+      "title": "Losing My Religion",
+      "artist": "R.E.M.",
+      "key": "A",
+      "mode": "minor"
+    },
+    {
+      "title": "Comfortably Numb",
+      "artist": "Pink Floyd",
+      "key": "B",
+      "mode": "minor"
+    },
+    {
+      "title": "Money",
+      "artist": "Pink Floyd",
+      "key": "B",
+      "mode": "minor"
+    },
+    {
+      "title": "Another Brick in the Wall, Pt. 2",
+      "artist": "Pink Floyd",
+      "key": "D",
+      "mode": "minor"
+    },
+    {
+      "title": "Hurt",
+      "artist": "Johnny Cash",
+      "key": "A",
+      "mode": "minor"
+    },
+    {
+      "title": "Roxanne",
+      "artist": "The Police",
+      "key": "G",
+      "mode": "minor"
+    },
+    {
+      "title": "Sweet Dreams (Are Made of This)",
+      "artist": "Eurythmics",
+      "key": "C",
+      "mode": "minor"
+    },
+    {
+      "title": "Thriller",
+      "artist": "Michael Jackson",
+      "key": "C#",
+      "mode": "minor"
+    },
+    {
+      "title": "Beat It",
+      "artist": "Michael Jackson",
+      "key": "Eb",
+      "mode": "minor"
+    },
+    {
+      "title": "Superstition",
+      "artist": "Stevie Wonder",
+      "key": "Eb",
+      "mode": "minor"
+    },
+    {
+      "title": "I Will Survive",
+      "artist": "Gloria Gaynor",
+      "key": "A",
+      "mode": "minor"
+    },
+    {
+      "title": "Crazy in Love",
+      "artist": "Beyonc\u00e9",
+      "key": "D",
+      "mode": "minor"
+    },
+    {
+      "title": "Poker Face",
+      "artist": "Lady Gaga",
+      "key": "G#",
+      "mode": "minor"
+    },
+    {
+      "title": "Bad Romance",
+      "artist": "Lady Gaga",
+      "key": "A",
+      "mode": "minor"
+    },
+    {
+      "title": "Radioactive",
+      "artist": "Imagine Dragons",
+      "key": "B",
+      "mode": "minor"
+    },
+    {
+      "title": "Counting Stars",
+      "artist": "OneRepublic",
+      "key": "C#",
+      "mode": "minor"
+    },
+    {
+      "title": "Wonderwall",
+      "artist": "Oasis",
+      "key": "F#",
+      "mode": "minor"
+    },
+    {
+      "title": "Sultans of Swing",
+      "artist": "Dire Straits",
+      "key": "D",
+      "mode": "minor"
+    },
+    {
+      "title": "Eye of the Tiger",
+      "artist": "Survivor",
+      "key": "C",
+      "mode": "minor"
+    },
+    {
+      "title": "Despacito",
+      "artist": "Luis Fonsi",
+      "key": "B",
+      "mode": "minor"
+    },
+    {
+      "title": "Let It Be",
+      "artist": "The Beatles",
+      "key": "C",
+      "mode": "major"
+    },
+    {
+      "title": "Hey Jude",
+      "artist": "The Beatles",
+      "key": "F",
+      "mode": "major"
+    },
+    {
+      "title": "Back in Black",
+      "artist": "AC/DC",
+      "key": "E",
+      "mode": "major"
+    },
+    {
+      "title": "Highway to Hell",
+      "artist": "AC/DC",
+      "key": "A",
+      "mode": "major"
+    },
+    {
+      "title": "Sweet Home Alabama",
+      "artist": "Lynyrd Skynyrd",
+      "key": "D",
+      "mode": "major"
+    },
+    {
+      "title": "Imagine",
+      "artist": "John Lennon",
+      "key": "C",
+      "mode": "major"
+    },
+    {
+      "title": "Someone Like You",
+      "artist": "Adele",
+      "key": "A",
+      "mode": "major"
+    },
+    {
+      "title": "Thinking Out Loud",
+      "artist": "Ed Sheeran",
+      "key": "D",
+      "mode": "major"
+    },
+    {
+      "title": "Creep",
+      "artist": "Radiohead",
+      "key": "G",
+      "mode": "major"
+    },
+    {
+      "title": "Everybody Hurts",
+      "artist": "R.E.M.",
+      "key": "D",
+      "mode": "major"
+    },
+    {
+      "title": "With or Without You",
+      "artist": "U2",
+      "key": "D",
+      "mode": "major"
+    },
+    {
+      "title": "Wish You Were Here",
+      "artist": "Pink Floyd",
+      "key": "G",
+      "mode": "major"
+    },
+    {
+      "title": "Hallelujah",
+      "artist": "Leonard Cohen",
+      "key": "C",
+      "mode": "major"
+    },
+    {
+      "title": "Take On Me",
+      "artist": "a-ha",
+      "key": "A",
+      "mode": "major"
+    },
+    {
+      "title": "Every Breath You Take",
+      "artist": "The Police",
+      "key": "Ab",
+      "mode": "major"
+    },
+    {
+      "title": "Dancing Queen",
+      "artist": "ABBA",
+      "key": "A",
+      "mode": "major"
+    },
+    {
+      "title": "Viva la Vida",
+      "artist": "Coldplay",
+      "key": "Ab",
+      "mode": "major"
+    },
+    {
+      "title": "Yellow",
+      "artist": "Coldplay",
+      "key": "B",
+      "mode": "major"
+    },
+    {
+      "title": "Clocks",
+      "artist": "Coldplay",
+      "key": "Eb",
+      "mode": "major"
+    },
+    {
+      "title": "Halo",
+      "artist": "Beyonc\u00e9",
+      "key": "A",
+      "mode": "major"
+    },
+    {
+      "title": "Shallow",
+      "artist": "Lady Gaga",
+      "key": "G",
+      "mode": "major"
+    },
+    {
+      "title": "Let Her Go",
+      "artist": "Passenger",
+      "key": "G",
+      "mode": "major"
+    },
+    {
+      "title": "Ho Hey",
+      "artist": "The Lumineers",
+      "key": "C",
+      "mode": "major"
+    },
+    {
+      "title": "Hotel Yorba",
+      "artist": "The White Stripes",
+      "key": "G",
+      "mode": "major"
+    }
+  ]
+}

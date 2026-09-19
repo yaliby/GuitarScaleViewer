@@ -1,35 +1,26 @@
-import { useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import type { DetectedKeyAbState, DetectedKeyState } from '../hooks/useDetectedKey';
 import type { MediaSessionUiState } from '../hooks/useMediaSession';
 import {
   clearTraceBuffer,
-  formatTraceLine,
+  formatTraceDump,
   getTraceBuffer,
   subscribeTrace,
   type TraceLevel,
+  type TraceRecord,
 } from '../services/debugLog';
-import {
-  getFreqblogApiKeyForDev,
-  getGetSongBpmApiKeyForDev,
-  getSongKeyApiBaseForDev,
-  setFreqblogApiKeyForDev,
-  setGetSongBpmApiKeyForDev,
-  setSongKeyApiBaseForDev,
-} from '../services/songKeyApi';
+import type { FusedKey } from '../services/keyFusion';
 import {
   abLine,
   captureModeLabel,
+  certaintyLabel,
   detectionReasonLabel,
   detectionStateLabel,
   mediaPlaybackDisplayLabel,
   resolutionStateLabel,
 } from './statusLabels';
 import { GearButton, GearInput, GearSelect, Led, Legend, Seam } from './gear';
-import { ROOT_NOTE_OPTIONS } from '../scaleDataProvider';
-
-// The app can now display a flat key ("Ab major"), so the suggestion picker has to offer one.
-const SUGGEST_KEYS: readonly string[] = ROOT_NOTE_OPTIONS;
 
 /** Minimal surface of useCloudKeyResolution that the drawer reads. */
 type CloudResolution = {
@@ -39,9 +30,6 @@ type CloudResolution = {
   resolutionState: string;
   sourceBadge: string;
   trackIdentity: string | null;
-  suggestionStatus: string;
-  suggestionMessage: string | null;
-  submitSuggestion: (key: string, mode: 'major' | 'minor') => Promise<void> | void;
 };
 
 export type DevDrawerProps = {
@@ -52,11 +40,9 @@ export type DevDrawerProps = {
   detectedKeyAb: DetectedKeyAbState | null;
   cloudResolution: CloudResolution;
   activeDisplayName: string | null;
-  canApply: boolean;
-  autoApplyEnabled: boolean;
-  onAutoApplyEnabledChange: (value: boolean) => void;
-  autoApplyConfidencePct: number;
-  onAutoApplyConfidencePctChange: (value: number) => void;
+  /** What the pipeline settled on, and on what evidence. See services/keyFusion. */
+  fused: FusedKey;
+  locked: boolean;
   devMockEnabled: boolean;
   onDevMockEnabledChange: (value: boolean) => void;
   devMockTitle: string;
@@ -100,6 +86,27 @@ function levelTone(level: TraceLevel): 'fault' | 'ok' | undefined {
   return undefined;
 }
 
+function ledForLevel(level: TraceLevel): 'fault' | 'live' | 'hold' | 'data' {
+  if (level === 'fail') {
+    return 'fault';
+  }
+  if (level === 'ok') {
+    return 'live';
+  }
+  if (level === 'skip') {
+    return 'hold';
+  }
+  return 'data';
+}
+
+function copyTraceDump(rows: readonly TraceRecord[]): void {
+  const text = formatTraceDump(rows);
+  if (text.length === 0) {
+    return;
+  }
+  void navigator.clipboard?.writeText(text);
+}
+
 function Check({
   checked,
   onChange,
@@ -125,6 +132,110 @@ function Check({
   );
 }
 
+function TraceLogReader({
+  rows,
+  onBack,
+}: {
+  rows: readonly TraceRecord[];
+  onBack: () => void;
+}) {
+  const [scopeFilter, setScopeFilter] = useState('all');
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const scopes = [...new Set(rows.map((row) => row.scope))];
+  const visible = scopeFilter === 'all' ? rows : rows.filter((row) => row.scope === scopeFilter);
+
+  useEffect(() => {
+    const node = scrollerRef.current;
+    if (!node) {
+      return;
+    }
+    node.scrollTop = node.scrollHeight;
+  }, [visible.length, scopeFilter]);
+
+  const last = rows.length === 0 ? null : rows[rows.length - 1];
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="shrink-0 space-y-2 px-4 py-3">
+        <p className="text-[10px] leading-relaxed text-gear-engrave">
+          Oldest first, newest at the bottom. Failures are red. Each line carries the payload the
+          decision was made with.
+        </p>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <GearButton onClick={onBack}>Back</GearButton>
+          <GearButton onClick={() => copyTraceDump(visible)} disabled={visible.length === 0}>
+            Copy
+          </GearButton>
+          <GearButton onClick={() => clearTraceBuffer()} disabled={rows.length === 0}>
+            Clear
+          </GearButton>
+          {scopes.length > 1 ? (
+            <GearSelect
+              value={scopeFilter}
+              onChange={(e) => setScopeFilter(e.target.value)}
+              aria-label="Filter log by scope"
+              className="min-w-[7.5rem]"
+            >
+              <option value="all">all scopes</option>
+              {scopes.map((scope) => (
+                <option key={scope} value={scope}>
+                  {scope}
+                </option>
+              ))}
+            </GearSelect>
+          ) : null}
+        </div>
+        <p className="tele text-[10px] text-gear-engrave">
+          {visible.length} {visible.length === 1 ? 'line' : 'lines'}
+          {last ? ` · last ${last.scope}/${last.event}` : ''}
+        </p>
+      </div>
+      <Seam />
+      <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-2">
+        {visible.length === 0 ? (
+          <p className="px-1 py-3 text-[11px] text-gear-engrave">
+            No lines yet. Play a track or trigger a lookup, then this page fills in as the pipeline
+            decides.
+          </p>
+        ) : (
+          <ol className="space-y-2">
+            {visible.map((row) => (
+              <li key={row.seq} className="gear-well select-text rounded-[4px] p-2">
+                <div className="flex flex-wrap items-baseline gap-1.5">
+                  <Led tone={ledForLevel(row.level)} size={5} />
+                  <span className="tele shrink-0 text-[9px] text-gear-engrave">
+                    {new Date(row.t).toLocaleTimeString()} #{String(row.seq).padStart(4, '0')}
+                  </span>
+                  <span className="tele shrink-0 text-[9px] uppercase tracking-[0.12em] text-gear-legend">
+                    {row.scope}
+                  </span>
+                  <span className="tele min-w-0 break-all text-[9px] text-gear-engrave">{row.event}</span>
+                </div>
+                <p
+                  className={`mt-1 text-[12px] leading-snug ${
+                    levelTone(row.level) === 'fault'
+                      ? 'text-led-fault'
+                      : levelTone(row.level) === 'ok'
+                        ? 'text-led-live'
+                        : 'text-gear-text/90'
+                  }`}
+                >
+                  {row.message}
+                </p>
+                {row.detail ? (
+                  <pre className="tele mt-1.5 max-h-40 overflow-auto whitespace-pre-wrap break-all text-[10px] leading-relaxed text-gear-engrave">
+                    {JSON.stringify(row.detail, null, 2)}
+                  </pre>
+                ) : null}
+              </li>
+            ))}
+          </ol>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /**
  * Engineering panel. Everything here is diagnostics or a lab switch — none of it belongs on the
  * main face, so it lives behind a latch and slides out over the app.
@@ -137,11 +248,8 @@ export function DevDrawer({
   detectedKeyAb,
   cloudResolution,
   activeDisplayName,
-  canApply,
-  autoApplyEnabled,
-  onAutoApplyEnabledChange,
-  autoApplyConfidencePct,
-  onAutoApplyConfidencePctChange,
+  fused,
+  locked,
   devMockEnabled,
   onDevMockEnabledChange,
   devMockTitle,
@@ -149,25 +257,21 @@ export function DevDrawer({
   devMockArtist,
   onDevMockArtistChange,
 }: DevDrawerProps) {
-  const [suggestKey, setSuggestKey] = useState('C');
-  const [suggestMode, setSuggestMode] = useState<'major' | 'minor'>('major');
-  const [apiBase, setApiBase] = useState(getSongKeyApiBaseForDev());
-  const [freqblogKey, setFreqblogKey] = useState(getFreqblogApiKeyForDev());
-  const [getSongBpmKey, setGetSongBpmKey] = useState(getGetSongBpmApiKeyForDev());
+  const [logOpen, setLogOpen] = useState(false);
 
   const pipeline = useSyncExternalStore(subscribeTrace, getTraceBuffer, getTraceBuffer);
+
+  useEffect(() => {
+    if (!open) {
+      setLogOpen(false);
+    }
+  }, [open]);
   const cloudLookupLine =
-    cloudResolution.cloudState === 'lookup_pending'
-      ? 'checking verified db, then catalogs'
-      : cloudResolution.cloudState === 'hit'
-        ? cloudResolution.cloudHit?.verified
-          ? 'verified key found'
-          : `catalog key (${cloudResolution.cloudHit?.sourceLabel ?? 'external'})`
-        : cloudResolution.cloudState === 'miss'
-          ? 'no catalog key, local fallback'
-          : cloudResolution.cloudState === 'error'
-            ? 'lookup failed, trying catalogs'
-            : 'idle';
+    cloudResolution.cloudState === 'hit'
+      ? 'verified key found'
+      : cloudResolution.cloudState === 'miss'
+        ? 'not in the library, local fallback'
+        : 'idle';
 
   return (
     <AnimatePresence>
@@ -183,26 +287,44 @@ export function DevDrawer({
             aria-hidden="true"
           />
           <motion.aside
-            className="gear-brushed fixed right-0 top-0 z-50 flex h-full w-[min(26rem,100vw)] flex-col shadow-[-16px_0_48px_-12px_rgba(0,0,0,0.85)]"
+            className={`gear-brushed fixed right-0 top-0 z-50 flex h-full flex-col shadow-[-16px_0_48px_-12px_rgba(0,0,0,0.85)] ${
+              logOpen ? 'w-[min(40rem,100vw)]' : 'w-[min(26rem,100vw)]'
+            }`}
             style={{ boxShadow: '-16px 0 48px -12px rgba(0,0,0,0.85), inset 1px 0 0 rgba(255,255,255,0.07)' }}
             initial={{ x: '100%' }}
             animate={{ x: 0 }}
             exit={{ x: '100%' }}
             transition={{ type: 'spring', stiffness: 420, damping: 40 }}
             role="dialog"
-            aria-label="Engineering panel"
+            aria-label={logOpen ? 'Pipeline log' : 'Engineering panel'}
           >
             <header className="flex shrink-0 items-center justify-between gap-3 px-4 py-3">
               <div className="flex items-center gap-2">
                 <Led tone="data" size={6} />
-                <span className="text-[12px] font-bold uppercase tracking-[0.2em] text-gear-legend">Engineering</span>
+                <span className="text-[12px] font-bold uppercase tracking-[0.2em] text-gear-legend">
+                  {logOpen ? 'Pipeline log' : 'Engineering'}
+                </span>
               </div>
-              <GearButton onClick={onClose} aria-label="Close engineering panel">
-                Close
-              </GearButton>
+              <div className="flex items-center gap-1.5">
+                {logOpen ? null : (
+                  <GearButton
+                    onClick={() => setLogOpen(true)}
+                    aria-label={pipeline.length > 0 ? `Log ${pipeline.length}` : 'Log'}
+                    title="Read the pipeline log"
+                  >
+                    Log{pipeline.length > 0 ? ` ${pipeline.length}` : ''}
+                  </GearButton>
+                )}
+                <GearButton onClick={onClose} aria-label="Close engineering panel">
+                  Close
+                </GearButton>
+              </div>
             </header>
             <Seam />
 
+            {logOpen ? (
+              <TraceLogReader rows={pipeline} onBack={() => setLogOpen(false)} />
+            ) : (
             <div className="min-h-0 flex-1 divide-y divide-black/50 overflow-y-auto">
               <Section title="Signal">
                 <Row label="Now playing" value={[mediaSession.artist, mediaSession.title].filter(Boolean).join(' — ') || '—'} />
@@ -230,71 +352,36 @@ export function DevDrawer({
                       .join(' · ')}
                   />
                 ) : null}
-                <Row label="Cloud lookup" value={cloudLookupLine} />
-                {cloudResolution.cloudError ? <Row label="Cloud error" value={cloudResolution.cloudError} tone="fault" /> : null}
-                {!canApply ? (
+                <Row label="Library lookup" value={cloudLookupLine} />
+                {!fused.root ? (
                   <p className="mt-2 text-[11px] leading-relaxed text-led-hold/85">
-                    Apply disabled: {detectionReasonLabel(detected.reason)}
+                    Nothing on the neck yet: {detectionReasonLabel(detected.reason)}
                   </p>
                 ) : null}
               </Section>
 
               <Section title="Pipeline log">
                 <p className="mb-2 text-[10px] leading-relaxed text-gear-engrave">
-                  Every decision in this run. Failures are red. The same lines go to the browser console as
-                  <span className="tele"> [GSV]</span>. Rust lines live in <span className="tele">gsv-dev.log</span>.
+                  Every decision in this run, with the payload it was made on. Open the reader for
+                  the full sequence. The same lines go to the browser console as
+                  <span className="tele"> [GSV]</span>.
                 </p>
-                <div className="mb-2 flex gap-1.5">
-                  <GearButton
-                    onClick={() => {
-                      const text = pipeline
-                        .map((row) => {
-                          const time = new Date(row.t).toISOString();
-                          const detail = row.detail ? ` ${JSON.stringify(row.detail)}` : '';
-                          return `${time} ${formatTraceLine(row)}${detail}`;
-                        })
-                        .join('\n');
-                      void navigator.clipboard?.writeText(text);
-                    }}
-                    disabled={pipeline.length === 0}
-                  >
+                <div className="mb-2 flex flex-wrap gap-1.5">
+                  <GearButton tone="primary" onClick={() => setLogOpen(true)}>
+                    Read log
+                  </GearButton>
+                  <GearButton onClick={() => copyTraceDump(pipeline)} disabled={pipeline.length === 0}>
                     Copy
                   </GearButton>
                   <GearButton onClick={() => clearTraceBuffer()} disabled={pipeline.length === 0}>
                     Clear
                   </GearButton>
                 </div>
-                {pipeline.length === 0 ? (
-                  <p className="text-[11px] text-gear-engrave">No lines yet. Play a track or trigger a lookup.</p>
-                ) : (
-                  <ol className="gear-well max-h-64 space-y-1 overflow-y-auto rounded-[4px] p-2">
-                    {[...pipeline].reverse().map((row) => (
-                      <li key={row.seq} className="min-w-0">
-                        <div className="flex items-baseline gap-1.5">
-                          <Led tone={row.level === 'fail' ? 'fault' : row.level === 'ok' ? 'live' : row.level === 'skip' ? 'hold' : 'data'} size={5} />
-                          <span className="tele shrink-0 text-[9px] text-gear-engrave">
-                            {new Date(row.t).toLocaleTimeString()} #{String(row.seq).padStart(4, '0')}
-                          </span>
-                          <span className="tele shrink-0 text-[9px] uppercase tracking-[0.12em] text-gear-legend">
-                            {row.scope}
-                          </span>
-                          <span className="tele shrink-0 text-[9px] text-gear-engrave">{row.event}</span>
-                        </div>
-                        <p
-                          className={`mt-0.5 pl-3 text-[11px] leading-snug ${
-                            levelTone(row.level) === 'fault'
-                              ? 'text-led-fault'
-                              : levelTone(row.level) === 'ok'
-                                ? 'text-led-live'
-                                : 'text-gear-text/85'
-                          }`}
-                        >
-                          {row.message}
-                        </p>
-                      </li>
-                    ))}
-                  </ol>
-                )}
+                <p className="tele text-[10px] text-gear-engrave">
+                  {pipeline.length === 0
+                    ? 'No lines yet. Play a track or trigger a lookup.'
+                    : `${pipeline.length} ${pipeline.length === 1 ? 'line' : 'lines'} · last ${pipeline[pipeline.length - 1]?.scope}/${pipeline[pipeline.length - 1]?.event}`}
+                </p>
               </Section>
 
               <Section title="Analyzer A/B">
@@ -308,148 +395,43 @@ export function DevDrawer({
                 )}
               </Section>
 
-              <Section title="Auto apply">
-                <Check checked={autoApplyEnabled} onChange={onAutoApplyEnabledChange}>
-                  Apply the detected key automatically
-                </Check>
-                <div className="mt-3 flex items-center gap-3">
-                  <input
-                    type="range"
-                    min={0}
-                    max={100}
-                    step={1}
-                    value={autoApplyConfidencePct}
-                    onChange={(e) => onAutoApplyConfidencePctChange(Math.max(0, Math.min(100, Number(e.target.value) || 0)))}
-                    className="gear-fader min-w-0 flex-1 cursor-pointer"
-                    aria-label="Auto apply confidence threshold"
-                  />
-                  <span className="tele w-11 shrink-0 text-right font-mono text-[11px] text-gear-text/85">
-                    {autoApplyConfidencePct}%
-                  </span>
-                </div>
-                <p className="mt-2 text-[10px] leading-relaxed text-gear-engrave">
-                  Fires once per key change, at or above the threshold.
-                </p>
-              </Section>
-
-              <Section title="Suggest key for review">
-                <div className="flex flex-wrap items-center gap-2">
-                  <GearSelect
-                    value={suggestKey}
-                    onChange={(e) => setSuggestKey(e.target.value)}
-                    aria-label="Suggestion key"
-                    className="w-20"
-                  >
-                    {SUGGEST_KEYS.map((k) => (
-                      <option key={k} value={k}>
-                        {k}
-                      </option>
-                    ))}
-                  </GearSelect>
-                  <GearSelect
-                    value={suggestMode}
-                    onChange={(e) => setSuggestMode(e.target.value as 'major' | 'minor')}
-                    aria-label="Suggestion mode"
-                    className="w-24"
-                  >
-                    <option value="major">major</option>
-                    <option value="minor">minor</option>
-                  </GearSelect>
-                  <GearButton
-                    onClick={() => {
-                      void cloudResolution.submitSuggestion(suggestKey, suggestMode);
-                    }}
-                    disabled={!mediaSession.title || !mediaSession.artist || cloudResolution.suggestionStatus === 'submitting'}
-                  >
-                    {cloudResolution.suggestionStatus === 'submitting' ? 'Sending' : 'Submit'}
-                  </GearButton>
-                </div>
-                {cloudResolution.suggestionMessage ? (
-                  <p className="mt-2 text-[11px] text-gear-text/75">{cloudResolution.suggestionMessage}</p>
+              <Section title="Key on the neck">
+                {/* There is no threshold and no latch to show here any more: the pipeline
+                    always commits to its best answer. Verified transcription outranks the
+                    engine; otherwise the engine is what you hear. */}
+                <Row label="Key" value={fused.displayName ?? '<none>'} />
+                <Row label="Certainty" value={`${certaintyLabel(fused.certainty)} · ${fused.confidencePct}%`} />
+                <Row label="Scale tones" value={fused.notesSettled ? 'corroborated' : 'one estimator only'} />
+                <Row
+                  label="Tonic"
+                  value={
+                    fused.tonicSettled
+                      ? 'no rival reading'
+                      : `open — also reads as ${fused.relativeAlternative ?? 'its relative'}`
+                  }
+                />
+                <Row label="Decided by" value={fused.why} />
+                {locked ? (
+                  <p className="mt-2 text-[11px] leading-relaxed text-led-hold/85">
+                    Locked: the song is still being analysed, but the neck is being held where it is.
+                  </p>
                 ) : null}
               </Section>
 
               {import.meta.env.DEV ? (
-                <Section title="Cloud test bench">
+                <Section title="Library test bench">
                   <Check checked={devMockEnabled} onChange={onDevMockEnabledChange}>
-                    Use a mock track for cloud lookup
+                    Use a mock track for library lookup
                   </Check>
                   <div className="mt-2.5 grid grid-cols-2 gap-2">
                     <GearInput value={devMockTitle} onChange={(e) => onDevMockTitleChange(e.target.value)} placeholder="Title" />
                     <GearInput value={devMockArtist} onChange={(e) => onDevMockArtistChange(e.target.value)} placeholder="Artist" />
                   </div>
-
-                  <div className="mt-3 space-y-2">
-                    <GearInput value={apiBase} onChange={(e) => setApiBase(e.target.value)} placeholder="API base override" />
-                    <div className="flex gap-1.5">
-                      <GearButton
-                        onClick={() => {
-                          setSongKeyApiBaseForDev(apiBase);
-                          setApiBase(getSongKeyApiBaseForDev());
-                        }}
-                      >
-                        Apply base
-                      </GearButton>
-                      <GearButton
-                        onClick={() => {
-                          setSongKeyApiBaseForDev(null);
-                          setApiBase(getSongKeyApiBaseForDev());
-                        }}
-                      >
-                        Reset base
-                      </GearButton>
-                    </div>
-                  </div>
-
-                  <div className="mt-3 space-y-2">
-                    <div className="flex gap-1.5">
-                      <GearInput
-                        value={freqblogKey}
-                        onChange={(e) => setFreqblogKey(e.target.value)}
-                        placeholder="FreqBlog API key"
-                        className="min-w-0"
-                      />
-                      <GearButton
-                        className="shrink-0"
-                        onClick={() => {
-                          setFreqblogApiKeyForDev(freqblogKey);
-                          setFreqblogKey(getFreqblogApiKeyForDev());
-                        }}
-                      >
-                        Save
-                      </GearButton>
-                    </div>
-                    <div className="flex gap-1.5">
-                      <GearInput
-                        value={getSongBpmKey}
-                        onChange={(e) => setGetSongBpmKey(e.target.value)}
-                        placeholder="GetSongBPM API key"
-                        className="min-w-0"
-                      />
-                      <GearButton
-                        className="shrink-0"
-                        onClick={() => {
-                          setGetSongBpmApiKeyForDev(getSongBpmKey);
-                          setGetSongBpmKey(getGetSongBpmApiKeyForDev());
-                        }}
-                      >
-                        Save
-                      </GearButton>
-                    </div>
-                  </div>
-
                   <Row label="Track identity" value={cloudResolution.trackIdentity ?? '<none>'} />
-                  {cloudResolution.cloudHit?.source === 'getsongbpm' ? (
-                    <p className="mt-1.5 text-[10px] text-gear-engrave">
-                      Key data from{' '}
-                      <a className="underline decoration-gear-engrave" href="https://getsongbpm.com" target="_blank" rel="noreferrer">
-                        GetSongBPM.com
-                      </a>
-                    </p>
-                  ) : null}
                 </Section>
               ) : null}
             </div>
+            )}
           </motion.aside>
         </>
       ) : null}

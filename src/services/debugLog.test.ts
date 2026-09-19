@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { clearTraceBuffer, debugLog, formatTraceLine, getTraceBuffer, subscribeTrace, trace } from './debugLog';
+import { clearTraceBuffer, debugLog, formatTraceDump, formatTraceLine, getTraceBuffer, subscribeTrace, trace } from './debugLog';
 
 afterEach(() => {
   clearTraceBuffer();
@@ -16,6 +16,14 @@ describe('pipeline tracer', () => {
         message: 'asking verified DB then catalogs',
       }),
     ).toBe('[GSV #0007 cloud] lookup.start  asking verified DB then catalogs');
+  });
+
+  it('dumps a run with timestamps and payloads so it can be pasted into a ticket', () => {
+    trace('cloud', 'lookup.hit', 'Lookup hit: A minor from ReccoBeats', { key: 'A', mode: 'minor' }, 'ok');
+    const dump = formatTraceDump(getTraceBuffer());
+    expect(dump).toContain('cloud] lookup.hit  Lookup hit: A minor from ReccoBeats');
+    expect(dump).toContain('"key":"A"');
+    expect(dump).toContain('"mode":"minor"');
   });
 
   it('records every trace into the ring even when the console is off in tests', () => {

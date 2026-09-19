@@ -128,11 +128,6 @@ export function ScaleControls({
           Restore
         </GearButton>
       </div>
-
-      <small className="lab-setup-hint">
-        Typing a root here is a manual choice — the neck stops following the detected key until they agree
-        again.
-      </small>
     </div>
   );
 }
