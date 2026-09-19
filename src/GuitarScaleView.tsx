@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Layers3, Radio, SlidersHorizontal, Waves } from 'lucide-react';
+import { Layers3, Menu, Radio, SlidersHorizontal, Waves, X } from 'lucide-react';
 import type { ScaleContext, ScaleType } from './scaleDataProvider';
 import { ChordLibrarySection } from './ChordLibrarySection';
 import type { ScaleChordWithVoicings } from './chords/chordTypes';
@@ -42,6 +42,9 @@ type Props = {
   onApplyDetectedKey: (root: string, scale: 'major' | 'minor') => void;
   /** Swap the shown key for its relative major/minor. */
   onFlipRelative: () => void;
+  /** The shell's navigation drawer. This screen is the whole window, so it carries the toggle. */
+  menuOpen: boolean;
+  onToggleMenu: () => void;
   numFrets?: number;
 };
 
@@ -65,6 +68,8 @@ export default function GuitarScaleView({
   onResetToBrainKey,
   onApplyDetectedKey,
   onFlipRelative,
+  menuOpen,
+  onToggleMenu,
   numFrets = DEFAULT_NUM_FRETS,
 }: Props) {
   const [viewMode, setViewMode] = useState<FretboardViewMode>('scale-all');
@@ -266,6 +271,16 @@ export default function GuitarScaleView({
       <header className="lab-heading">
         <div>
           <span className="lab-kicker">
+            <button
+              type="button"
+              className="lab-menu"
+              aria-label={menuOpen ? 'Close navigation menu' : 'Open navigation menu'}
+              aria-controls="studio-sidebar"
+              aria-expanded={menuOpen}
+              onClick={onToggleMenu}
+            >
+              {menuOpen ? <X size={17} /> : <Menu size={17} />}
+            </button>
             <span className="lab-index">01</span>
             <span>Fretboard Lab</span>
             <span>· One key, the whole neck.</span>

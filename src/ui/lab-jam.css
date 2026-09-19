@@ -22,9 +22,9 @@
   flex-direction: column;
   flex: 1;
   min-width: 0;
-  /* No max-width: the neck is the point, and it gets the whole window. */
+  /* No max-width and no gutters worth the name: the neck is the point, and it gets the window. */
   width: 100%;
-  padding: 6px 26px 34px;
+  padding: 14px 12px 20px;
   background:
     radial-gradient(ellipse 55% 45% at 86% -8%, rgba(240, 165, 42, 0.075), transparent 70%), var(--gear-void);
 }
@@ -35,7 +35,23 @@
   justify-content: space-between;
   align-items: flex-end;
   gap: 24px;
-  margin: 4px 0 26px;
+  margin: 0 0 14px;
+}
+/* The shell has no topbar on this screen, so the nav lives here, ahead of the kicker. */
+.lab-menu {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  margin-right: 3px;
+  border-radius: 9px;
+  border: 1px solid var(--lab-line);
+  background: linear-gradient(180deg, #1c1c21, #141418);
+  color: var(--gear-legend);
+}
+.lab-menu:hover {
+  color: var(--gear-text);
+  border-color: #3d3d47;
 }
 .lab-kicker {
   display: flex;
@@ -59,8 +75,8 @@
   letter-spacing: 0;
 }
 .lab-heading h1 {
-  margin: 15px 0 0;
-  font-size: clamp(25px, 2.65vw, 42px);
+  margin: 9px 0 0;
+  font-size: clamp(23px, 2vw, 32px);
   font-weight: 520;
   letter-spacing: -0.055em;
   line-height: 1.2;
@@ -145,7 +161,7 @@
 
 /* The record: the one piece of Jam theatre the Lab keeps, re-cut in amber. */
 .lab-record {
-  min-height: 268px;
+  min-height: 236px;
   position: relative;
   display: grid;
   place-content: center;
@@ -228,13 +244,13 @@
   font-size: 8px;
   letter-spacing: 2px;
   color: var(--gear-engrave);
-  margin-top: 20px;
+  margin-top: 14px;
   text-transform: uppercase;
 }
 
 /* The listening deck: what the machine hears, and what you can do about it. */
 .lab-track {
-  padding: 32px 26px 26px 12px;
+  padding: 22px 26px 20px 12px;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -263,7 +279,7 @@
   gap: 6px;
 }
 .lab-track h2 {
-  margin: 18px 0 6px;
+  margin: 12px 0 6px;
   font-size: clamp(22px, 2.2vw, 34px);
   line-height: 1.12;
   letter-spacing: -0.035em;
@@ -441,14 +457,14 @@
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
-  margin: 16px 0 24px;
+  margin: 12px 0 14px;
 }
 .lab-control {
   display: flex;
   align-items: center;
   gap: 13px;
   min-width: 0;
-  padding: 16px;
+  padding: 13px 16px;
   border: 1px solid #292930;
   border-radius: 11px;
   background: linear-gradient(180deg, #1c1c21 0%, #17171b 100%);
@@ -533,7 +549,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 20px;
-  padding: 20px 24px;
+  padding: 14px 20px;
   border-bottom: 1px solid var(--lab-line-soft);
 }
 .lab-map-heading h2 {

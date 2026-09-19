@@ -1075,42 +1075,41 @@ export default function App() {
         </AnimatePresence>
 
         <main className="studio-main">
-          <header className="topbar">
-            <button
-              className="nav-toggle icon-button"
-              aria-label={
-                sidebarOpen ? "Close navigation menu" : "Open navigation menu"
-              }
-              aria-controls="studio-sidebar"
-              aria-expanded={sidebarOpen}
-              onClick={() => setSidebarOpen((open) => !open)}
-            >
-              {sidebarOpen ? <X size={19} /> : <Menu size={19} />}
-            </button>
-            <div className="breadcrumb">
-              <span>Studio</span>
-              <i>/</i>
-              <strong>
-                {view === "jam"
-                  ? "Live Jam"
-                  : view[0]!.toUpperCase() + view.slice(1)}
-              </strong>
-            </div>
-            <div className="topbar-actions">
-              <span className="local-status">
-                <i className="status-dot" />
-                {cloud.sourceBadge}
-              </span>
+          {/* Live Jam carries the hamburger in its own heading, so the shell adds no chrome. */}
+          {!immersive && (
+            <header className="topbar">
               <button
-                className="button save-button"
-                aria-label="Save setup"
-                onClick={() => setSaveOpen(true)}
+                className="nav-toggle icon-button"
+                aria-label={
+                  sidebarOpen ? "Close navigation menu" : "Open navigation menu"
+                }
+                aria-controls="studio-sidebar"
+                aria-expanded={sidebarOpen}
+                onClick={() => setSidebarOpen((open) => !open)}
               >
-                <Save size={15} />
-                Save setup
+                {sidebarOpen ? <X size={19} /> : <Menu size={19} />}
               </button>
-            </div>
-          </header>
+              <div className="breadcrumb">
+                <span>Studio</span>
+                <i>/</i>
+                <strong>{view[0]!.toUpperCase() + view.slice(1)}</strong>
+              </div>
+              <div className="topbar-actions">
+                <span className="local-status">
+                  <i className="status-dot" />
+                  {cloud.sourceBadge}
+                </span>
+                <button
+                  className="button save-button"
+                  aria-label="Save setup"
+                  onClick={() => setSaveOpen(true)}
+                >
+                  <Save size={15} />
+                  Save setup
+                </button>
+              </div>
+            </header>
+          )}
           <StudioScreens
             view={view}
             context={contextControls}
@@ -1124,6 +1123,8 @@ export default function App() {
                 tuningId={session.tuningId}
                 capo={session.capo}
                 onChange={updateSession}
+                menuOpen={sidebarOpen}
+                onToggleMenu={() => setSidebarOpen((open) => !open)}
               />
             }
             session={session}

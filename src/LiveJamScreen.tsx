@@ -17,6 +17,9 @@ type Props = {
   tuningId: string;
   capo: number;
   onChange: (patch: Partial<PracticeSession>) => void;
+  /** The shell's navigation drawer, opened from this screen's own hamburger. */
+  menuOpen: boolean;
+  onToggleMenu: () => void;
 };
 
 /**
@@ -25,7 +28,15 @@ type Props = {
  * Everything musical lives in the session; the only local state is the half-typed root, which is
  * a keystroke, not a key.
  */
-export default function LiveJamScreen({ root, scaleType, tuningId, capo, onChange }: Props) {
+export default function LiveJamScreen({
+  root,
+  scaleType,
+  tuningId,
+  capo,
+  onChange,
+  menuOpen,
+  onToggleMenu,
+}: Props) {
   const [rootDraft, setRootDraft] = useState<string | null>(null);
 
   /* Drop the draft once the session moves somewhere the draft does not spell (detection, a favorite). */
@@ -107,6 +118,8 @@ export default function LiveJamScreen({ root, scaleType, tuningId, capo, onChang
         onResetToBrainKey={resetToBrainKey}
         onApplyDetectedKey={applyDetectedKey}
         onFlipRelative={flipRelative}
+        menuOpen={menuOpen}
+        onToggleMenu={onToggleMenu}
       />
     </div>
   );

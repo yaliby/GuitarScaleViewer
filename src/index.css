@@ -429,27 +429,26 @@ input::-webkit-inner-spin-button {
 }
 
 /*
-  Immersive shell (Live Jam). The neck is the screen, so the nav docks off-canvas at every
-  width and comes back through the hamburger — the same drawer the narrow layout already uses.
+  Immersive shell (Live Jam). The neck is the screen: no topbar, no gutters, no docked nav —
+  the window is the instrument and the menu comes back through the hamburger in its heading.
+  Doubled class so these survive the width and height queries further down the file.
 */
-.shell-immersive .sidebar {
+.studio-shell.shell-immersive .sidebar {
   width: 248px;
   transform: translateX(-100%);
   transition: transform 0.25s ease;
   background: #141a1f;
 }
-.shell-immersive .sidebar.open {
+.studio-shell.shell-immersive .sidebar.open {
   transform: translateX(0);
 }
-.shell-immersive .nav-toggle {
-  display: inline-flex !important;
-}
-.shell-immersive .studio-main {
+.studio-shell.shell-immersive .studio-main {
   margin-left: 0;
 }
-.shell-immersive .workspace {
+.studio-shell.shell-immersive .workspace {
   max-width: none;
   padding: 0;
+  margin: 0;
   display: flex;
   flex-direction: column;
 }

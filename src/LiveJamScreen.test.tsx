@@ -18,8 +18,11 @@ afterEach(() => {
 
 function Harness() {
   const [session, setSession] = useState<PracticeSession>(DEFAULT_SESSION);
+  const [menuOpen, setMenuOpen] = useState(false);
   return (
     <LiveJamScreen
+      menuOpen={menuOpen}
+      onToggleMenu={() => setMenuOpen((open) => !open)}
       root={session.root}
       scaleType={session.scaleType}
       tuningId={session.tuningId}
