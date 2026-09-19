@@ -33,6 +33,10 @@ type Props = {
   rootInvalid: boolean;
   scaleType: ScaleType;
   onScaleTypeChange: (value: ScaleType) => void;
+  tuningId: string;
+  onTuningChange: (value: string) => void;
+  capo: number;
+  onCapoChange: (value: number) => void;
   /** Restore root + scale from the brain / engine defaults (see scaleDataProvider). */
   onResetToBrainKey: () => void;
   onApplyDetectedKey: (root: string, scale: 'major' | 'minor') => void;
@@ -42,9 +46,10 @@ type Props = {
 };
 
 /**
- * The chassis, wearing the Live Jam dress. The layout language is Jam's — an editorial heading, a
- * deck row, toggle cards, one framed bay — but the materials, the controls and the neck itself are
- * the Lab's, and the neck still gets the entire width of the window.
+ * Live Jam itself: an editorial heading, a listening deck, toggle cards and one framed bay for the
+ * neck, built in the Lab's own materials. It fills the window — the Studio navigation folds into
+ * the hamburger for this screen — and the key, tuning and capo it works on are the session's, so
+ * whatever the song turns out to be in is what the other screens practice.
  */
 export default function GuitarScaleView({
   scale,
@@ -53,14 +58,16 @@ export default function GuitarScaleView({
   rootInvalid,
   scaleType,
   onScaleTypeChange,
+  tuningId,
+  onTuningChange,
+  capo: capoFret,
+  onCapoChange,
   onResetToBrainKey,
   onApplyDetectedKey,
   onFlipRelative,
   numFrets = DEFAULT_NUM_FRETS,
 }: Props) {
   const [viewMode, setViewMode] = useState<FretboardViewMode>('scale-all');
-  const [tuningId, setTuningId] = useState<string>('standard');
-  const [capoFret, setCapoFret] = useState<number>(0);
   const [selectedChord, setSelectedChord] = useState<ScaleChordWithVoicings | null>(null);
   const [lockDetected, setLockDetected] = useState(false);
   const [lockedDetectedSnapshot, setLockedDetectedSnapshot] = useState<DetectedKeyState | null>(null);
@@ -133,8 +140,8 @@ export default function GuitarScaleView({
 
   const handleRestoreDefault = () => {
     onResetToBrainKey();
-    setTuningId('standard');
-    setCapoFret(0);
+    onTuningChange('standard');
+    onCapoChange(0);
     setSelectedChord(null);
   };
 
@@ -435,9 +442,9 @@ export default function GuitarScaleView({
                 scaleType={scaleType}
                 onScaleTypeChange={onScaleTypeChange}
                 tuningId={tuningId}
-                onTuningChange={setTuningId}
+                onTuningChange={onTuningChange}
                 capo={capo}
-                onCapoChange={setCapoFret}
+                onCapoChange={onCapoChange}
                 onRestoreDefault={handleRestoreDefault}
                 onFlipRelative={onFlipRelative}
               />

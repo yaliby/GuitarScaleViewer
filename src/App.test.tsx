@@ -108,27 +108,28 @@ beforeEach(() => {
 });
 
 describe("practice studio shell", () => {
-  it("opens a separate live jam without overwriting the practice setup", async () => {
+  it("opens live jam full-window on the shared key and carries edits back", async () => {
     render(<App />);
     fireEvent.change(screen.getByLabelText("Root note"), {
       target: { value: "Bb" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Live Jam" }));
-    expect(
-      await screen.findByRole("region", { name: "Live Jam workspace" }),
-    ).toBeInTheDocument();
+
+    const jam = await screen.findByRole("region", { name: "Live Jam workspace" });
+    expect(jam).toBeInTheDocument();
+    /* Immersive: no transport, and the nav is behind the hamburger. */
     expect(screen.queryByLabelText("Tempo")).not.toBeInTheDocument();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Choose key manually" }),
-    );
-    fireEvent.change(screen.getByLabelText("Jam root"), {
-      target: { value: "G" },
-    });
-    await waitFor(() =>
-      expect(screen.getByTestId("jam-key")).toHaveTextContent("G"),
-    );
+    expect(
+      screen.getByRole("button", { name: "Open navigation menu" }),
+    ).toBeInTheDocument();
+
+    const jamRoot = screen.getByPlaceholderText("A");
+    expect(jamRoot).toHaveValue("Bb");
+    fireEvent.change(jamRoot, { target: { value: "G" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Open navigation menu" }));
     fireEvent.click(screen.getByRole("button", { name: "Explore" }));
-    expect(await screen.findByLabelText("Root note")).toHaveValue("Bb");
+    expect(await screen.findByLabelText("Root note")).toHaveValue("G");
   });
   it("updates and persists the shared musical context", async () => {
     render(<App />);

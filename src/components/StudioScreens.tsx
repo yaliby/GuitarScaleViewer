@@ -120,6 +120,14 @@ export function StudioScreens(p: Props) {
   const reduceMotion = useReducedMotion();
   const { view, session, playing, beat } = p;
   const isRunning = playing !== null;
+  /*
+   * Live Jam is the window, not a card in the stack, so it stays outside the cross-fade: the
+   * neck is far too heavy to animate, and an exit that re-renders mid-flight (which any key
+   * change on that screen causes) can leave the presence stuck on the screen you just left.
+   */
+  if (view === "jam") {
+    return <div className="workspace screen screen-jam">{p.jam}</div>;
+  }
   return (
     <AnimatePresence mode="wait" initial={false}>
       <motion.div
@@ -139,7 +147,6 @@ export function StudioScreens(p: Props) {
           ease: [0.22, 1, 0.36, 1],
         }}
       >
-        {view === "jam" && p.jam}
         {view === "explore" && (
           <section className="atlas-screen" aria-label="Scale atlas">
             <header className="screen-heading atlas-heading">

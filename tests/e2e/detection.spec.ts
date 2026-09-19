@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-test("uncertain listening explains the missing chords and lets the player try a detected key", async ({
+test("the listening deck proposes an uncertain key and leaves the neck alone until Apply", async ({
   page,
 }) => {
   await page.route("**/lookup-song?**", (route) =>
@@ -8,22 +8,22 @@ test("uncertain listening explains the missing chords and lets the player try a 
   );
   await page.goto("/");
   await page.getByRole("button", { name: "Live Jam", exact: true }).click();
-  await page.getByRole("button", { name: /Chords & shapes/ }).click();
-  await expect(page.getByTestId("jam-key")).toHaveText("—");
   await expect(
-    page.getByRole("region", { name: "Listening progress" }),
-  ).toContainText("possible keys");
-  await page.getByRole("button", { name: "Try D major", exact: true }).click();
-  await expect(page.getByTestId("jam-key")).toHaveText("D");
-  await expect(
-    page.getByRole("button", { name: "Show D shapes", exact: true }),
+    page.getByRole("region", { name: "Live Jam workspace" }),
   ).toBeVisible();
+  /* The fixture reading is ambiguous, so it is offered, never taken. */
+  await expect(page.getByTestId("jam-key")).toHaveText("A");
+  await expect(page.locator(".lab-meter-head")).toContainText("D major");
   await expect(
-    page.getByRole("button", { name: /Follow music/ }),
+    page.getByRole("button", { name: /Follow the song/ }),
   ).toHaveAttribute("aria-pressed", "false");
+
+  await page.getByRole("button", { name: "Apply", exact: true }).click();
+  await expect(page.getByTestId("jam-key")).toHaveText("D");
+  await expect(page.locator(".lab-source")).toContainText("Detected");
 });
 
-test("Live Jam follows local estimates over the full neck and holds through lock and pause", async ({
+test("Live Jam follows the song when asked, and Lock freezes the neck through a key change", async ({
   page,
 }) => {
   await page.clock.setFixedTime(new Date(1_800_000_000_000));
@@ -31,11 +31,8 @@ test("Live Jam follows local estimates over the full neck and holds through lock
     route.fulfill({ json: { found: false, song: null } }),
   );
   await page.goto("/");
-  await page.getByLabel("Root note", { exact: true }).selectOption("Bb");
   await page.getByRole("button", { name: "Live Jam", exact: true }).click();
-  await expect(
-    page.getByRole("region", { name: "Live Jam workspace" }),
-  ).toBeVisible();
+  await page.getByRole("button", { name: /Follow the song/ }).click();
   await page.evaluate(() => {
     const host = window as any;
     host.testDetection = {
@@ -44,125 +41,66 @@ test("Live Jam follows local estimates over the full neck and holds through lock
       reason: "stable_numpy_estimate",
       ambiguous: false,
       state: "likely_key",
-      readyToApply: false,
+      readyToApply: true,
       evidenceId: 2,
     };
     host.testEmit("detected-key-update", host.testDetection);
   });
-  for (const evidenceId of [3, 4]) {
-    await page.clock.setFixedTime(new Date(1_800_000_000_000 + evidenceId * 4000));
-    await page.evaluate((evidenceId) => {
-      const host = window as any;
-      host.testDetection = { ...host.testDetection, evidenceId };
-      host.testEmit("detected-key-update", host.testDetection);
-    }, evidenceId);
-  }
-  await expect(page.getByTestId("jam-key")).toHaveText("D", { timeout: 12000 });
-  await expect(
-    page.getByRole("group", { name: "Interactive guitar fretboard" }),
-  ).toContainText("24");
-  await expect(
-    page.getByRole("region", { name: "Compatible chords and shapes" }),
-  ).toHaveCount(0);
-  await page.getByRole("button", { name: /Chords & shapes/ }).click();
-  await page
-    .getByRole("button", { name: "Show D shapes", exact: true })
-    .click();
-  await expect(
-    page.getByRole("button", { name: "Hear this shape" }),
-  ).toBeVisible();
+  await expect(page.getByTestId("jam-key")).toHaveText("D");
+  await expect(page.getByRole("img", { name: /^Fretboard for D/ })).toBeVisible();
+  await expect(page.locator(".lab-map-heading")).toContainText("24 frets");
+  /* Let the key card finish its fade so the evidence shot is not caught mid-animation. */
+  await page.waitForTimeout(400);
   await page.screenshot({
     path: "docs/review-evidence/live-jam-desktop.png",
     fullPage: true,
   });
-  await page.getByRole("button", { name: "Hold jam key" }).click();
+
+  await page.getByRole("button", { name: "Lock", exact: true }).click();
   await page.evaluate(() => {
     const host = window as any;
-    host.testEmit("detected-key-update", {
+    host.testDetection = {
       ...host.testDetection,
       primaryKey: "G",
       displayName: "G major",
-      evidenceId: 5,
-    });
-    host.testEmit("media-session-update", {
-      ...host.testMedia,
-      playback_status: "paused",
-    });
+      evidenceId: 3,
+    };
+    host.testEmit("detected-key-update", host.testDetection);
   });
-  await page.getByRole("button", { name: "Release jam key" }).click();
   await expect(page.getByTestId("jam-key")).toHaveText("D");
+
+  await page.getByRole("button", { name: "Locked", exact: true }).click();
+  await expect(page.getByTestId("jam-key")).toHaveText("G");
+  /* The neck and the practice screens are one context now. */
+  await page.getByRole("button", { name: "Open navigation menu" }).click();
   await page.getByRole("button", { name: "Explore", exact: true }).click();
-  await expect(page.getByLabel("Root note", { exact: true })).toHaveValue("Bb");
+  await expect(page.getByLabel("Root note", { exact: true })).toHaveValue("G");
 });
 
-test("Live Jam explains a pending modulation then updates the fretboard and chord ideas", async ({ page }) => {
-  await page.clock.setFixedTime(new Date(1_800_000_000_000));
-  await page.route("**/lookup-song?**", (route) => route.fulfill({ json: {
-    found: true,
-    song: { id: "fixture", title: "Practice track", artist: "Test artist", musical_key: "Bb", mode: "major", verified: true },
-  } }));
-  await page.goto("/");
-  await page.getByRole("button", { name: "Live Jam", exact: true }).click();
-  await expect(page.getByTestId("jam-key")).toHaveText("B♭");
-  await page.getByRole("button", { name: /Chords & shapes/ }).click();
-  await expect(page.getByRole("button", { name: "Show Bb shapes", exact: true })).toBeVisible();
-  for (const evidenceId of [2, 3, 4]) {
-    await page.clock.setFixedTime(new Date(1_800_000_000_000 + evidenceId * 4000));
-    await page.evaluate((evidenceId) => {
-      const host = window as any;
-      host.testDetection = { ...host.testDetection, evidenceId, primaryKey: "Eb", primaryScale: "minor", displayName: "Eb minor", ambiguous: false, state: "likely_key", source: "audio_analysis:numpy_fallback", reason: "stable_numpy_estimate" };
-      host.testEmit("detected-key-update", host.testDetection);
-    }, evidenceId);
-    if (evidenceId < 4) {
-      await expect(page.getByTestId("jam-pending-key")).toContainText("E♭ minor");
-      await expect(page.getByTestId("jam-key")).toHaveText("B♭");
-      await expect(page.getByRole("button", { name: "Show Bb shapes", exact: true })).toBeVisible();
-    }
-  }
-  await expect(page.getByTestId("jam-key")).toHaveText("E♭");
-  await expect(page.getByTestId("jam-pending-key")).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Show Ebm shapes", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Show Bb shapes", exact: true })).toHaveCount(0);
-  await expect(page.getByRole("region", { name: "Key journey" })).toContainText("E♭ minor");
-  await expect(page.getByText("Estimated from audio", { exact: true })).toBeVisible();
-});
-
-test("Live Jam follows verified tracks and clears the previous key while the next track resolves", async ({
+test("Live Jam trusts a verified library key over an ambiguous local reading", async ({
   page,
 }) => {
-  let verified = true;
   await page.route("**/lookup-song?**", (route) =>
     route.fulfill({
-      json: verified
-        ? {
-            found: true,
-            song: {
-              id: "fixture",
-              title: "Practice track",
-              artist: "Test artist",
-              musical_key: "Bb",
-              mode: "major",
-              verified: true,
-            },
-          }
-        : { found: false, song: null },
+      json: {
+        found: true,
+        song: {
+          id: "fixture",
+          title: "Practice track",
+          artist: "Test artist",
+          musical_key: "Bb",
+          mode: "major",
+          verified: true,
+        },
+      },
     }),
   );
   await page.goto("/");
   await page.getByRole("button", { name: "Live Jam", exact: true }).click();
-  await expect(page.getByTestId("jam-key")).toHaveText("B♭");
-  verified = false;
-  await page.evaluate(() => {
-    const host = window as any;
-    host.testEmit("media-session-update", {
-      ...host.testMedia,
-      title: "Another song",
-    });
-  });
-  await expect(page.getByTestId("jam-key")).toHaveText("—");
-  await expect(
-    page.getByRole("region", { name: "Key journey" }),
-  ).not.toContainText("B♭");
+  await expect(page.locator(".lab-meter-head")).toContainText("B");
+  await page.getByRole("button", { name: /Follow the song/ }).click();
+  await expect(page.getByTestId("jam-key")).toHaveText("Bb");
+  await expect(page.locator(".lab-source")).toContainText("Verified");
 });
 
 test.beforeEach(async ({ page }) => {

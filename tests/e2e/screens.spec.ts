@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-test("Live Jam manual mode works on a phone with optional shapes and reduced motion", async ({
+test("Live Jam fills a phone screen and takes a manual key with reduced motion", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
@@ -8,19 +8,14 @@ test("Live Jam manual mode works on a phone with optional shapes and reduced mot
   await page.goto("/");
   await page.getByRole("button", { name: "Open navigation menu" }).click();
   await page.getByRole("button", { name: "Live Jam", exact: true }).click();
-  await page.getByRole("button", { name: "Choose key manually" }).click();
-  await page.getByLabel("Jam root").selectOption("G");
-  await page.getByLabel("Jam scale").selectOption("major");
-  await expect(page.getByTestId("jam-key")).toHaveText("G");
-  await page.getByRole("button", { name: /Chords & shapes/ }).click();
-  await page
-    .getByRole("button", { name: "Show G shapes", exact: true })
-    .click();
-  await page.getByRole("button", { name: "Next jam shape" }).click();
-  await expect(page.getByText(/SHAPE 2 \//)).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "Hear this shape" }),
-  ).toBeEnabled();
+    page.getByRole("region", { name: "Live Jam workspace" }),
+  ).toBeVisible();
+  await page.getByRole("textbox", { name: "Root" }).fill("G");
+  /* The select carries its chosen option into its accessible name, so anchor on the legend. */
+  await page.getByRole("combobox", { name: /^Scale/ }).selectOption("major");
+  await expect(page.getByTestId("jam-key")).toHaveText("G");
+  await expect(page.getByRole("region", { name: /chord bank/i })).toBeVisible();
   await page.screenshot({
     path: "docs/review-evidence/live-jam-mobile.png",
     fullPage: true,
@@ -32,7 +27,7 @@ test("Live Jam manual mode works on a phone with optional shapes and reduced mot
   ).toBe(true);
   expect(
     await page
-      .locator(".vinyl")
+      .locator(".lab-vinyl")
       .evaluate((el) => getComputedStyle(el).animationName),
   ).toBe("none");
 });

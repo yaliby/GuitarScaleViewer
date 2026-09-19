@@ -33,7 +33,7 @@ export function KeyReadout({ root, scaleType, notes, sourceLabel }: KeyReadoutPr
             exit={{ opacity: 0 }}
             transition={{ duration: 0.18, ease: 'easeOut' }}
           >
-            <strong>{root}</strong>
+            <strong data-testid="jam-key">{root}</strong>
             <span>{SCALE_TYPE_LABELS[scaleType]}</span>
           </motion.div>
         </AnimatePresence>

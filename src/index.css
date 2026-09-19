@@ -409,8 +409,15 @@ input::-webkit-inner-spin-button {
   background: #83b3a3;
   box-shadow: 0 0 0 3px #83b3a30c;
 }
-.mobile-menu {
+.nav-toggle {
   display: none !important;
+}
+.sidebar-scrim {
+  position: fixed;
+  inset: 0;
+  background: #0008;
+  backdrop-filter: blur(3px);
+  z-index: 45;
 }
 .workspace {
   width: 100%;
@@ -419,6 +426,32 @@ input::-webkit-inner-spin-button {
   margin: 0 auto;
   flex: 1;
   min-width: 0;
+}
+
+/*
+  Immersive shell (Live Jam). The neck is the screen, so the nav docks off-canvas at every
+  width and comes back through the hamburger — the same drawer the narrow layout already uses.
+*/
+.shell-immersive .sidebar {
+  width: 248px;
+  transform: translateX(-100%);
+  transition: transform 0.25s ease;
+  background: #141a1f;
+}
+.shell-immersive .sidebar.open {
+  transform: translateX(0);
+}
+.shell-immersive .nav-toggle {
+  display: inline-flex !important;
+}
+.shell-immersive .studio-main {
+  margin-left: 0;
+}
+.shell-immersive .workspace {
+  max-width: none;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
 }
 .page-heading {
   display: flex;
@@ -2148,14 +2181,7 @@ input::-webkit-inner-spin-button {
   .sidebar.open {
     transform: translateX(0);
   }
-  .sidebar-scrim {
-    position: fixed;
-    inset: 0;
-    background: #0008;
-    backdrop-filter: blur(3px);
-    z-index: 45;
-  }
-  .mobile-menu {
+  .nav-toggle {
     display: inline-flex !important;
   }
   .brand {
@@ -3012,7 +3038,7 @@ html {
 }
 
 /* ===========================================================================
-   Classic scale-viewer chassis (`.classic-shell`).
+   Live Jam chassis (`.lab-shell`).
    Scoped so the studio-gear design language above cannot leak into the Studio
    shell, which owns the document-level :root/html/body rules.
    =========================================================================== */
@@ -3021,7 +3047,7 @@ html {
   is one too — milled aluminium panels, engraved legends, real toggles, status LEDs.
   Depth comes from light direction (top-lit), never from translucency or blur.
 */
-.classic-shell {
+.lab-shell {
   /* Panel greys — warm-shifted so they sit with the rosewood neck instead of against it. */
   --gear-void: #0a0a0c;
   --gear-chassis: #131316;
@@ -3051,7 +3077,7 @@ html {
   --bevel-hairline: inset 0 0 0 1px rgba(255, 255, 255, 0.045);
 }
 
-.classic-shell {
+.lab-shell {
   @apply antialiased;
   min-height: 100%;
   background: var(--gear-void);
@@ -3059,29 +3085,6 @@ html {
   text-rendering: optimizeLegibility;
   /* Gear has no rubber-band scroll. */
   overscroll-behavior: none;
-}
-
-/* Sits above the Lab screen, so it wears the same pill as the status chip in its heading. */
-.classic-shell-back {
-  align-self: flex-start;
-  margin: 14px 0 0 26px;
-  padding: 9px 14px;
-  border-radius: 30px;
-  border: 1px solid #2d2d35;
-  background: linear-gradient(180deg, #1c1c21, #141418);
-  font-size: 11px;
-  color: var(--gear-legend);
-}
-
-.classic-shell-back:hover {
-  color: var(--gear-text);
-  border-color: #3d3d47;
-}
-
-@media (max-width: 900px) {
-  .classic-shell-back {
-    margin-left: 14px;
-  }
 }
 
 @layer components {

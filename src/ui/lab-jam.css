@@ -9,7 +9,7 @@
 
    Everything is scoped under `.lab-screen` so the Studio shell (which owns the
    document-level rules) cannot pick any of it up. Colour tokens come from
-   `.classic-shell` in index.css.
+   `.lab-shell` in index.css.
    ============================================================================= */
 
 .lab-screen {

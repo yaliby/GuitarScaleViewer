@@ -33,9 +33,8 @@ import { ChordWorkspace } from "./components/ChordWorkspace";
 import { Dialog } from "./components/Dialog";
 import { Fretboard, musicalLabel } from "./components/Fretboard";
 import { ListeningPanel } from "./components/ListeningPanel";
-import { LiveJam } from "./components/LiveJam";
 import { StudioScreens, type StudioView } from "./components/StudioScreens";
-import ClassicScaleView from "./ClassicScaleView";
+import LiveJamScreen from "./LiveJamScreen";
 import { Transport } from "./components/Transport";
 import { useCloudKeyResolution } from "./hooks/useCloudKeyResolution";
 import { useDetectedKey } from "./hooks/useDetectedKey";
@@ -158,8 +157,6 @@ export default function App() {
   const [session, setSession] = useState<PracticeSession>(() => readSession());
   const [favorites, setFavorites] = useState<Favorite[]>(() => readFavorites());
   const [view, setView] = useState<StudioView>("explore");
-  /** Which chassis fills the window: the Studio, or the original scale-viewer neck. */
-  const [shell, setShell] = useState<"studio" | "classic">("studio");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [saveOpen, setSaveOpen] = useState(false);
   const [guideOpen, setGuideOpen] = useState(false);
@@ -537,7 +534,6 @@ export default function App() {
     setToast(`Saved ${name}`);
   };
   const loadFavorite = (favorite: Favorite) => {
-    if (view === "jam") changeView("explore");
     setSession(favorite.session);
     setAuto(false);
     setSidebarOpen(false);
@@ -938,26 +934,14 @@ export default function App() {
       scale={session.scaleType}
     />
   );
-  if (shell === "classic") {
-    return (
-      <MotionConfig reducedMotion="user">
-        <div className="classic-shell flex min-h-[100dvh] flex-col">
-          <button
-            type="button"
-            className="classic-shell-back"
-            onClick={() => setShell("studio")}
-          >
-            ← Back to Studio
-          </button>
-          <ClassicScaleView />
-        </div>
-      </MotionConfig>
-    );
-  }
+  /* Live Jam is the whole window: the neck needs it, so the nav folds into the hamburger. */
+  const immersive = view === "jam";
 
   return (
     <MotionConfig reducedMotion="user">
-      <div className={`studio-shell studio-${view}`}>
+      <div
+        className={`studio-shell studio-${view} ${immersive ? "shell-immersive" : ""}`}
+      >
         <aside
           className={`sidebar ${sidebarOpen ? "open" : ""}`}
           id="studio-sidebar"
@@ -1009,30 +993,16 @@ export default function App() {
               <span>Progressions</span>
               <i className="nav-dot" />
             </button>
-            {/*
-              The original Guitar Scale Viewer neck, kept as a full-window mode rather
-              than a Studio screen: it brings its own control face and dev drawer.
-            */}
-            <button
-              className="nav-item"
-              onClick={() => setShell("classic")}
-            >
-              <Guitar size={17} />
-              <span>Classic neck</span>
-              <i className="nav-dot" />
-            </button>
           </nav>
           <div className="saved-heading">
             <span className="nav-section-label">Saved setups</span>
-            {view !== "jam" && (
-              <button
-                className="icon-button"
-                aria-label="Save current setup"
-                onClick={() => setSaveOpen(true)}
-              >
-                <BookmarkPlus size={15} />
-              </button>
-            )}
+            <button
+              className="icon-button"
+              aria-label="Save current setup"
+              onClick={() => setSaveOpen(true)}
+            >
+              <BookmarkPlus size={15} />
+            </button>
           </div>
           <div className="favorites">
             {favorites.map((favorite) => (
@@ -1107,7 +1077,7 @@ export default function App() {
         <main className="studio-main">
           <header className="topbar">
             <button
-              className="mobile-menu icon-button"
+              className="nav-toggle icon-button"
               aria-label={
                 sidebarOpen ? "Close navigation menu" : "Open navigation menu"
               }
@@ -1131,16 +1101,14 @@ export default function App() {
                 <i className="status-dot" />
                 {cloud.sourceBadge}
               </span>
-              {view !== "jam" && (
-                <button
-                  className="button save-button"
-                  aria-label="Save setup"
-                  onClick={() => setSaveOpen(true)}
-                >
-                  <Save size={15} />
-                  Save setup
-                </button>
-              )}
+              <button
+                className="button save-button"
+                aria-label="Save setup"
+                onClick={() => setSaveOpen(true)}
+              >
+                <Save size={15} />
+                Save setup
+              </button>
             </div>
           </header>
           <StudioScreens
@@ -1150,14 +1118,12 @@ export default function App() {
             chords={chordPanel}
             listening={listeningPanel}
             jam={
-              <LiveJam
-                media={media}
-                detected={detectedKey}
-                cloud={cloud}
-                session={session}
-                onRetry={() => void resetDetection()}
-                onAudition={audition}
-                activeMidi={activeMidi}
+              <LiveJamScreen
+                root={session.root}
+                scaleType={session.scaleType}
+                tuningId={session.tuningId}
+                capo={session.capo}
+                onChange={updateSession}
               />
             }
             session={session}

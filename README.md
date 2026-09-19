@@ -57,17 +57,16 @@ you want to stop the development process.
 
 1. Play music on the **same Windows PC**, for example in Spotify or a browser.
    The app captures computer playback, not music playing independently on a phone.
-2. Open **Live Jam**, turn **Follow music** on, and leave **Hold this key** off.
+2. Open **Live Jam**, turn **Follow the song** on, and leave **Lock** off.
 3. Let the music play while the app collects enough audio. Detection is not
-   immediate: a new track needs a sustained passage, and a key change requires
-   repeated fresh evidence before the fretboard switches.
-4. Enable **Chords & shapes** to see compatible chord suggestions. Use **Hold
-   this key** to keep the current key, or the sliders beside the map to choose a
-   key manually. Manual selection pauses automatic following; turn **Follow
-   music** back on to resume it.
+   immediate: a new track needs a sustained passage before a key is worth acting
+   on.
+4. The **chord bank** below the neck holds every shape that lives in the key.
+   Use **Apply** to take a detection by hand, **Lock** to freeze the current
+   reading, or the setup row above the neck to choose a key, tuning and capo.
 
-If detection is uncertain, the app explains its status and may offer **Try
-[key]** buttons. The practice tools also work with a manually chosen key.
+If detection is uncertain, the deck says so and leaves the neck alone. The
+practice tools also work with a manually chosen key.
 
 ## Practice tools
 
@@ -77,7 +76,7 @@ If detection is uncertain, the app explains its status and may offer **Try
 - Explore playable chord voicings and build progressions. Playback highlights the active chord and its notes on the fretboard.
 - Save named practice setups and restore your last session automatically on the same device.
 - Follow Windows media metadata and review local key suggestions. Lock the practice key while a song continues playing.
-- **Live Jam:** a dedicated listening deck that follows a settled song key across all 24 frets, with optional compatible chords, selectable shapes, note audition, key hold, manual overrides, and a per-track key journey. Its key, tuning and capo do not overwrite your practice setup.
+- **Live Jam:** the full-window neck — all 24 frets, a listening deck, the chord bank for the current key, and its own setup row — with the navigation folded into the hamburger menu. It plays the same key, tuning and capo as the rest of the workspace, so a key you land on here is the key you practice.
 
 The interface supports smaller screens, keyboard navigation, and the operating system's reduced-motion preference. Audio starts only after interaction. Practice sounds use synthesized tones.
 
@@ -132,7 +131,7 @@ GSMTC/WASAPI path on Windows.
 | Path | What it is |
 |---|---|
 | `src/` | React + Vite frontend (Studio shell, fretboard, chord library, key-resolution hooks) |
-| `src/ClassicScaleView.tsx` | The original scale-viewer chassis, reachable from the sidebar as **Classic neck** |
+| `src/LiveJamScreen.tsx` | Live Jam: the detailed neck chassis, driven by the workspace's shared session |
 | `src-tauri/` | Rust backend: audio capture, OS now-playing metadata, key-detection engine |
 | `src-tauri/sidecars/key_analyzer/` | Python analyzer sidecar (essentia, numpy fallback) |
 | `src-tauri/sidecars/libkeyfinder_cli/` | Native libKeyFinder CLI analyzer backend |
@@ -184,9 +183,9 @@ See [Windows setup](docs/NATIVE_SETUP.md) for additional native diagnostics.
 
 ## Key detection
 
-In **Live Jam**, start music in a desktop player and leave **Follow music** enabled. Verified library matches can initialize the key immediately while audio analysis continues. Local estimates must pass native stability, silence, ambiguity and consistency gates, then persist across three fresh revisions over at least six seconds. Sustained key changes update the fretboard and chord ideas together; the current key remains visible while a new one is being compared. Analysis needs a stretch of music; it is not instant chord recognition. The full scale stays visible, and **Chords & shapes** reveals diatonic suggestions with playable voicings. Use **Hold this key**, or open the sliders beside the map to choose a key, tuning and capo. **Fretboard focus** hides the listening deck to leave more space for the neck. In a browser, choose a key manually; desktop audio capture requires the Windows app.
+In **Live Jam**, start music in a desktop player and turn **Follow the song** on. A verified library row is worth 100% and applies immediately; an unverified catalog hit is worth 70% and proposes rather than overrules; a local estimate is worth its own confidence, and nothing at all while the engine calls it ambiguous. Only a key worth at least the auto-apply threshold (85% by default) moves the neck unattended — everything else waits for **Apply**. Analysis needs a stretch of music; it is not instant chord recognition. **Lock** freezes the current reading, **Reset** clears the detector, and the setup row above the neck always overrides both. In a browser, choose a key manually; desktop audio capture requires the Windows app.
 
-The bundled Windows analyzer can be uncertain, especially between relative major and minor keys. Live Jam labels local results as estimates, and compatible chords are suggestions rather than a transcription of the song. Its separate follow policy does not automatically change the practice key. Explore's stricter automatic path still requires a ready, unambiguous result from a supported analyzer or a validated cloud match. The practice lock prevents either from changing your practice context. Live Jam's key journey and display controls last for the current workspace visit.
+The bundled analyzer can be uncertain, especially between relative major and minor keys. The deck labels local results as estimates, and the chord bank offers shapes that fit the key rather than a transcription of the song. Explore's separate automatic path still requires a ready, unambiguous result from a supported analyzer or a validated cloud match, and the practice lock prevents it from changing your practice context.
 
 Cloud lookup and user-submitted corrections require a configured backend. Source fixes and setup instructions are in [chordsync-api](chordsync-api/README.md); changing this repository does not deploy that service. Corrections are submitted only when you click the suggestion button.
 
