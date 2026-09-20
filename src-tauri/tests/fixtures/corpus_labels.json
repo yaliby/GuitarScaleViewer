@@ -1,0 +1,1668 @@
+{
+ "version": 1,
+ "note": "measurement corpus labels - NOT the shipped catalog",
+ "entries": [
+  {
+   "artist": "Bob Marley",
+   "title": "No Woman No Cry",
+   "key": "C",
+   "mode": "major"
+  },
+  {
+   "artist": "Oasis",
+   "title": "Don't Look Back in Anger",
+   "key": "C",
+   "mode": "major"
+  },
+  {
+   "artist": "Queen",
+   "title": "We Will Rock You",
+   "key": "C",
+   "mode": "major"
+  },
+  {
+   "artist": "Bob Dylan",
+   "title": "Like a Rolling Stone",
+   "key": "C",
+   "mode": "major"
+  },
+  {
+   "artist": "The Rolling Stones",
+   "title": "Start Me Up",
+   "key": "C",
+   "mode": "major"
+  },
+  {
+   "artist": "Creedence Clearwater Revival",
+   "title": "Have You Ever Seen the Rain",
+   "key": "C",
+   "mode": "major"
+  },
+  {
+   "artist": "Billy Joel",
+   "title": "Piano Man",
+   "key": "C",
+   "mode": "major"
+  },
+  {
+   "artist": "Kenny Rogers",
+   "title": "The Gambler",
+   "key": "C",
+   "mode": "major"
+  },
+  {
+   "artist": "Bob Dylan",
+   "title": "Knockin' on Heaven's Door",
+   "key": "G",
+   "mode": "major"
+  },
+  {
+   "artist": "Eagles",
+   "title": "Take It Easy",
+   "key": "G",
+   "mode": "major"
+  },
+  {
+   "artist": "Creedence Clearwater Revival",
+   "title": "Fortunate Son",
+   "key": "G",
+   "mode": "major"
+  },
+  {
+   "artist": "Taylor Swift",
+   "title": "Shake It Off",
+   "key": "G",
+   "mode": "major"
+  },
+  {
+   "artist": "AC/DC",
+   "title": "You Shook Me All Night Long",
+   "key": "G",
+   "mode": "major"
+  },
+  {
+   "artist": "Van Morrison",
+   "title": "Brown Eyed Girl",
+   "key": "G",
+   "mode": "major"
+  },
+  {
+   "artist": "Lynyrd Skynyrd",
+   "title": "Free Bird",
+   "key": "G",
+   "mode": "major"
+  },
+  {
+   "artist": "Creedence Clearwater Revival",
+   "title": "Bad Moon Rising",
+   "key": "D",
+   "mode": "major"
+  },
+  {
+   "artist": "Bob Dylan",
+   "title": "Blowin' in the Wind",
+   "key": "D",
+   "mode": "major"
+  },
+  {
+   "artist": "The Beatles",
+   "title": "Twist and Shout",
+   "key": "D",
+   "mode": "major"
+  },
+  {
+   "artist": "Tears for Fears",
+   "title": "Everybody Wants to Rule the World",
+   "key": "D",
+   "mode": "major"
+  },
+  {
+   "artist": "U2",
+   "title": "Where the Streets Have No Name",
+   "key": "D",
+   "mode": "major"
+  },
+  {
+   "artist": "Led Zeppelin",
+   "title": "Kashmir",
+   "key": "D",
+   "mode": "major"
+  },
+  {
+   "artist": "Taylor Swift",
+   "title": "Love Story",
+   "key": "D",
+   "mode": "major"
+  },
+  {
+   "artist": "The Beatles",
+   "title": "Here Comes the Sun",
+   "key": "A",
+   "mode": "major"
+  },
+  {
+   "artist": "The Beatles",
+   "title": "Help!",
+   "key": "A",
+   "mode": "major"
+  },
+  {
+   "artist": "Led Zeppelin",
+   "title": "Rock and Roll",
+   "key": "A",
+   "mode": "major"
+  },
+  {
+   "artist": "Oasis",
+   "title": "Champagne Supernova",
+   "key": "A",
+   "mode": "major"
+  },
+  {
+   "artist": "Ed Sheeran",
+   "title": "Photograph",
+   "key": "E",
+   "mode": "major"
+  },
+  {
+   "artist": "Journey",
+   "title": "Don't Stop Believin'",
+   "key": "E",
+   "mode": "major"
+  },
+  {
+   "artist": "The Rolling Stones",
+   "title": "(I Can't Get No) Satisfaction",
+   "key": "E",
+   "mode": "major"
+  },
+  {
+   "artist": "Led Zeppelin",
+   "title": "Whole Lotta Love",
+   "key": "E",
+   "mode": "major"
+  },
+  {
+   "artist": "The Beatles",
+   "title": "Yesterday",
+   "key": "F",
+   "mode": "major"
+  },
+  {
+   "artist": "Coldplay",
+   "title": "The Scientist",
+   "key": "F",
+   "mode": "major"
+  },
+  {
+   "artist": "Queen",
+   "title": "Don't Stop Me Now",
+   "key": "F",
+   "mode": "major"
+  },
+  {
+   "artist": "Fleetwood Mac",
+   "title": "Go Your Own Way",
+   "key": "F",
+   "mode": "major"
+  },
+  {
+   "artist": "Fleetwood Mac",
+   "title": "Dreams",
+   "key": "F",
+   "mode": "major"
+  },
+  {
+   "artist": "Bruno Mars",
+   "title": "Just the Way You Are",
+   "key": "F",
+   "mode": "major"
+  },
+  {
+   "artist": "Radiohead",
+   "title": "No Surprises",
+   "key": "F",
+   "mode": "major"
+  },
+  {
+   "artist": "Tom Petty",
+   "title": "Free Fallin'",
+   "key": "F",
+   "mode": "major"
+  },
+  {
+   "artist": "Taylor Swift",
+   "title": "Blank Space",
+   "key": "F",
+   "mode": "major"
+  },
+  {
+   "artist": "Katy Perry",
+   "title": "Roar",
+   "key": "Bb",
+   "mode": "major"
+  },
+  {
+   "artist": "Queen",
+   "title": "Killer Queen",
+   "key": "Eb",
+   "mode": "major"
+  },
+  {
+   "artist": "Coldplay",
+   "title": "Fix You",
+   "key": "Eb",
+   "mode": "major"
+  },
+  {
+   "artist": "Fleetwood Mac",
+   "title": "Landslide",
+   "key": "Eb",
+   "mode": "major"
+  },
+  {
+   "artist": "Ed Sheeran",
+   "title": "Perfect",
+   "key": "Ab",
+   "mode": "major"
+  },
+  {
+   "artist": "Katy Perry",
+   "title": "Firework",
+   "key": "Ab",
+   "mode": "major"
+  },
+  {
+   "artist": "Queen",
+   "title": "Somebody to Love",
+   "key": "Ab",
+   "mode": "major"
+  },
+  {
+   "artist": "Guns N' Roses",
+   "title": "Sweet Child O' Mine",
+   "key": "Db",
+   "mode": "major"
+  },
+  {
+   "artist": "AC/DC",
+   "title": "Thunderstruck",
+   "key": "B",
+   "mode": "major"
+  },
+  {
+   "artist": "Neil Diamond",
+   "title": "Sweet Caroline",
+   "key": "B",
+   "mode": "major"
+  },
+  {
+   "artist": "The Beatles",
+   "title": "Blackbird",
+   "key": "G",
+   "mode": "major"
+  },
+  {
+   "artist": "The Beatles",
+   "title": "Something",
+   "key": "C",
+   "mode": "major"
+  },
+  {
+   "artist": "Simon & Garfunkel",
+   "title": "Mrs. Robinson",
+   "key": "E",
+   "mode": "major"
+  },
+  {
+   "artist": "The Doors",
+   "title": "Light My Fire",
+   "key": "A",
+   "mode": "minor"
+  },
+  {
+   "artist": "Elton John",
+   "title": "Your Song",
+   "key": "Eb",
+   "mode": "major"
+  },
+  {
+   "artist": "John Denver",
+   "title": "Take Me Home, Country Roads",
+   "key": "A",
+   "mode": "major"
+  },
+  {
+   "artist": "Don McLean",
+   "title": "American Pie",
+   "key": "G",
+   "mode": "major"
+  },
+  {
+   "artist": "The Killers",
+   "title": "Mr. Brightside",
+   "key": "Db",
+   "mode": "major"
+  },
+  {
+   "artist": "Green Day",
+   "title": "Basket Case",
+   "key": "Eb",
+   "mode": "major"
+  },
+  {
+   "artist": "Weezer",
+   "title": "Buddy Holly",
+   "key": "A",
+   "mode": "major"
+  },
+  {
+   "artist": "Radiohead",
+   "title": "Karma Police",
+   "key": "A",
+   "mode": "minor"
+  },
+  {
+   "artist": "The Rolling Stones",
+   "title": "Angie",
+   "key": "A",
+   "mode": "minor"
+  },
+  {
+   "artist": "The Beatles",
+   "title": "While My Guitar Gently Weeps",
+   "key": "A",
+   "mode": "minor"
+  },
+  {
+   "artist": "Led Zeppelin",
+   "title": "Black Dog",
+   "key": "A",
+   "mode": "minor"
+  },
+  {
+   "artist": "Deep Purple",
+   "title": "Child in Time",
+   "key": "A",
+   "mode": "minor"
+  },
+  {
+   "artist": "Bill Withers",
+   "title": "Ain't No Sunshine",
+   "key": "A",
+   "mode": "minor"
+  },
+  {
+   "artist": "The Rolling Stones",
+   "title": "Paint It Black",
+   "key": "E",
+   "mode": "minor"
+  },
+  {
+   "artist": "The Beatles",
+   "title": "Eleanor Rigby",
+   "key": "E",
+   "mode": "minor"
+  },
+  {
+   "artist": "Metallica",
+   "title": "Master of Puppets",
+   "key": "E",
+   "mode": "minor"
+  },
+  {
+   "artist": "Bon Jovi",
+   "title": "Livin' on a Prayer",
+   "key": "E",
+   "mode": "minor"
+  },
+  {
+   "artist": "Pink Floyd",
+   "title": "Breathe",
+   "key": "E",
+   "mode": "minor"
+  },
+  {
+   "artist": "Metallica",
+   "title": "One",
+   "key": "B",
+   "mode": "minor"
+  },
+  {
+   "artist": "Metallica",
+   "title": "Fade to Black",
+   "key": "B",
+   "mode": "minor"
+  },
+  {
+   "artist": "Dua Lipa",
+   "title": "Levitating",
+   "key": "B",
+   "mode": "minor"
+  },
+  {
+   "artist": "Dua Lipa",
+   "title": "Don't Start Now",
+   "key": "B",
+   "mode": "minor"
+  },
+  {
+   "artist": "Imagine Dragons",
+   "title": "Believer",
+   "key": "B",
+   "mode": "minor"
+  },
+  {
+   "artist": "Bon Jovi",
+   "title": "Wanted Dead or Alive",
+   "key": "D",
+   "mode": "minor"
+  },
+  {
+   "artist": "Adele",
+   "title": "Set Fire to the Rain",
+   "key": "D",
+   "mode": "minor"
+  },
+  {
+   "artist": "The Beatles",
+   "title": "Come Together",
+   "key": "D",
+   "mode": "minor"
+  },
+  {
+   "artist": "Led Zeppelin",
+   "title": "Immigrant Song",
+   "key": "F#",
+   "mode": "minor"
+  },
+  {
+   "artist": "Pink Floyd",
+   "title": "Time",
+   "key": "F#",
+   "mode": "minor"
+  },
+  {
+   "artist": "Adele",
+   "title": "Skyfall",
+   "key": "C",
+   "mode": "minor"
+  },
+  {
+   "artist": "Deep Purple",
+   "title": "Highway Star",
+   "key": "G",
+   "mode": "minor"
+  },
+  {
+   "artist": "Pink Floyd",
+   "title": "Shine On You Crazy Diamond",
+   "key": "G",
+   "mode": "minor"
+  },
+  {
+   "artist": "The Police",
+   "title": "Message in a Bottle",
+   "key": "C#",
+   "mode": "minor"
+  },
+  {
+   "artist": "Coldplay",
+   "title": "Paradise",
+   "key": "F",
+   "mode": "minor"
+  },
+  {
+   "artist": "Amy Winehouse",
+   "title": "Back to Black",
+   "key": "D",
+   "mode": "minor"
+  },
+  {
+   "artist": "Amy Winehouse",
+   "title": "Rehab",
+   "key": "C",
+   "mode": "minor"
+  },
+  {
+   "artist": "Muse",
+   "title": "Hysteria",
+   "key": "A",
+   "mode": "minor"
+  },
+  {
+   "artist": "Radiohead",
+   "title": "Paranoid Android",
+   "key": "G",
+   "mode": "minor"
+  },
+  {
+   "artist": "System of a Down",
+   "title": "Chop Suey!",
+   "key": "C#",
+   "mode": "minor"
+  },
+  {
+   "artist": "Rage Against the Machine",
+   "title": "Killing in the Name",
+   "key": "D",
+   "mode": "minor"
+  },
+  {
+   "artist": "Black Sabbath",
+   "title": "Paranoid",
+   "key": "E",
+   "mode": "minor"
+  },
+  {
+   "artist": "Black Sabbath",
+   "title": "Iron Man",
+   "key": "B",
+   "mode": "minor"
+  },
+  {
+   "artist": "The Animals",
+   "title": "House of the Rising Sun",
+   "key": "A",
+   "mode": "minor"
+  },
+  {
+   "artist": "Santana",
+   "title": "Black Magic Woman",
+   "key": "D",
+   "mode": "minor"
+  },
+  {
+   "artist": "Dire Straits",
+   "title": "Money for Nothing",
+   "key": "G",
+   "mode": "minor"
+  },
+  {
+   "artist": "Tracy Chapman",
+   "title": "Fast Car",
+   "key": "C",
+   "mode": "major"
+  },
+  {
+   "artist": "Alicia Keys",
+   "title": "No One",
+   "key": "E",
+   "mode": "major"
+  },
+  {
+   "artist": "Sam Smith",
+   "title": "Stay With Me",
+   "key": "C",
+   "mode": "major"
+  },
+  {
+   "artist": "Lorde",
+   "title": "Royals",
+   "key": "D",
+   "mode": "major"
+  },
+  {
+   "artist": "Daft Punk",
+   "title": "Get Lucky",
+   "key": "B",
+   "mode": "minor"
+  },
+  {
+   "artist": "Gotye",
+   "title": "Somebody That I Used to Know",
+   "key": "D",
+   "mode": "minor"
+  },
+  {
+   "artist": "The Cranberries",
+   "title": "Dreams",
+   "key": "C",
+   "mode": "major"
+  },
+  {
+   "artist": "Blur",
+   "title": "Song 2",
+   "key": "E",
+   "mode": "minor"
+  },
+  {
+   "artist": "Arctic Monkeys",
+   "title": "Do I Wanna Know?",
+   "key": "G",
+   "mode": "minor"
+  },
+  {
+   "artist": "The Beatles",
+   "title": "A Hard Day's Night",
+   "key": "G",
+   "mode": "major"
+  },
+  {
+   "artist": "Alanis Morissette",
+   "title": "You Oughta Know",
+   "key": "F#",
+   "mode": "minor"
+  },
+  {
+   "artist": "No Doubt",
+   "title": "Don't Speak",
+   "key": "C",
+   "mode": "minor"
+  },
+  {
+   "artist": "Foo Fighters",
+   "title": "The Pretender",
+   "key": "A",
+   "mode": "minor"
+  },
+  {
+   "artist": "Evanescence",
+   "title": "Bring Me to Life",
+   "key": "E",
+   "mode": "minor"
+  },
+  {
+   "artist": "Nirvana",
+   "title": "Heart-Shaped Box",
+   "key": "A",
+   "mode": "minor"
+  },
+  {
+   "artist": "Weezer",
+   "title": "Say It Ain't So",
+   "key": "C",
+   "mode": "minor"
+  },
+  {
+   "artist": "Red Hot Chili Peppers",
+   "title": "Can't Stop",
+   "key": "E",
+   "mode": "minor"
+  },
+  {
+   "artist": "Red Hot Chili Peppers",
+   "title": "Otherside",
+   "key": "A",
+   "mode": "minor"
+  },
+  {
+   "artist": "Eminem",
+   "title": "Lose Yourself",
+   "key": "D",
+   "mode": "minor"
+  },
+  {
+   "artist": "Avicii",
+   "title": "Wake Me Up",
+   "key": "B",
+   "mode": "minor"
+  },
+  {
+   "artist": "Gorillaz",
+   "title": "Feel Good Inc.",
+   "key": "D",
+   "mode": "minor"
+  },
+  {
+   "artist": "Hozier",
+   "title": "Take Me to Church",
+   "key": "E",
+   "mode": "minor"
+  },
+  {
+   "artist": "Jimi Hendrix",
+   "title": "All Along the Watchtower",
+   "key": "C#",
+   "mode": "minor"
+  },
+  {
+   "artist": "Jimi Hendrix",
+   "title": "Voodoo Child (Slight Return)",
+   "key": "E",
+   "mode": "minor"
+  },
+  {
+   "artist": "Santana",
+   "title": "Oye Como Va",
+   "key": "A",
+   "mode": "minor"
+  },
+  {
+   "artist": "Santana",
+   "title": "Smooth",
+   "key": "A",
+   "mode": "minor"
+  },
+  {
+   "artist": "The Doors",
+   "title": "Riders on the Storm",
+   "key": "E",
+   "mode": "minor"
+  },
+  {
+   "artist": "The Doors",
+   "title": "Break On Through (To the Other Side)",
+   "key": "E",
+   "mode": "minor"
+  },
+  {
+   "artist": "America",
+   "title": "A Horse with No Name",
+   "key": "E",
+   "mode": "minor"
+  },
+  {
+   "artist": "Black Sabbath",
+   "title": "War Pigs",
+   "key": "E",
+   "mode": "minor"
+  },
+  {
+   "artist": "Iron Maiden",
+   "title": "Run to the Hills",
+   "key": "D",
+   "mode": "minor"
+  },
+  {
+   "artist": "Aerosmith",
+   "title": "Dream On",
+   "key": "F",
+   "mode": "minor"
+  },
+  {
+   "artist": "Bon Jovi",
+   "title": "You Give Love a Bad Name",
+   "key": "C",
+   "mode": "minor"
+  },
+  {
+   "artist": "Europe",
+   "title": "The Final Countdown",
+   "key": "F#",
+   "mode": "minor"
+  },
+  {
+   "artist": "Chic",
+   "title": "Le Freak",
+   "key": "A",
+   "mode": "minor"
+  },
+  {
+   "artist": "Stevie Wonder",
+   "title": "Higher Ground",
+   "key": "D#",
+   "mode": "minor"
+  },
+  {
+   "artist": "Ray Charles",
+   "title": "Hit the Road Jack",
+   "key": "F",
+   "mode": "minor"
+  },
+  {
+   "artist": "Fleetwood Mac",
+   "title": "Rhiannon",
+   "key": "A",
+   "mode": "minor"
+  },
+  {
+   "artist": "Michael Jackson",
+   "title": "Smooth Criminal",
+   "key": "A",
+   "mode": "minor"
+  },
+  {
+   "artist": "Prince",
+   "title": "When Doves Cry",
+   "key": "A",
+   "mode": "minor"
+  },
+  {
+   "artist": "Muse",
+   "title": "Uprising",
+   "key": "D",
+   "mode": "minor"
+  },
+  {
+   "artist": "Radiohead",
+   "title": "Street Spirit (Fade Out)",
+   "key": "A",
+   "mode": "minor"
+  },
+  {
+   "artist": "The Verve",
+   "title": "Bitter Sweet Symphony",
+   "key": "E",
+   "mode": "minor"
+  },
+  {
+   "artist": "Talking Heads",
+   "title": "Psycho Killer",
+   "key": "A",
+   "mode": "minor"
+  },
+  {
+   "artist": "Phil Collins",
+   "title": "In the Air Tonight",
+   "key": "D",
+   "mode": "minor"
+  },
+  {
+   "artist": "Kate Bush",
+   "title": "Running Up That Hill",
+   "key": "C",
+   "mode": "minor"
+  },
+  {
+   "artist": "Queen",
+   "title": "The Show Must Go On",
+   "key": "B",
+   "mode": "minor"
+  },
+  {
+   "artist": "Led Zeppelin",
+   "title": "Since I've Been Loving You",
+   "key": "C",
+   "mode": "minor"
+  },
+  {
+   "artist": "Led Zeppelin",
+   "title": "Dazed and Confused",
+   "key": "E",
+   "mode": "minor"
+  },
+  {
+   "artist": "Pearl Jam",
+   "title": "Even Flow",
+   "key": "E",
+   "mode": "minor"
+  },
+  {
+   "artist": "The Rolling Stones",
+   "title": "Gimme Shelter",
+   "key": "C#",
+   "mode": "minor"
+  },
+  {
+   "artist": "Eric Clapton",
+   "title": "Layla",
+   "key": "D",
+   "mode": "minor"
+  },
+  {
+   "artist": "B.B. King",
+   "title": "The Thrill Is Gone",
+   "key": "B",
+   "mode": "minor"
+  },
+  {
+   "artist": "Dolly Parton",
+   "title": "Jolene",
+   "key": "C#",
+   "mode": "minor"
+  },
+  {
+   "artist": "The Beatles",
+   "title": "Ticket to Ride",
+   "key": "A",
+   "mode": "major"
+  },
+  {
+   "artist": "The Beatles",
+   "title": "In My Life",
+   "key": "A",
+   "mode": "major"
+  },
+  {
+   "artist": "The Beatles",
+   "title": "Norwegian Wood (This Bird Has Flown)",
+   "key": "E",
+   "mode": "major"
+  },
+  {
+   "artist": "The Beatles",
+   "title": "Penny Lane",
+   "key": "B",
+   "mode": "major"
+  },
+  {
+   "artist": "The Beatles",
+   "title": "All You Need Is Love",
+   "key": "G",
+   "mode": "major"
+  },
+  {
+   "artist": "The Beatles",
+   "title": "Michelle",
+   "key": "F",
+   "mode": "major"
+  },
+  {
+   "artist": "The Beatles",
+   "title": "Get Back",
+   "key": "A",
+   "mode": "major"
+  },
+  {
+   "artist": "The Beatles",
+   "title": "Don't Let Me Down",
+   "key": "E",
+   "mode": "major"
+  },
+  {
+   "artist": "The Rolling Stones",
+   "title": "Sympathy for the Devil",
+   "key": "E",
+   "mode": "major"
+  },
+  {
+   "artist": "The Rolling Stones",
+   "title": "Wild Horses",
+   "key": "G",
+   "mode": "major"
+  },
+  {
+   "artist": "Led Zeppelin",
+   "title": "Ramble On",
+   "key": "E",
+   "mode": "major"
+  },
+  {
+   "artist": "Led Zeppelin",
+   "title": "Good Times Bad Times",
+   "key": "E",
+   "mode": "major"
+  },
+  {
+   "artist": "Pink Floyd",
+   "title": "Us and Them",
+   "key": "D",
+   "mode": "major"
+  },
+  {
+   "artist": "Pink Floyd",
+   "title": "Brain Damage",
+   "key": "D",
+   "mode": "major"
+  },
+  {
+   "artist": "Queen",
+   "title": "Under Pressure",
+   "key": "D",
+   "mode": "major"
+  },
+  {
+   "artist": "David Bowie",
+   "title": "Space Oddity",
+   "key": "C",
+   "mode": "major"
+  },
+  {
+   "artist": "David Bowie",
+   "title": "Heroes",
+   "key": "D",
+   "mode": "major"
+  },
+  {
+   "artist": "David Bowie",
+   "title": "Ziggy Stardust",
+   "key": "G",
+   "mode": "major"
+  },
+  {
+   "artist": "David Bowie",
+   "title": "Rebel Rebel",
+   "key": "D",
+   "mode": "major"
+  },
+  {
+   "artist": "Bruce Springsteen",
+   "title": "Born to Run",
+   "key": "E",
+   "mode": "major"
+  },
+  {
+   "artist": "Bruce Springsteen",
+   "title": "Dancing in the Dark",
+   "key": "B",
+   "mode": "major"
+  },
+  {
+   "artist": "Bruce Springsteen",
+   "title": "Born in the U.S.A.",
+   "key": "B",
+   "mode": "major"
+  },
+  {
+   "artist": "Tom Petty",
+   "title": "American Girl",
+   "key": "D",
+   "mode": "major"
+  },
+  {
+   "artist": "Tom Petty",
+   "title": "Learning to Fly",
+   "key": "F",
+   "mode": "major"
+  },
+  {
+   "artist": "Tom Petty",
+   "title": "Runnin' Down a Dream",
+   "key": "E",
+   "mode": "major"
+  },
+  {
+   "artist": "The Who",
+   "title": "Baba O'Riley",
+   "key": "F",
+   "mode": "major"
+  },
+  {
+   "artist": "The Who",
+   "title": "Won't Get Fooled Again",
+   "key": "A",
+   "mode": "major"
+  },
+  {
+   "artist": "The Who",
+   "title": "My Generation",
+   "key": "G",
+   "mode": "major"
+  },
+  {
+   "artist": "Cream",
+   "title": "Sunshine of Your Love",
+   "key": "D",
+   "mode": "major"
+  },
+  {
+   "artist": "Jimi Hendrix",
+   "title": "Purple Haze",
+   "key": "E",
+   "mode": "major"
+  },
+  {
+   "artist": "Jimi Hendrix",
+   "title": "Little Wing",
+   "key": "E",
+   "mode": "major"
+  },
+  {
+   "artist": "Jimi Hendrix",
+   "title": "Hey Joe",
+   "key": "E",
+   "mode": "major"
+  },
+  {
+   "artist": "Eagles",
+   "title": "Desperado",
+   "key": "G",
+   "mode": "major"
+  },
+  {
+   "artist": "Eagles",
+   "title": "Peaceful Easy Feeling",
+   "key": "E",
+   "mode": "major"
+  },
+  {
+   "artist": "Boston",
+   "title": "More Than a Feeling",
+   "key": "D",
+   "mode": "major"
+  },
+  {
+   "artist": "Van Halen",
+   "title": "Jump",
+   "key": "C",
+   "mode": "major"
+  },
+  {
+   "artist": "Guns N' Roses",
+   "title": "Paradise City",
+   "key": "G",
+   "mode": "major"
+  },
+  {
+   "artist": "Scorpions",
+   "title": "Wind of Change",
+   "key": "C",
+   "mode": "major"
+  },
+  {
+   "artist": "Poison",
+   "title": "Every Rose Has Its Thorn",
+   "key": "G",
+   "mode": "major"
+  },
+  {
+   "artist": "Pearl Jam",
+   "title": "Alive",
+   "key": "A",
+   "mode": "major"
+  },
+  {
+   "artist": "Pearl Jam",
+   "title": "Black",
+   "key": "E",
+   "mode": "major"
+  },
+  {
+   "artist": "Stone Temple Pilots",
+   "title": "Interstate Love Song",
+   "key": "E",
+   "mode": "major"
+  },
+  {
+   "artist": "The Smashing Pumpkins",
+   "title": "1979",
+   "key": "D#",
+   "mode": "major"
+  },
+  {
+   "artist": "The Smashing Pumpkins",
+   "title": "Today",
+   "key": "D#",
+   "mode": "major"
+  },
+  {
+   "artist": "Beck",
+   "title": "Loser",
+   "key": "D",
+   "mode": "major"
+  },
+  {
+   "artist": "Nirvana",
+   "title": "Lithium",
+   "key": "D",
+   "mode": "major"
+  },
+  {
+   "artist": "Foo Fighters",
+   "title": "Everlong",
+   "key": "D",
+   "mode": "major"
+  },
+  {
+   "artist": "Third Eye Blind",
+   "title": "Semi-Charmed Life",
+   "key": "F#",
+   "mode": "major"
+  },
+  {
+   "artist": "Smash Mouth",
+   "title": "All Star",
+   "key": "F#",
+   "mode": "major"
+  },
+  {
+   "artist": "blink-182",
+   "title": "All the Small Things",
+   "key": "C",
+   "mode": "major"
+  },
+  {
+   "artist": "Sublime",
+   "title": "What I Got",
+   "key": "D",
+   "mode": "major"
+  },
+  {
+   "artist": "4 Non Blondes",
+   "title": "What's Up?",
+   "key": "A",
+   "mode": "major"
+  },
+  {
+   "artist": "Red Hot Chili Peppers",
+   "title": "Under the Bridge",
+   "key": "D",
+   "mode": "major"
+  },
+  {
+   "artist": "Red Hot Chili Peppers",
+   "title": "Scar Tissue",
+   "key": "F",
+   "mode": "major"
+  },
+  {
+   "artist": "Death Cab for Cutie",
+   "title": "I Will Follow You into the Dark",
+   "key": "F",
+   "mode": "major"
+  },
+  {
+   "artist": "Kings of Leon",
+   "title": "Use Somebody",
+   "key": "C",
+   "mode": "major"
+  },
+  {
+   "artist": "Foster the People",
+   "title": "Pumped Up Kicks",
+   "key": "F",
+   "mode": "major"
+  },
+  {
+   "artist": "The Cure",
+   "title": "Just Like Heaven",
+   "key": "A",
+   "mode": "major"
+  },
+  {
+   "artist": "Pixies",
+   "title": "Where Is My Mind?",
+   "key": "E",
+   "mode": "major"
+  },
+  {
+   "artist": "Marvin Gaye",
+   "title": "What's Going On",
+   "key": "E",
+   "mode": "major"
+  },
+  {
+   "artist": "Marvin Gaye",
+   "title": "Let's Get It On",
+   "key": "D#",
+   "mode": "major"
+  },
+  {
+   "artist": "Otis Redding",
+   "title": "(Sittin' On) The Dock of the Bay",
+   "key": "G",
+   "mode": "major"
+  },
+  {
+   "artist": "Aretha Franklin",
+   "title": "Respect",
+   "key": "C",
+   "mode": "major"
+  },
+  {
+   "artist": "Stevie Wonder",
+   "title": "Isn't She Lovely",
+   "key": "E",
+   "mode": "major"
+  },
+  {
+   "artist": "Stevie Wonder",
+   "title": "Sir Duke",
+   "key": "B",
+   "mode": "major"
+  },
+  {
+   "artist": "Bill Withers",
+   "title": "Lean on Me",
+   "key": "C",
+   "mode": "major"
+  },
+  {
+   "artist": "Al Green",
+   "title": "Let's Stay Together",
+   "key": "G#",
+   "mode": "major"
+  },
+  {
+   "artist": "The Temptations",
+   "title": "My Girl",
+   "key": "C",
+   "mode": "major"
+  },
+  {
+   "artist": "James Brown",
+   "title": "I Got You (I Feel Good)",
+   "key": "D",
+   "mode": "major"
+  },
+  {
+   "artist": "Earth, Wind & Fire",
+   "title": "September",
+   "key": "A",
+   "mode": "major"
+  },
+  {
+   "artist": "The Jackson 5",
+   "title": "I Want You Back",
+   "key": "G#",
+   "mode": "major"
+  },
+  {
+   "artist": "Prince",
+   "title": "Purple Rain",
+   "key": "A#",
+   "mode": "major"
+  },
+  {
+   "artist": "Prince",
+   "title": "Kiss",
+   "key": "A",
+   "mode": "major"
+  },
+  {
+   "artist": "Post Malone",
+   "title": "Sunflower",
+   "key": "D",
+   "mode": "major"
+  },
+  {
+   "artist": "Post Malone",
+   "title": "Circles",
+   "key": "C",
+   "mode": "major"
+  },
+  {
+   "artist": "The Chainsmokers",
+   "title": "Closer",
+   "key": "G#",
+   "mode": "major"
+  },
+  {
+   "artist": "Daft Punk",
+   "title": "One More Time",
+   "key": "D",
+   "mode": "major"
+  },
+  {
+   "artist": "OutKast",
+   "title": "Hey Ya!",
+   "key": "G",
+   "mode": "major"
+  },
+  {
+   "artist": "Lewis Capaldi",
+   "title": "Someone You Loved",
+   "key": "D",
+   "mode": "major"
+  },
+  {
+   "artist": "My Chemical Romance",
+   "title": "Welcome to the Black Parade",
+   "key": "G",
+   "mode": "major"
+  },
+  {
+   "artist": "Green Day",
+   "title": "Wake Me Up When September Ends",
+   "key": "G",
+   "mode": "major"
+  },
+  {
+   "artist": "Bob Marley",
+   "title": "Three Little Birds",
+   "key": "A",
+   "mode": "major"
+  },
+  {
+   "artist": "Bob Marley",
+   "title": "Redemption Song",
+   "key": "G",
+   "mode": "major"
+  },
+  {
+   "artist": "Simon & Garfunkel",
+   "title": "Bridge Over Troubled Water",
+   "key": "D#",
+   "mode": "major"
+  },
+  {
+   "artist": "Elton John",
+   "title": "Tiny Dancer",
+   "key": "C",
+   "mode": "major"
+  },
+  {
+   "artist": "Elton John",
+   "title": "Bennie and the Jets",
+   "key": "G",
+   "mode": "major"
+  },
+  {
+   "artist": "Neil Young",
+   "title": "Old Man",
+   "key": "D",
+   "mode": "major"
+  },
+  {
+   "artist": "Buffalo Springfield",
+   "title": "For What It's Worth",
+   "key": "E",
+   "mode": "major"
+  },
+  {
+   "artist": "Creedence Clearwater Revival",
+   "title": "Proud Mary",
+   "key": "D",
+   "mode": "major"
+  },
+  {
+   "artist": "The Allman Brothers Band",
+   "title": "Ramblin' Man",
+   "key": "G",
+   "mode": "major"
+  },
+  {
+   "artist": "ZZ Top",
+   "title": "La Grange",
+   "key": "A",
+   "mode": "major"
+  },
+  {
+   "artist": "Louis Armstrong",
+   "title": "What a Wonderful World",
+   "key": "F",
+   "mode": "major"
+  },
+  {
+   "artist": "Etta James",
+   "title": "At Last",
+   "key": "F",
+   "mode": "major"
+  },
+  {
+   "artist": "Johnny Cash",
+   "title": "Ring of Fire",
+   "key": "G",
+   "mode": "major"
+  },
+  {
+   "artist": "Eric Clapton",
+   "title": "Tears in Heaven",
+   "key": "A",
+   "mode": "major"
+  },
+  {
+   "artist": "Eric Clapton",
+   "title": "Wonderful Tonight",
+   "key": "G",
+   "mode": "major"
+  },
+  {
+   "artist": "Stevie Ray Vaughan",
+   "title": "Pride and Joy",
+   "key": "E",
+   "mode": "major"
+  },
+  {
+   "artist": "John Mayer",
+   "title": "Gravity",
+   "key": "G",
+   "mode": "major"
+  },
+  {
+   "artist": "Norah Jones",
+   "title": "Don't Know Why",
+   "key": "A#",
+   "mode": "major"
+  },
+  {
+   "artist": "Dua Lipa",
+   "title": "New Rules",
+   "key": "A",
+   "mode": "minor"
+  },
+  {
+   "artist": "Camila Cabello",
+   "title": "Havana",
+   "key": "G",
+   "mode": "minor"
+  },
+  {
+   "artist": "Metallica",
+   "title": "The Unforgiven",
+   "key": "A",
+   "mode": "minor"
+  },
+  {
+   "artist": "Ozzy Osbourne",
+   "title": "Mr. Crowley",
+   "key": "D",
+   "mode": "minor"
+  },
+  {
+   "artist": "Led Zeppelin",
+   "title": "Babe I'm Gonna Leave You",
+   "key": "A",
+   "mode": "minor"
+  },
+  {
+   "artist": "Yes",
+   "title": "Roundabout",
+   "key": "E",
+   "mode": "minor"
+  },
+  {
+   "artist": "Rush",
+   "title": "Tom Sawyer",
+   "key": "E",
+   "mode": "minor"
+  },
+  {
+   "artist": "Heart",
+   "title": "Barracuda",
+   "key": "E",
+   "mode": "minor"
+  },
+  {
+   "artist": "Blue Öyster Cult",
+   "title": "(Don't Fear) The Reaper",
+   "key": "A",
+   "mode": "minor"
+  },
+  {
+   "artist": "The Doobie Brothers",
+   "title": "Long Train Runnin'",
+   "key": "G",
+   "mode": "minor"
+  },
+  {
+   "artist": "Herbie Hancock",
+   "title": "Chameleon",
+   "key": "A#",
+   "mode": "minor"
+  },
+  {
+   "artist": "Miles Davis",
+   "title": "So What",
+   "key": "D",
+   "mode": "minor"
+  },
+  {
+   "artist": "The Dave Brubeck Quartet",
+   "title": "Take Five",
+   "key": "D#",
+   "mode": "minor"
+  },
+  {
+   "artist": "Coldplay",
+   "title": "Trouble",
+   "key": "G",
+   "mode": "minor"
+  },
+  {
+   "artist": "Maroon 5",
+   "title": "This Love",
+   "key": "C",
+   "mode": "minor"
+  },
+  {
+   "artist": "Nancy Sinatra",
+   "title": "These Boots Are Made for Walkin'",
+   "key": "E",
+   "mode": "minor"
+  },
+  {
+   "artist": "The Mamas & the Papas",
+   "title": "California Dreamin'",
+   "key": "A",
+   "mode": "minor"
+  },
+  {
+   "artist": "The Turtles",
+   "title": "Happy Together",
+   "key": "F#",
+   "mode": "minor"
+  },
+  {
+   "artist": "The Zombies",
+   "title": "Time of the Season",
+   "key": "E",
+   "mode": "minor"
+  },
+  {
+   "artist": "Steppenwolf",
+   "title": "Born to Be Wild",
+   "key": "E",
+   "mode": "minor"
+  },
+  {
+   "artist": "Men at Work",
+   "title": "Down Under",
+   "key": "B",
+   "mode": "minor"
+  },
+  {
+   "artist": "Bee Gees",
+   "title": "Stayin' Alive",
+   "key": "F",
+   "mode": "minor"
+  },
+  {
+   "artist": "ABBA",
+   "title": "Gimme! Gimme! Gimme! (A Man After Midnight)",
+   "key": "D",
+   "mode": "minor"
+  },
+  {
+   "artist": "ABBA",
+   "title": "Money, Money, Money",
+   "key": "A",
+   "mode": "minor"
+  },
+  {
+   "artist": "Muse",
+   "title": "Time Is Running Out",
+   "key": "A",
+   "mode": "minor"
+  },
+  {
+   "artist": "Guns N' Roses",
+   "title": "Don't Cry",
+   "key": "A",
+   "mode": "minor"
+  },
+  {
+   "artist": "Iron Maiden",
+   "title": "Fear of the Dark",
+   "key": "D",
+   "mode": "minor"
+  },
+  {
+   "artist": "Gary Moore",
+   "title": "Still Got the Blues",
+   "key": "A",
+   "mode": "minor"
+  }
+ ]
+}

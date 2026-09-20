@@ -68,6 +68,111 @@ const double MAJOR_PROFILE[12] = {6.35, 2.23, 3.48, 2.33, 4.38, 4.09,
 const double MINOR_PROFILE[12] = {6.33, 2.68, 3.52, 5.38, 2.60, 3.53,
                                   2.54, 4.75, 3.98, 2.69, 3.34, 3.17};
 
+// Tone profiles fitted to real recordings, replacing libKeyFinder's built-in pair.
+//
+// libKeyFinder classifies by cosine similarity between the 72-band chromagram and an
+// octave-resolved tone profile. Its built-in profiles are Sha'ath's, shaped for DJ software.
+// Nothing about them came from the music this app listens to.
+//
+// Fitted in two steps, both against the 167-song / 226-clip real corpus, and both measured by
+// 6-fold cross-validation split **by song** over ten random partitions (scripts/key-research):
+//
+//   1. **generatively** — every clip's chromagram rotated so its true tonic sits at the profile's
+//      origin, averaged per mode, blended 0.80 toward the fitted shape as regularisation. This
+//      asks "what does a major key look like", which is not the question the classifier answers.
+//   2. **discriminatively** — the result is then nudged to minimise the classifier's own
+//      cross-entropy over all 24 candidates. The errors that remain are near misses (IV, V, the
+//      relative: keys sharing six or seven notes), and an average cannot separate those, because
+//      what distinguishes C major from G major is not what they have in common.
+//
+//     Sha'ath (libKeyFinder default)  note-set 65.9%          tonic 58.8%
+//     generative only                 note-set 69.7% +/- 0.8  tonic 57.9% +/- 1.0
+//     + discriminative refinement     note-set 72.7% +/- 0.9  tonic 60.0% +/- 0.7
+//     + the log aggregation below     note-set 74.9% +/- 0.7  tonic 63.5% +/- 0.7
+//
+// The refinement's regularisation sits on a plateau running pull 5 to 14, so it is not a tuned
+// point. A single fold split is not a measurement here: on the first 64-song corpus one partition
+// gave 77.2% and another 71.5% for the same profile, which is why every number above is a mean
+// over ten partitions.
+//
+// libKeyFinder still does the classifying. Only what it matches against has changed.
+const double FITTED_MAJOR_72[72] = {
+    1.224143, 0.805402, 0.970389, 0.844917, 1.164742, 1.022740, 0.866868, 1.153762, 0.904857, 1.308164, 0.821600, 1.084137,
+    2.787149, 1.545346, 1.665085, 1.389100, 2.217212, 2.161821, 1.555460, 2.574744, 1.607528, 2.469213, 1.640102, 1.929317,
+    3.574733, 1.972868, 2.390691, 1.591326, 2.877206, 2.206250, 1.518903, 3.214113, 1.785263, 2.936017, 1.844812, 2.431618,
+    4.166277, 2.084742, 2.861616, 2.012884, 3.787006, 2.603826, 1.595455, 3.534424, 1.833725, 3.071926, 1.728430, 2.762407,
+    4.419814, 2.251903, 3.423980, 2.302556, 4.155970, 2.562381, 2.137849, 4.035311, 2.071780, 3.485709, 2.213780, 3.481206,
+    3.935668, 2.562503, 3.158089, 2.528175, 3.976413, 2.724510, 2.756631, 3.942531, 2.604121, 3.274325, 2.475740, 3.433313,
+};
+
+const double FITTED_MINOR_72[72] = {
+    1.635556, 0.770443, 1.097478, 1.121405, 0.918963, 1.065661, 1.090132, 1.340917, 1.022736, 1.012000, 1.152781, 1.079227,
+    3.211326, 1.712475, 1.984737, 2.427782, 1.641578, 1.818657, 1.615026, 2.422201, 2.116011, 1.685003, 2.435985, 1.780377,
+    3.489368, 1.733772, 2.349046, 3.087215, 1.988610, 2.393947, 1.759969, 3.030297, 2.143130, 1.580804, 2.925985, 1.899470,
+    3.644938, 1.638610, 2.752734, 3.781366, 2.105785, 2.760771, 2.037997, 3.736912, 2.287337, 1.545076, 3.024380, 1.874764,
+    3.958783, 2.050441, 3.360843, 3.990411, 2.278684, 3.239105, 2.405293, 4.099668, 2.201954, 2.099979, 3.576308, 2.130131,
+    3.617709, 2.396145, 3.271911, 3.555571, 2.641071, 3.183060, 2.713885, 4.059938, 2.446621, 2.742045, 3.632906, 2.631368,
+};
+
+/// Collapse the per-hop chromagram into the 72 numbers the classifier matches against.
+///
+/// libKeyFinder's own `collapseToOneHop` sums raw magnitudes, so the loudest bars of an excerpt
+/// decide the key: a distorted chorus outweighs the verse that established it, and one cymbal
+/// crash smears energy across all twelve bins. That is the right default for a DJ tool, where the
+/// loudest section is the one being mixed, and the wrong one here.
+///
+/// Two corrections, measured independently over a 4x5 grid of scalings and compressions:
+///
+///   * divide each hop by its own peak, so every hop contributes equally regardless of how loud
+///     that moment was;
+///   * take a logarithm, so no single band can dominate by magnitude alone.
+///
+/// Together **+2.3 note-set and +3.5 tonic** over the plain sum, on the same fitted profiles. The
+/// grid has a clear interior optimum rather than a tuned point — every compression between 0.5 and
+/// log gains, and only the very aggressive 0.25 turns negative.
+///
+/// `FITTED_MAJOR_72` and `FITTED_MINOR_72` were fitted against *this* aggregation. Changing one
+/// without refitting the other is measured nonsense: re-run `scripts/key-research/emit_profiles.py`.
+std::vector<double> aggregate_chromagram(const KeyFinder::Chromagram& chromagram) {
+    const unsigned int hops = chromagram.getHops();
+    std::vector<double> out(BANDS, 0.0);
+    if (hops == 0) {
+        return out;
+    }
+
+    std::vector<std::vector<double>> scaled(hops, std::vector<double>(BANDS, 0.0));
+    double total = 0.0;
+    for (unsigned int hop = 0; hop < hops; hop++) {
+        double peak = 0.0;
+        for (unsigned int band = 0; band < BANDS; band++) {
+            peak = std::max(peak, chromagram.getMagnitude(hop, band));
+        }
+        if (peak <= 0.0) {
+            continue;  // a silent hop contributes nothing rather than dividing by zero
+        }
+        for (unsigned int band = 0; band < BANDS; band++) {
+            scaled[hop][band] = chromagram.getMagnitude(hop, band) / peak;
+            total += scaled[hop][band];
+        }
+    }
+
+    // Rescale to mean 1 before the logarithm. Without this the compression would be applied to a
+    // different part of the curve for every clip, which is how an earlier attempt at combining
+    // normalisation and compression lost to either one alone.
+    const double mean = total / (static_cast<double>(hops) * BANDS);
+    if (mean <= 0.0) {
+        return out;
+    }
+    for (unsigned int band = 0; band < BANDS; band++) {
+        double sum = 0.0;
+        for (unsigned int hop = 0; hop < hops; hop++) {
+            sum += std::log1p(scaled[hop][band] / mean);
+        }
+        out[band] = sum / hops;
+    }
+    return out;
+}
+
 std::string to_label(KeyFinder::key_t key) {
     switch (key) {
         case KeyFinder::A_MAJOR: return "A:major";
@@ -185,7 +290,74 @@ int main(int argc, char** argv) {
     KeyFinder::Workspace workspace;
     finder.progressiveChromagram(audio, workspace);
     finder.finalChromagram(workspace);
-    KeyFinder::key_t key = finder.keyOfChromagram(workspace);
+    const std::vector<double> collapsed_chroma =
+        workspace.chromagram != nullptr ? aggregate_chromagram(*workspace.chromagram)
+                                        : std::vector<double>(BANDS, 0.0);
+    const std::vector<double> fitted_major(FITTED_MAJOR_72, FITTED_MAJOR_72 + 72);
+    const std::vector<double> fitted_minor(FITTED_MINOR_72, FITTED_MINOR_72 + 72);
+    KeyFinder::key_t key = finder.keyOfChromaVector(collapsed_chroma, fitted_major, fitted_minor);
+
+    // --bands: the 72-band vector the classifier was actually given, after `aggregate_chromagram`.
+    //
+    // The shipped output collapses six octaves onto twelve pitch classes, but libKeyFinder's
+    // classifier never sees that — it matches octave-resolved profiles against these 72 bands by
+    // cosine similarity. Anything that wants to test a different tone profile has to work here.
+    if (argc >= 3 && std::string(argv[2]) == "--bands" && workspace.chromagram != nullptr) {
+        std::cout << "{\"bands\":[";
+        for (size_t i = 0; i < collapsed_chroma.size(); i++) {
+            if (i) std::cout << ",";
+            std::cout << std::fixed << std::setprecision(6) << collapsed_chroma[i];
+        }
+        std::cout << "],\"key\":\"" << to_label(key) << "\"}" << std::endl;
+        return 0;
+    }
+
+    // --bands-hops: the 72-band chromagram *per hop*, not summed.
+    //
+    // `--bands` throws away time, and time is where the tonic lives: a key and its relative share
+    // every pitch class, and what separates them is which chord a phrase rests on. Research on the
+    // profiles only ever needed the sum; anything that wants to reason about chord changes, or
+    // about how the answer would have looked at 20 seconds, needs the hops. Emitting them once
+    // lets an experiment run from a cache instead of re-analysing 226 clips.
+    if (argc >= 3 && std::string(argv[2]) == "--bands-hops" && workspace.chromagram != nullptr) {
+        const unsigned int hop_count = workspace.chromagram->getHops();
+        std::cout << "{\"hops\":" << hop_count << ",\"bands\":" << BANDS << ",\"frames\":[";
+        for (unsigned int hop = 0; hop < hop_count; hop++) {
+            if (hop) std::cout << ",";
+            std::cout << "[";
+            for (unsigned int band = 0; band < BANDS; band++) {
+                if (band) std::cout << ",";
+                std::cout << std::fixed << std::setprecision(3)
+                          << workspace.chromagram->getMagnitude(hop, band);
+            }
+            std::cout << "]";
+        }
+        std::cout << "],\"key\":\"" << to_label(key) << "\"}" << std::endl;
+        return 0;
+    }
+
+    // --hop-energy: total chromagram magnitude per hop.
+    //
+    // libKeyFinder fills at most 44 hops however much audio it is handed — about 41 seconds —
+    // and everything past that produces no chroma at all. Measured by feeding clips of growing
+    // length (10s->11 hops, 20s->22, 40s->44, 45s->44, 60s->44), and confirmed with music rather
+    // than silence: splice 30s of one song onto 30s of another and the verdict is the first
+    // song's, as if the second half were not there. `MAX_ANALYSIS_SPAN_SECONDS` is 44, so the
+    // shipped engine sits just inside this; the constant is not arbitrary and must not grow.
+    if (argc >= 3 && std::string(argv[2]) == "--hop-energy" && workspace.chromagram != nullptr) {
+        const unsigned int hop_count = workspace.chromagram->getHops();
+        std::cout << "{\"hops\":" << hop_count << ",\"hopEnergy\":[";
+        for (unsigned int hop = 0; hop < hop_count; hop++) {
+            double total = 0.0;
+            for (unsigned int band = 0; band < BANDS; band++) {
+                total += workspace.chromagram->getMagnitude(hop, band);
+            }
+            if (hop) std::cout << ",";
+            std::cout << std::fixed << std::setprecision(1) << total;
+        }
+        std::cout << "]}" << std::endl;
+        return 0;
+    }
 
     std::string label = to_label(key);
     std::string key_name = "unknown";
@@ -196,6 +368,11 @@ int main(int argc, char** argv) {
         scale = label.substr(sep + 1);
     }
 
+    // These stay raw sums, deliberately, while the classifier reads `aggregate_chromagram`.
+    // `chroma` is not classifier input — it feeds `strength` and `key_engine::tonic_is_supported`,
+    // whose threshold was calibrated against summed magnitudes. Re-pointing it at the aggregation
+    // would move that threshold's meaning without anything having measured the result, and the
+    // scoreboard's `slips_asserted` floor is asserted against its present behaviour.
     std::vector<double> chroma(12, 0.0);
     std::vector<double> bass(12, 0.0);
     // Time-sliced bass, because collapsing the whole chromagram to one hop throws away *when* a
