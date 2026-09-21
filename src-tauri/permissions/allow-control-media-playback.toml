@@ -1,0 +1,5 @@
+# Application permission: pause, play or toggle the current OS media session.
+[[permission]]
+identifier = "allow-control-media-playback"
+description = "Allows control_media_playback for the current OS session (Windows GSMTC, Linux MPRIS)."
+commands.allow = ["control_media_playback"]

@@ -1,0 +1,5 @@
+# Application permission: seek the current OS media session.
+[[permission]]
+identifier = "allow-seek-media"
+description = "Allows seek_media to set the playback position of the current OS session (Windows GSMTC, Linux MPRIS)."
+commands.allow = ["seek_media"]

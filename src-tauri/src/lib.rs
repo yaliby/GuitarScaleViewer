@@ -66,6 +66,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             media_session::get_current_media,
+            media_session::control_media_playback,
+            media_session::seek_media,
             media_session::get_media_sessions_debug,
             key_engine::get_detected_key,
             key_engine::reset_detected_key,
