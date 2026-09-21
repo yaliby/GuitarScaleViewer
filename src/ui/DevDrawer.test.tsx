@@ -61,7 +61,7 @@ const props: DevDrawerProps = {
     trackIdentity: 'numb',
     why: 'human_entered',
   },
-  locked: false,
+  applyDetected: true,
   devMockEnabled: false,
   onDevMockEnabledChange: vi.fn(),
   devMockTitle: '',

@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Layers3, Menu, SlidersHorizontal, Waves, X } from 'lucide-react';
+import { Layers3, Menu, SlidersHorizontal, X } from 'lucide-react';
 import type { ScaleContext, ScaleType } from './scaleDataProvider';
 import { ChordLibrarySection } from './ChordLibrarySection';
 import type { ScaleChordWithVoicings } from './chords/chordTypes';
 import { buildScaleNotes, pitchClassForNoteLabel } from './scaleSpell';
 import { TUNING_PRESETS } from './tunings';
 import { useMediaSession } from './hooks/useMediaSession';
+import { controlMediaPlayback, seekMedia } from './hooks/mediaTransport';
 import { useDetectedKey } from './hooks/useDetectedKey';
 import { useCloudKeyResolution } from './hooks/useCloudKeyResolution';
 import { fuseKey, shouldRevise, type FusedKey } from './services/keyFusion';
@@ -17,6 +18,7 @@ import { Led } from './ui/gear';
 import { keySourceLabel } from './ui/statusLabels';
 import { KeyReadout } from './ui/KeyReadout';
 import { SourceStrip } from './ui/SourceStrip';
+import { VinylDeck } from './ui/VinylDeck';
 import { ScaleControls } from './ui/ScaleControls';
 import { ViewModeSwitch } from './ui/ViewModeSwitch';
 import { DevDrawer } from './ui/DevDrawer';
@@ -73,21 +75,25 @@ export default function GuitarScaleView({
 }: Props) {
   const [viewMode, setViewMode] = useState<FretboardViewMode>('scale-all');
   const [selectedChord, setSelectedChord] = useState<ScaleChordWithVoicings | null>(null);
-  /* Lock is the one control that acts on the pipeline, and it only ever *stops* it: the neck
-     follows the song unasked, and a player who wants it to stay put says so. Nothing has to be
-     pressed to get a key. */
-  const [lockDetected, setLockDetected] = useState(false);
+  /* Apply is the one control that acts on the pipeline, and it ships engaged: the neck follows
+     the song unasked, and a player who wants it to stay put switches Apply off. Nothing has to
+     be pressed to get a key — only to stop getting one. */
+  const [applyDetected, setApplyDetected] = useState(true);
   const [devMockEnabled, setDevMockEnabled] = useState(false);
   const [devMockTitle, setDevMockTitle] = useState('Numb');
   const [devMockArtist, setDevMockArtist] = useState('Linkin Park');
   const [devOpen, setDevOpen] = useState(false);
   /* Chrome state: whether the setup row is open. The chord bank is always on now. */
   const [setupOpen, setSetupOpen] = useState(true);
+  /* Vinyl cue: the progress bar follows the platter instantly, then yields to the OS clock. */
+  const [cuePositionMs, setCuePositionMs] = useState<number | null>(null);
+  /* Play/pause on the record is optimistic: the grooves stop or start before the OS session catches up. */
+  const [heldPlaybackStatus, setHeldPlaybackStatus] = useState<string | null>(null);
   /* The key the neck is currently drawing, and the evidence behind it. Held in state rather
      than derived, because the revision policy compares the next reading against it. */
   const [neckKey, setNeckKey] = useState<FusedKey | null>(null);
   const lastAutoDecisionRef = useRef<string>('');
-  const prevLockRef = useRef(lockDetected);
+  const prevApplyRef = useRef(applyDetected);
 
   const mediaSession = useMediaSession();
   const { detectedKey, detectedKeyAb } = useDetectedKey();
@@ -157,15 +163,15 @@ export default function GuitarScaleView({
     setSelectedChord(null);
   };
 
-  const toggleLockDetected = () => {
-    const next = !lockDetected;
+  const toggleApplyDetected = () => {
+    const next = !applyDetected;
     const drawn = `${scale.root} ${scaleType}`;
     trace(
       'apply',
-      next ? 'lock' : 'unlock',
+      next ? 'apply.on' : 'apply.off',
       next
-        ? `Locked the neck at ${drawn} — the song no longer moves it`
-        : `Unlocked: the neck follows the song again (${fused.displayName ?? 'waiting for a key'})`,
+        ? `Apply on: the neck follows the song again (${fused.displayName ?? 'waiting for a key'})`
+        : `Apply off: the neck stays at ${drawn} — the song no longer moves it`,
       {
         drawnRoot: scale.root,
         drawnScale: scaleType,
@@ -175,38 +181,64 @@ export default function GuitarScaleView({
       },
       'decide',
     );
-    setLockDetected(next);
+    setApplyDetected(next);
   };
 
   /**
-   * The neck follows the song. There is no switch to arm and no threshold to clear: the best
+   * Picking a key by hand *is* the decision to stop following the song, so it drops Apply on the
+   * spot. Without that the player sets G, the pipeline's next revision takes the neck back, and
+   * the edit looks like it was ignored — the one thing a manual control must never do.
+   */
+  const dropApplyForHandEdit = (what: string) => {
+    if (!applyDetected) {
+      return;
+    }
+    trace(
+      'apply',
+      'apply.off',
+      `Apply off: ${what} by hand — the neck stays where the player put it`,
+      {
+        drawnRoot: scale.root,
+        drawnScale: scaleType,
+        fusedKey: fused.root,
+        fusedScale: fused.scale,
+        why: 'hand_edit',
+      },
+      'decide',
+    );
+    setApplyDetected(false);
+  };
+
+  /**
+   * The neck follows the song. Apply is already on and there is no threshold to clear: the best
    * currently available answer is always the one drawn, and a better one replaces it as soon as
    * it clears the revision margin (see services/keyFusion).
    *
-   * Unlock is the exception to the margin: "follow the song again" means put the pipeline's
-   * current answer on the board even if a leftover key (or a hand edit) is still sitting there.
-   * Without that, the deck can read A minor while the neck stays on G — the Stairway case.
+   * Switching Apply back on is the exception to the margin: "follow the song again" means put
+   * the pipeline's current answer on the board even if a leftover key (or a hand edit) is still
+   * sitting there. Without that, the deck can read A minor while the neck stays on G — the
+   * Stairway case.
    */
   useEffect(() => {
-    const justUnlocked = prevLockRef.current && !lockDetected;
-    prevLockRef.current = lockDetected;
-    if (lockDetected) {
+    const justEnabled = !prevApplyRef.current && applyDetected;
+    prevApplyRef.current = applyDetected;
+    if (!applyDetected) {
       return;
     }
     if (!fused.root || !fused.scale) {
       return;
     }
-    if (!justUnlocked && !shouldRevise(neckKey, fused)) {
+    if (!justEnabled && !shouldRevise(neckKey, fused)) {
       return;
     }
     const sig = `${fused.root}:${fused.scale}:${fused.certainty}`;
-    if (lastAutoDecisionRef.current !== sig || justUnlocked) {
+    if (lastAutoDecisionRef.current !== sig || justEnabled) {
       lastAutoDecisionRef.current = sig;
       trace(
         'apply',
         'neck.follow',
-        justUnlocked
-          ? `Neck follows the song after unlock: ${fused.displayName} (${fused.certainty}, ${fused.confidencePct}%)`
+        justEnabled
+          ? `Neck follows the song after Apply came back on: ${fused.displayName} (${fused.certainty}, ${fused.confidencePct}%)`
           : `Neck follows the song: ${fused.displayName} (${fused.certainty}, ${fused.confidencePct}%)`,
         {
           key: fused.root,
@@ -215,17 +247,35 @@ export default function GuitarScaleView({
           confidence: fused.confidencePct,
           notesSettled: fused.notesSettled,
           from: neckKey?.displayName ?? null,
-          why: justUnlocked ? 'unlock_reapply' : fused.why,
+          why: justEnabled ? 'apply_reenabled' : fused.why,
         },
         'ok',
       );
     }
     setNeckKey(fused);
     onApplyDetectedKey(fused.root, fused.scale);
-  }, [fused, lockDetected, neckKey, onApplyDetectedKey]);
+  }, [applyDetected, fused, neckKey, onApplyDetectedKey]);
+
+  useEffect(() => {
+    if (heldPlaybackStatus == null) {
+      return;
+    }
+    if (mediaSession.playbackStatus === heldPlaybackStatus) {
+      setHeldPlaybackStatus(null);
+      return;
+    }
+    const id = window.setTimeout(() => setHeldPlaybackStatus(null), 5_000);
+    return () => window.clearTimeout(id);
+  }, [heldPlaybackStatus, mediaSession.playbackStatus]);
 
   const desktop = mediaSession.playbackStatus !== 'media_session_unavailable';
-  const playing = mediaSession.playbackStatus === 'playing';
+  const deckSession =
+    heldPlaybackStatus == null
+      ? mediaSession
+      : { ...mediaSession, playbackStatus: heldPlaybackStatus };
+  const playing = deckSession.playbackStatus === 'playing';
+  const vinylInteractive =
+    desktop && !['none', 'closed', 'media_session_unavailable'].includes(mediaSession.playbackStatus);
   return (
     <div className="lab-screen">
       <header className="lab-heading">
@@ -259,24 +309,28 @@ export default function GuitarScaleView({
 
       {/* Deck: the record, what the machine hears, and the key now on the neck. */}
       <div className="lab-deck">
-        <div className={`lab-record ${playing ? 'spinning' : ''}`} aria-hidden="true">
-          <div className="lab-record-orbit" />
-          <div className="lab-vinyl">
-            <div className="lab-vinyl-label">
-              <Waves size={30} />
-              <span>
-                FRETBOARD
-                <br />
-                LAB
-              </span>
-              <i />
-            </div>
-          </div>
-          <span className="lab-record-caption">Six strings. Twenty-four frets.</span>
-        </div>
+        <VinylDeck
+          playing={playing}
+          playbackStatus={deckSession.playbackStatus}
+          positionMs={mediaSession.positionMs}
+          durationMs={mediaSession.durationMs}
+          interactive={vinylInteractive}
+          onPause={() => {
+            setHeldPlaybackStatus('paused');
+            void controlMediaPlayback('pause');
+          }}
+          onPlay={() => {
+            setHeldPlaybackStatus('playing');
+            void controlMediaPlayback('play');
+          }}
+          onSeek={(positionMs) => {
+            void seekMedia(positionMs);
+          }}
+          onCue={setCuePositionMs}
+        />
 
         <SourceStrip
-          mediaSession={mediaSession}
+          mediaSession={deckSession}
           detected={detectedKey}
           resolutionState={cloudResolution.resolutionState}
           keyName={activeDisplayName}
@@ -285,8 +339,9 @@ export default function GuitarScaleView({
           notesSettled={fused.notesSettled}
           tonicSettled={fused.tonicSettled}
           relativeAlternative={fused.relativeAlternative}
-          locked={lockDetected}
-          onToggleLock={toggleLockDetected}
+          applyDetected={applyDetected}
+          onToggleApply={toggleApplyDetected}
+          cuePositionMs={cuePositionMs}
         />
 
         <KeyReadout
@@ -343,16 +398,25 @@ export default function GuitarScaleView({
             >
               <ScaleControls
                 rootInput={rootInput}
-                onRootInputChange={onRootInputChange}
+                onRootInputChange={(value) => {
+                  dropApplyForHandEdit('root typed');
+                  onRootInputChange(value);
+                }}
                 rootInvalid={rootInvalid}
                 scaleType={scaleType}
-                onScaleTypeChange={onScaleTypeChange}
+                onScaleTypeChange={(value) => {
+                  dropApplyForHandEdit('scale picked');
+                  onScaleTypeChange(value);
+                }}
                 tuningId={tuningId}
                 onTuningChange={onTuningChange}
                 capo={capo}
                 onCapoChange={onCapoChange}
                 onRestoreDefault={handleRestoreDefault}
-                onFlipRelative={onFlipRelative}
+                onFlipRelative={() => {
+                  dropApplyForHandEdit('flipped to the relative');
+                  onFlipRelative();
+                }}
               />
             </motion.div>
           )}
@@ -421,7 +485,7 @@ export default function GuitarScaleView({
         cloudResolution={cloudResolution}
         activeDisplayName={activeDisplayName}
         fused={fused}
-        locked={lockDetected}
+        applyDetected={applyDetected}
         devMockEnabled={devMockEnabled}
         onDevMockEnabledChange={setDevMockEnabled}
         devMockTitle={devMockTitle}

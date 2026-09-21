@@ -174,11 +174,70 @@
   box-shadow:
     0 15px 25px rgba(0, 0, 0, 0.4),
     inset 0 0 0 2px rgba(150, 140, 125, 0.22);
-  animation: lab-spin 18s linear infinite;
-  animation-play-state: paused;
 }
-.lab-record.spinning .lab-vinyl {
-  animation-play-state: running;
+.lab-vinyl-stage {
+  width: 188px;
+  height: 188px;
+  position: relative;
+  display: grid;
+  place-items: center;
+  touch-action: none;
+  user-select: none;
+  outline: none;
+}
+.lab-vinyl-stage.is-interactive {
+  cursor: grab;
+}
+.lab-vinyl-stage.is-scrubbing {
+  cursor: grabbing;
+}
+.lab-vinyl-platter {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  will-change: transform;
+}
+.lab-vinyl-platter .lab-vinyl {
+  width: 100%;
+  height: 100%;
+}
+.lab-vinyl-transport {
+  position: absolute;
+  z-index: 2;
+  width: 76px;
+  height: 76px;
+  border-radius: 50%;
+  border: 1px solid rgba(240, 165, 42, 0.55);
+  background: linear-gradient(140deg, rgba(109, 76, 20, 0.96), rgba(24, 16, 6, 0.94));
+  color: #f7d69a;
+  display: grid;
+  place-items: center;
+  opacity: 0;
+  transform: scale(0.92);
+  /* Keep the centre hittable even before :hover retargets, or WebKitGTK misses the click. */
+  pointer-events: auto;
+  cursor: pointer;
+  transition:
+    opacity 0.16s ease,
+    transform 0.16s ease;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.35);
+}
+.lab-vinyl-stage:hover .lab-vinyl-transport,
+.lab-vinyl-stage.is-hot .lab-vinyl-transport,
+.lab-vinyl-stage.is-scrubbing .lab-vinyl-transport,
+.lab-vinyl-stage:focus-within .lab-vinyl-transport {
+  opacity: 1;
+  transform: scale(1);
+}
+.lab-vinyl-transport:hover {
+  color: #ffe2b0;
+  border-color: rgba(247, 214, 154, 0.8);
+}
+.lab-vinyl-transport:focus-visible {
+  outline: 2px solid var(--lab);
+  outline-offset: 3px;
 }
 .lab-vinyl-label {
   width: 76px;
@@ -219,6 +278,7 @@
   border: 1px solid rgba(240, 200, 140, 0.07);
   border-radius: 50%;
   top: 8px;
+  pointer-events: none;
   box-shadow:
     0 0 0 22px rgba(240, 200, 140, 0.016),
     0 0 0 44px rgba(240, 200, 140, 0.012);
@@ -295,6 +355,10 @@
   box-shadow: 0 0 8px var(--lab);
   /* Matches the 1.5s backend poll closely enough to read as a sweep, not a step. */
   transition: width 1s linear;
+}
+.lab-progress.is-cueing > span {
+  /* Vinyl scrub is the clock now — don't lag a second behind the platter. */
+  transition: none;
 }
 .lab-timeline-clock {
   display: flex;
@@ -773,18 +837,12 @@
   outline: 2px solid var(--lab);
   outline-offset: 3px;
 }
-@keyframes lab-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 /* ------------------------------------------------------------ responsive -- */
 @media (min-width: 1600px) {
   .lab-deck {
     grid-template-columns: 285px minmax(0, 1fr) 340px;
   }
-  .lab-vinyl {
+  .lab-vinyl-stage {
     width: 212px;
     height: 212px;
   }
@@ -799,7 +857,7 @@
   .lab-deck {
     grid-template-columns: 180px minmax(0, 1fr) 260px;
   }
-  .lab-vinyl {
+  .lab-vinyl-stage {
     width: 150px;
     height: 150px;
   }

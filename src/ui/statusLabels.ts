@@ -216,16 +216,16 @@ export function deckStatusLabel({
   resolutionState,
   hasCloudHit,
   showingProposedKey,
-  locked,
+  applyDetected,
 }: {
   playbackStatus: string;
   detectionState: string;
   resolutionState: string;
   hasCloudHit: boolean;
   showingProposedKey: boolean;
-  locked: boolean;
+  applyDetected: boolean;
 }): string {
-  if (locked) {
+  if (!applyDetected) {
     return 'Detection held';
   }
   if (playbackStatus === 'media_session_unavailable') {

@@ -11,7 +11,7 @@ import {
   resolutionStateLabel,
 } from './statusLabels';
 import { certaintyLabel, type KeyCertainty } from './statusLabels';
-import { GearButton, Led, SignalMeter } from './gear';
+import { GearToggle, Led, SignalMeter } from './gear';
 
 export type SourceStripProps = {
   mediaSession: MediaSessionUiState;
@@ -27,17 +27,20 @@ export type SourceStripProps = {
   tonicSettled: boolean;
   /** The other name for the same seven notes, e.g. "E minor" while the neck reads G major. */
   relativeAlternative: string | null;
-  locked: boolean;
-  onToggleLock: () => void;
+  /** Is the neck allowed to take the pipeline's key? On by default; off freezes what is drawn. */
+  applyDetected: boolean;
+  onToggleApply: () => void;
+  /** Live vinyl cue; when set, the transport clock follows the platter instead of the OS poll. */
+  cuePositionMs?: number | null;
 };
 
 /**
  * What the machine is hearing — the Jam listening deck with the Lab's own instrumentation: two
- * pipeline lamps, a segmented certainty meter, and a lock.
+ * pipeline lamps, a segmented certainty meter, and the Apply latch.
  *
- * There is no auto-apply latch here any more, and that absence is the point. The neck follows
- * the song by itself; the deck reports how sure the pipeline is rather than asking the player
- * to decide whether to believe it.
+ * Apply ships engaged: the neck follows the song without anything being pressed, and the deck
+ * reports how sure the pipeline is rather than asking the player to decide whether to believe
+ * it. Switching Apply off is the only way to stop the song moving the neck.
  */
 export function SourceStrip({
   mediaSession,
@@ -49,8 +52,9 @@ export function SourceStrip({
   notesSettled,
   tonicSettled,
   relativeAlternative,
-  locked,
-  onToggleLock,
+  applyDetected,
+  onToggleApply,
+  cuePositionMs,
 }: SourceStripProps) {
   const unavailable = mediaSession.playbackStatus === 'media_session_unavailable';
   const playing = mediaSession.playbackStatus === 'playing';
@@ -60,8 +64,10 @@ export function SourceStrip({
 
   const det = detectionLed(detected.state);
   const res = resolutionLed(resolutionState);
-  const progress = playbackProgressPct(mediaSession.positionMs, mediaSession.durationMs);
-  const elapsed = clockLabel(mediaSession.positionMs);
+  const positionMs = cuePositionMs ?? mediaSession.positionMs;
+  const cueing = cuePositionMs != null;
+  const progress = playbackProgressPct(positionMs, mediaSession.durationMs);
+  const elapsed = clockLabel(positionMs);
   const total = clockLabel(mediaSession.durationMs);
   // One scale for every source: `confidencePct` is already priced by provenance in keyFusion,
   // so the meter no longer has to special-case where the key came from.
@@ -102,7 +108,7 @@ export function SourceStrip({
       {/* The Jam transport clock. aria-live is off so a ticking readout does not narrate itself. */}
       <div className="lab-timeline" aria-live="off">
         <div
-          className="lab-progress"
+          className={`lab-progress ${cueing ? 'is-cueing' : ''}`}
           role="progressbar"
           aria-label="Song progress"
           aria-valuemin={0}
@@ -140,16 +146,17 @@ export function SourceStrip({
       </div>
 
       <div className="lab-track-actions">
-        <GearButton
-          onClick={onToggleLock}
-          aria-pressed={locked}
-          title={locked ? 'Let the neck follow the song again' : 'Keep this key while the song changes'}
+        <GearToggle
+          engaged={applyDetected}
+          onClick={onToggleApply}
+          title={
+            applyDetected
+              ? 'Apply is on: the neck follows the song. Switch it off to keep this key.'
+              : 'Apply is off: the neck holds this key. Switch it on to take the key being heard.'
+          }
         >
-          <span className="flex items-center gap-1.5">
-            <Led tone={locked ? 'hold' : 'off'} size={5} />
-            {locked ? 'Locked' : 'Lock'}
-          </span>
-        </GearButton>
+          Apply
+        </GearToggle>
       </div>
     </div>
   );

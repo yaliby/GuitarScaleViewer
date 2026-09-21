@@ -8,8 +8,8 @@ test("the neck is already on the song's key, with nothing pressed", async ({
   await expect(
     page.getByRole("region", { name: "Live Jam workspace" }),
   ).toBeVisible();
-  /* The iron rule, end to end: opening the screen is the whole interaction. There is no latch
-     to arm and no Apply to press — the fixture reading is already drawn. */
+  /* The iron rule, end to end: opening the screen is the whole interaction. Apply is already
+     engaged, so the fixture reading is drawn without anything being pressed. */
   await expect(page.getByTestId("jam-key")).toHaveText("D");
   await expect(page.locator(".lab-meter-head")).toContainText("D major");
   await expect(page.locator(".lab-source")).toContainText("Detected");
@@ -18,7 +18,7 @@ test("the neck is already on the song's key, with nothing pressed", async ({
   ).toHaveCount(0);
 });
 
-test("Live Jam follows the song, and Lock freezes the neck through a key change", async ({
+test("Live Jam follows the song, and Apply off freezes the neck through a key change", async ({
   page,
 }) => {
   await page.clock.setFixedTime(new Date(1_800_000_000_000));
@@ -47,7 +47,7 @@ test("Live Jam follows the song, and Lock freezes the neck through a key change"
     fullPage: true,
   });
 
-  await page.getByRole("button", { name: "Lock", exact: true }).click();
+  await page.getByRole("button", { name: "Apply", exact: true }).click();
   await page.evaluate(() => {
     const host = window as any;
     host.testDetection = {
@@ -60,7 +60,7 @@ test("Live Jam follows the song, and Lock freezes the neck through a key change"
   });
   await expect(page.getByTestId("jam-key")).toHaveText("D");
 
-  await page.getByRole("button", { name: "Locked", exact: true }).click();
+  await page.getByRole("button", { name: "Apply", exact: true }).click();
   await expect(page.getByTestId("jam-key")).toHaveText("G");
   /* The neck and the practice screens are one context now. */
   await page.getByRole("button", { name: "Open navigation menu" }).click();
@@ -92,6 +92,7 @@ test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     const host = window as any;
     host.isTauri = true;
+    host.testInvokes = [];
     let nextId = 0;
     const callbacks = new Map<number, (payload: unknown) => void>();
     const listeners = new Map<string, number[]>();
@@ -135,8 +136,26 @@ test.beforeEach(async ({ page }) => {
         return nextId;
       },
       async invoke(command: string, args: any) {
+        host.testInvokes = host.testInvokes ?? [];
+        host.testInvokes.push({ command, args });
         if (command === "get_current_media") return host.testMedia;
         if (command === "get_detected_key") return host.testDetection;
+        if (command === "control_media_playback") {
+          host.testMedia = {
+            ...host.testMedia,
+            playback_status: args.action === "play" ? "playing" : "paused",
+          };
+          host.testEmit("media-session-update", host.testMedia);
+          return host.testMedia;
+        }
+        if (command === "seek_media") {
+          host.testMedia = {
+            ...host.testMedia,
+            position_ms: args.positionMs,
+          };
+          host.testEmit("media-session-update", host.testMedia);
+          return host.testMedia;
+        }
         if (command === "plugin:event|listen") {
           listeners.set(args.event, [
             ...(listeners.get(args.event) ?? []),
@@ -162,7 +181,7 @@ test("an unsure reading still reaches the neck, labelled unsure", async ({ page 
   await expect(page.getByLabel("Auto follow stable keys")).toHaveCount(0);
 });
 
-test("verified flat keys apply correctly and lock survives the next library track", async ({
+test("verified flat keys apply correctly and a held neck survives the next library track", async ({
   page,
 }) => {
   await page.goto("/");
@@ -178,7 +197,7 @@ test("verified flat keys apply correctly and lock survives the next library trac
   await expect(page.getByLabel("Root note", { exact: true })).toHaveValue("Ab");
   await expect(page.getByTestId("scale-title")).toHaveText("A♭ major");
   await page
-    .getByRole("button", { name: "Lock practice key", exact: true })
+    .getByRole("button", { name: "Turn off Apply", exact: true })
     .click();
   await page.evaluate(() => {
     const host = window as any;
@@ -193,7 +212,7 @@ test("verified flat keys apply correctly and lock survives the next library trac
   ).toContainText("C major");
   await expect(page.getByLabel("Root note", { exact: true })).toHaveValue("Ab");
   await page
-    .getByRole("button", { name: "Unlock practice key", exact: true })
+    .getByRole("button", { name: "Turn on Apply", exact: true })
     .click();
   await expect(page.getByLabel("Root note", { exact: true })).toHaveValue("C");
 });
@@ -248,4 +267,55 @@ test("a relative-pair hedge draws the notes and refuses to assert a root", async
     path: "docs/review-evidence/live-jam-tonic-open.png",
     fullPage: true,
   });
+});
+
+test("hovering the record pauses the OS player, and dragging it cues the track", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Live Jam", exact: true }).click();
+  const vinyl = page.locator(".lab-vinyl-stage");
+  await expect(vinyl).toBeVisible();
+  await vinyl.hover();
+  await expect
+    .poll(async () =>
+      page.locator(".lab-vinyl").evaluate((el) => getComputedStyle(el).filter),
+    )
+    .toBe("none");
+  await page.getByRole("button", { name: "Pause current track" }).click();
+  await expect
+    .poll(async () =>
+      page.evaluate(() =>
+        (window as any).testInvokes?.some(
+          (row: { command: string; args: { action?: string } }) =>
+            row.command === "control_media_playback" && row.args?.action === "pause",
+        ),
+      ),
+    )
+    .toBe(true);
+  await expect(page.getByRole("button", { name: "Play current track" })).toBeVisible();
+
+  const box = await vinyl.boundingBox();
+  expect(box).toBeTruthy();
+  const cx = box!.x + box!.width / 2;
+  const cy = box!.y + box!.height / 2;
+  const radius = box!.width / 2 - 8;
+  await page.mouse.move(cx + radius, cy);
+  await page.mouse.down();
+  await page.mouse.move(cx, cy + radius, { steps: 8 });
+  await expect(page.locator(".lab-progress")).toHaveClass(/is-cueing/);
+  const cuedWidth = await page
+    .locator(".lab-progress > span")
+    .evaluate((el) => parseFloat((el as HTMLElement).style.width));
+  expect(cuedWidth).toBeGreaterThan(1);
+  await page.mouse.up();
+  await expect
+    .poll(async () =>
+      page.evaluate(() =>
+        (window as any).testInvokes?.some(
+          (row: { command: string }) => row.command === "seek_media",
+        ),
+      ),
+    )
+    .toBe(true);
 });

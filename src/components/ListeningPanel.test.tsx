@@ -49,8 +49,8 @@ describe("ListeningPanel reports the pipeline's decision", () => {
         detected={detected}
         cloud={{ cloudHit: null } as never}
         fused={fusedKey}
-        locked={false}
-        onLock={vi.fn()}
+        applyDetected={true}
+        onToggleApply={vi.fn()}
         onRetry={vi.fn()}
         root="G"
         scale="major"
@@ -75,11 +75,18 @@ describe("ListeningPanel reports the pipeline's decision", () => {
     expect(screen.queryByTestId("explore-key-alt")).toBeNull();
   });
 
-  it("never tells the player to press anything — the neck already follows", () => {
+  it("never tells the player to press anything — Apply is already engaged", () => {
     for (const key of [fused(), fused({ certainty: "tonic_open", tonicSettled: false, relativeAlternative: "E minor" })]) {
       cleanup();
       panel(key);
-      expect(screen.queryByText(/apply/i)).toBeNull();
+      // The latch itself is allowed to say Apply. The copy around it must never ask for it:
+      // the neck is already following, and the switch exists only to stop that.
+      expect(
+        screen.queryAllByText(/apply/i).filter((el) => el.closest("button") === null),
+      ).toEqual([]);
+      expect(
+        screen.getByRole("button", { name: "Turn off Apply" }).getAttribute("aria-pressed"),
+      ).toBe("true");
     }
   });
 

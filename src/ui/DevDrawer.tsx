@@ -42,7 +42,8 @@ export type DevDrawerProps = {
   activeDisplayName: string | null;
   /** What the pipeline settled on, and on what evidence. See services/keyFusion. */
   fused: FusedKey;
-  locked: boolean;
+  /** Is the Apply latch engaged? Off means the neck is frozen wherever it stands. */
+  applyDetected: boolean;
   devMockEnabled: boolean;
   onDevMockEnabledChange: (value: boolean) => void;
   devMockTitle: string;
@@ -249,7 +250,7 @@ export function DevDrawer({
   cloudResolution,
   activeDisplayName,
   fused,
-  locked,
+  applyDetected,
   devMockEnabled,
   onDevMockEnabledChange,
   devMockTitle,
@@ -411,11 +412,11 @@ export function DevDrawer({
                   }
                 />
                 <Row label="Decided by" value={fused.why} />
-                {locked ? (
+                {applyDetected ? null : (
                   <p className="mt-2 text-[11px] leading-relaxed text-led-hold/85">
-                    Locked: the song is still being analysed, but the neck is being held where it is.
+                    Apply is off: the song is still being analysed, but the neck is being held where it is.
                   </p>
-                ) : null}
+                )}
               </Section>
 
               {import.meta.env.DEV ? (

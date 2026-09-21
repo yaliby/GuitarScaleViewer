@@ -1272,6 +1272,16 @@ input::-webkit-inner-spin-button {
 .listening-actions .icon-button {
   border: 1px solid #34464d;
 }
+/* Apply carries a word as well as a lamp, so it sheds the square icon-button footprint. */
+.listening-actions .apply-toggle {
+  width: auto;
+  gap: 7px;
+  padding: 0 13px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
 .lock-description {
   font-size: 9px;
   line-height: 1.7;

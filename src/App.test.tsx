@@ -135,8 +135,8 @@ function hearing(
 
 describe("practice studio shell", () => {
   it("puts the heard key on the neck with nothing pressed", async () => {
-    // The iron rule. There is no latch to arm and no Apply to press: a player holding a guitar
-    // gets the scale by playing the song, and that is the only interaction there is.
+    // The iron rule. Apply is already engaged and there is nothing to arm: a player holding a
+    // guitar gets the scale by playing the song, and that is the only interaction there is.
     hearing("D", "major");
     render(<App />);
 
@@ -260,7 +260,7 @@ describe("practice studio shell", () => {
     );
   });
 
-  it("loads a favorite without silently unlocking it or letting Auto overwrite it", async () => {
+  it("loads a favorite without silently re-enabling Apply or letting it overwrite the key", async () => {
     localStorage.setItem(
       "fretboard-studio.favorites.v1",
       JSON.stringify([
@@ -276,24 +276,24 @@ describe("practice studio shell", () => {
     await waitFor(() =>
       expect(screen.getByLabelText("Root note")).toHaveValue("D"),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Lock practice key" }));
+    fireEvent.click(screen.getByRole("button", { name: "Turn off Apply" }));
 
     fireEvent.click(screen.getByRole("button", { name: "Load C minor setup" }));
 
     expect(screen.getByLabelText("Root note")).toHaveValue("C");
     expect(screen.getByLabelText("Scale type")).toHaveValue("minor");
     expect(
-      screen.getByRole("button", { name: "Unlock practice key" }),
+      screen.getByRole("button", { name: "Turn on Apply" }),
     ).toBeInTheDocument();
   });
 
-  it("resets the setup without silently unlocking it", async () => {
+  it("resets the setup without silently re-enabling Apply", async () => {
     hearing("D", "major");
     render(<App />);
     await waitFor(() =>
       expect(screen.getByLabelText("Root note")).toHaveValue("D"),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Lock practice key" }));
+    fireEvent.click(screen.getByRole("button", { name: "Turn off Apply" }));
 
     fireEvent.click(
       screen.getByRole("button", { name: "Reset practice setup" }),
@@ -302,24 +302,24 @@ describe("practice studio shell", () => {
     expect(screen.getByLabelText("Root note")).toHaveValue("A");
     expect(screen.getByLabelText("Scale type")).toHaveValue("minor");
     expect(
-      screen.getByRole("button", { name: "Unlock practice key" }),
+      screen.getByRole("button", { name: "Turn on Apply" }),
     ).toBeInTheDocument();
   });
 
-  it("follows the song unasked, and stops dead at a lock", async () => {
+  it("follows the song unasked, and stops dead when Apply goes off", async () => {
     hearing("D", "major");
     const { rerender } = render(<App />);
     await waitFor(() =>
       expect(screen.getByLabelText("Root note")).toHaveValue("D"),
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Lock practice key" }));
+    fireEvent.click(screen.getByRole("button", { name: "Turn off Apply" }));
     hearing("C", "major");
     rerender(<App />);
     expect(screen.getByLabelText("Root note")).toHaveValue("D");
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Unlock practice key" }),
+      screen.getByRole("button", { name: "Turn on Apply" }),
     );
     await waitFor(() =>
       expect(screen.getByLabelText("Root note")).toHaveValue("C"),
@@ -332,9 +332,29 @@ describe("practice studio shell", () => {
     expect(screen.getByLabelText("Root note")).toHaveValue("C");
   });
 
-  it("puts the pipeline key back on the neck when the player unlocks after a hand edit", async () => {
-    // The Stairway case: the deck already reads A minor, the board was left on G, and Unlock
-    // must mean "follow the song again" — not "keep sitting on the leftover key".
+  it("releases Apply the moment the player picks a key by hand", async () => {
+    hearing("D", "major");
+    const { rerender } = render(<App />);
+    await waitFor(() =>
+      expect(screen.getByLabelText("Root note")).toHaveValue("D"),
+    );
+
+    fireEvent.change(screen.getByLabelText("Root note"), {
+      target: { value: "G" },
+    });
+    expect(
+      screen.getByRole("button", { name: "Turn on Apply" }),
+    ).toBeInTheDocument();
+
+    // ...so the next thing the song says cannot take the board off the player's pick.
+    hearing("C", "major");
+    rerender(<App />);
+    expect(screen.getByLabelText("Root note")).toHaveValue("G");
+  });
+
+  it("puts the pipeline key back on the neck when Apply comes back on after a hand edit", async () => {
+    // The Stairway case: the deck already reads A minor, the board was left on G, and Apply
+    // coming back on must mean "follow the song again" — not "keep sitting on the leftover key".
     hearing("A", "minor");
     render(<App />);
     await waitFor(() =>
@@ -348,9 +368,12 @@ describe("practice studio shell", () => {
       target: { value: "major" },
     });
     expect(screen.getByLabelText("Root note")).toHaveValue("G");
+    // The hand edit switched Apply off by itself — nothing else was pressed.
+    expect(
+      screen.getByRole("button", { name: "Turn on Apply" }),
+    ).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Lock practice key" }));
-    fireEvent.click(screen.getByRole("button", { name: "Unlock practice key" }));
+    fireEvent.click(screen.getByRole("button", { name: "Turn on Apply" }));
 
     await waitFor(() =>
       expect(screen.getByLabelText("Root note")).toHaveValue("A"),
@@ -358,7 +381,7 @@ describe("practice studio shell", () => {
     expect(screen.getByLabelText("Scale type")).toHaveValue("minor");
   });
 
-  it("live jam follows the heard key onto a leftover board after unlock", async () => {
+  it("live jam follows the heard key onto a leftover board when Apply comes back on", async () => {
     hearing("A", "minor");
     render(<App />);
     fireEvent.click(screen.getByRole("button", { name: "Live Jam" }));
@@ -371,9 +394,13 @@ describe("practice studio shell", () => {
       target: { value: "major" },
     });
     expect(jamRoot).toHaveValue("G");
+    // Typing a root is a decision: Apply released itself, so the song left the board alone.
+    expect(screen.getByRole("button", { name: "Apply" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
 
-    fireEvent.click(screen.getByRole("button", { name: "Lock" }));
-    fireEvent.click(screen.getByRole("button", { name: "Locked" }));
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
 
     await waitFor(() => expect(jamRoot).toHaveValue("A"));
     expect(screen.getByDisplayValue("Natural minor (Aeolian)")).toBeInTheDocument();

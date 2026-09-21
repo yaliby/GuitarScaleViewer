@@ -2,10 +2,10 @@ import { useState } from "react";
 import {
   AudioLines,
   ChevronDown,
-  LockKeyhole,
-  LockKeyholeOpen,
   Radio,
   RefreshCw,
+  Zap,
+  ZapOff,
 } from "lucide-react";
 import type { DetectedKeyState } from "../hooks/useDetectedKey";
 import type { MediaSessionUiState } from "../hooks/useMediaSession";
@@ -24,8 +24,9 @@ type Props = {
    * that no longer exists.
    */
   fused: FusedKey;
-  locked: boolean;
-  onLock: () => void;
+  /** Is the neck allowed to take the pipeline's key? On by default; off freezes what is drawn. */
+  applyDetected: boolean;
+  onToggleApply: () => void;
   onRetry: () => void;
   root: string;
   scale: string;
@@ -35,8 +36,8 @@ export function ListeningPanel({
   detected,
   cloud,
   fused,
-  locked,
-  onLock,
+  applyDetected,
+  onToggleApply,
   onRetry,
   root,
   scale,
@@ -88,9 +89,11 @@ export function ListeningPanel({
             : fused.certainty === "verified"
               ? "Found in the verified song library."
               : name
-                ? tonicOpen
-                  ? `The scale tones are settled — this reads equally as ${musicalLabel(fused.relativeAlternative!)}, which draws the same notes.`
-                  : "The neck is already following this. Nothing to press."
+                ? !applyDetected
+                  ? "Apply is off, so the neck is staying where it is. Switch Apply on to take this key."
+                  : tonicOpen
+                    ? `The scale tones are settled — this reads equally as ${musicalLabel(fused.relativeAlternative!)}, which draws the same notes.`
+                    : "The neck is already following this. Nothing to press."
                 : "Start music in your player. You can always choose a key yourself."}
         </p>
       </div>
@@ -109,17 +112,23 @@ export function ListeningPanel({
       ) : null}
       <div className="listening-actions">
         <button
-          className={`icon-button ${locked ? "is-active" : ""}`}
-          onClick={onLock}
-          aria-label={locked ? "Unlock practice key" : "Lock practice key"}
-          aria-pressed={locked}
+          className={`icon-button apply-toggle ${applyDetected ? "is-active" : ""}`}
+          onClick={onToggleApply}
+          aria-label={applyDetected ? "Turn off Apply" : "Turn on Apply"}
+          aria-pressed={applyDetected}
+          title={
+            applyDetected
+              ? "Apply is on: the neck follows the song. Switch it off to keep this key."
+              : "Apply is off: the neck holds this key. Switch it on to take the key being heard."
+          }
         >
-          {locked ? <LockKeyhole size={16} /> : <LockKeyholeOpen size={16} />}
+          {applyDetected ? <Zap size={16} /> : <ZapOff size={16} />}
+          Apply
         </button>
       </div>
-      {locked && (
+      {!applyDetected && (
         <p className="lock-description">
-          Holding {musicalLabel(root)} {scale}. Unlock to follow another key.
+          Holding {musicalLabel(root)} {scale}. Turn Apply back on to follow the song again.
         </p>
       )}
       <button

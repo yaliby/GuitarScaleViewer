@@ -157,10 +157,11 @@ export default function App() {
   const [guideOpen, setGuideOpen] = useState(false);
   const [setupName, setSetupName] = useState("");
   const [toast, setToast] = useState<string | null>(null);
-  const [locked, setLocked] = useState(false);
+  /* Apply ships engaged: the neck takes the pipeline's key until the player switches it off. */
+  const [applyDetected, setApplyDetected] = useState(true);
   /* The key the pipeline put on the neck, kept so the revision margin has something to beat. */
   const [neckKey, setNeckKey] = useState<FusedKey | null>(null);
-  const prevLockedRef = useRef(locked);
+  const prevApplyRef = useRef(applyDetected);
   const [selectedChord, setSelectedChord] = useState<number | null>(null);
   const [voicingIndex, setVoicingIndex] = useState(0);
   const [playbackMode, setPlaybackMode] = useState<PlaybackMode>("scale");
@@ -375,19 +376,19 @@ export default function App() {
       }),
     [cloud.cloudHit, cloud.trackIdentity, detectedKey, neckKey],
   );
-  /* The neck follows the song unless the player has locked it. Nothing to arm, nothing to press.
-     Unlock reapplies the current fused key: a leftover or hand-edited board must not keep
-     showing G while the pipeline has already settled on A minor. */
+  /* The neck follows the song unless the player has switched Apply off. Nothing to arm, nothing
+     to press. Switching Apply back on reapplies the current fused key: a leftover or hand-edited
+     board must not keep showing G while the pipeline has already settled on A minor. */
   useEffect(() => {
-    const justUnlocked = prevLockedRef.current && !locked;
-    prevLockedRef.current = locked;
-    if (view === "jam" || locked) {
+    const justEnabled = !prevApplyRef.current && applyDetected;
+    prevApplyRef.current = applyDetected;
+    if (view === "jam" || !applyDetected) {
       return;
     }
     if (!fused.root || !fused.scale) {
       return;
     }
-    if (!justUnlocked && !shouldRevise(neckKey, fused)) {
+    if (!justEnabled && !shouldRevise(neckKey, fused)) {
       return;
     }
     const root = tryNormalizeRoot(fused.root);
@@ -398,7 +399,7 @@ export default function App() {
     if (session.root !== root || session.scaleType !== fused.scale) {
       updateSession({ root, scaleType: fused.scale });
     }
-  }, [fused, locked, neckKey, session.root, session.scaleType, updateSession, view]);
+  }, [applyDetected, fused, neckKey, session.root, session.scaleType, updateSession, view]);
 
   const audition = useCallback(
     (midi: readonly number[]) => {
@@ -509,7 +510,14 @@ export default function App() {
     setSetupName("");
     setToast(`Saved ${name}`);
   };
+  /* Choosing a key by hand is the decision to stop following the song: Apply switches itself off
+     so the pipeline's next revision cannot quietly undo the pick. */
+  const pickKeyByHand = (patch: Partial<PracticeSession>) => {
+    setApplyDetected(false);
+    updateSession(patch);
+  };
   const loadFavorite = (favorite: Favorite) => {
+    setApplyDetected(false);
     setSession(favorite.session);
     setSidebarOpen(false);
     setToast(`Loaded ${favorite.name}`);
@@ -587,7 +595,7 @@ export default function App() {
           <select
             aria-label="Root note"
             value={session.root}
-            onChange={(event) => updateSession({ root: event.target.value })}
+            onChange={(event) => pickKeyByHand({ root: event.target.value })}
           >
             {ROOTS.map((root) => (
               <option value={root} key={root}>
@@ -605,7 +613,7 @@ export default function App() {
             aria-label="Scale type"
             value={session.scaleType}
             onChange={(event) =>
-              updateSession({
+              pickKeyByHand({
                 scaleType: event.target.value as ScaleType,
               })
             }
@@ -898,8 +906,8 @@ export default function App() {
       detected={detectedKey}
       cloud={cloud}
       fused={fused}
-      locked={locked}
-      onLock={() => setLocked((value) => !value)}
+      applyDetected={applyDetected}
+      onToggleApply={() => setApplyDetected((value) => !value)}
       onRetry={() => void resetDetection()}
       root={session.root}
       scale={session.scaleType}
