@@ -20,8 +20,8 @@ import keylab
 from features import relative_pair_features
 from exp_discriminative import fit_profiles, generative_fit, predict
 
-SHIPPED_BLEND = 0.80
-REFINE = dict(relative_credit=0.5, pull=7.0, temperature=0.02)
+SHIPPED_BLEND = 0.70
+REFINE = dict(relative_credit=0.5, pull=5.0, temperature=0.02)
 TONIC_C = 0.003
 BASE = (keylab.SHAATH_MAJOR_72, keylab.SHAATH_MINOR_72)
 EPS = 1e-12

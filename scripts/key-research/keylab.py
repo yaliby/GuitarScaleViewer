@@ -228,6 +228,18 @@ def build_cache(path: str = CACHE, workers: int = 6) -> None:
     print(f"cached {len(results)} clips ({len(set(m['song'] for m in meta))} songs) -> {path}")
 
 
+def corpus_rows() -> list[tuple[str, str]]:
+    """(clip_id, wav path) for every clip in the corpus, in manifest order."""
+    rows = []
+    for capture, directory in CORPUS_DIRS:
+        manifest = os.path.join(directory, "manifest.json")
+        if not os.path.exists(manifest):
+            continue
+        for entry in json.load(open(manifest)):
+            rows.append((f"{capture}:{entry['id']}", os.path.join(directory, entry["file"])))
+    return rows
+
+
 def load_clips(path: str = CACHE) -> list[Clip]:
     if not os.path.exists(path):
         raise SystemExit(f"no chroma cache at {path}; run `python3 scripts/key-research/cache.py`")

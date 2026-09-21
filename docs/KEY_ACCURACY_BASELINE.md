@@ -595,3 +595,358 @@ regularisation — C=0.003, a genuine interior optimum with 0.0003 and 0.03 both
 
 `close` and `bass_close` carry nothing at all. That is honest rather than surprising: a 60-second
 excerpt taken from the middle of a song ends mid-phrase, and so does the app's live buffer.
+
+---
+
+# Chords, at last: the tie-break that worked (2026-09-20, later still)
+
+The section above ends with three fitted models that all failed to claim an obvious-looking
+eighteen points, and a note that the chord path "needs a real chord recogniser, not a weekend one".
+This is that recogniser, and the framing that made it pay.
+
+## The eighteen points
+
+With the refined profile and the log aggregation, the true key's position in the classifier's own
+ranking:
+
+| | note set in top k | exact key in top k |
+|---|---|---|
+| k=1 | 74.6% | **63.8%** |
+| k=2 | 81.0% | 75.9% |
+| k=3 | 85.4% | **82.2%** |
+| k=4 | 86.8% | 84.6% |
+| k=5 | 89.9% | 89.3% |
+
+**A fifth of every wrong answer is a key the classifier had already found and then ranked second.**
+
+## Three ways not to claim them
+
+All measured on the real corpus, cross-validated by song:
+
+| | note-set | tonic |
+|---|---|---|
+| profile + tonic stage | 74.6% | 64.8% |
+| free 24-way linear model over the same features | 72.0% | 42.0% |
+| additive correction to the profile's score, all 24 candidates | 73.7% | 64.3% |
+| re-ranking the top 3 with time-resolved chroma | 74.9% | 64.7% |
+
+The first two lose in the same way and for the same reason: fitted from scratch over all 24
+candidates, they spend their capacity learning to suppress twenty-one that the profile had already
+ruled out. The third does not lose but does not win either — and that is the informative one,
+because it says the *model* was never the problem. Everything derived from libKeyFinder's
+chromagram is exhausted, including the parts of it that keep time.
+
+## Why the front end had to change
+
+libKeyFinder's FFT frame is 16384 samples at a 4410 Hz working rate: a **3.7-second window**, which
+smears three or four chords into one observation. What separates C major from G major is not which
+notes occur — they share six of seven — but which chord the music rests on and resolves to, and
+that is averaged away before any classifier sees it. No model recovers it.
+
+`sidecars/libkeyfinder_cli/chord_frontend.cpp` reads the same audio a second time:
+
+* decimate to 11025 Hz, STFT at 8192/2048 — a **0.74 second** window, five times sharper in time
+  and still 1.35 Hz per bin;
+* **harmonic-percussive separation** by median filtering. Drums are broadband and brief, so they
+  survive a median across frequency and vanish under a median across time; pitched material does
+  the opposite;
+* **per-recording tuning estimation** — 28% of corpus clips sit 20 cents or more from A440, enough
+  to smear every partial across two filterbank bins. A *global* pitch offset was tested earlier and
+  lost; a per-recording one had never been tried;
+* triad matching with the bass register weighted separately, smoothed over 0.74s, then eighteen
+  features per candidate key.
+
+Removing the separation and the tuning together costs 1.2 note-set and 2.2 tonic, so both earn
+their place. The smoothing width was the biggest single knob: 0.74s scores 77.2/68.3 against
+3.0s at 75.9/65.2 — *less* smoothing than a chord lasts, because the STFT window has already
+averaged once and the features that pay are the ones counting where a phrase lands.
+
+## The framing that made it work
+
+The same chord features, used the two available ways:
+
+| | note-set | tonic |
+|---|---|---|
+| chords naming the key on their own | 67.1% | 57.9% |
+| chords breaking a tie in the profile's top four | **77.3%** | **68.6%** |
+
+Naming the key from chords alone still loses to the profile, just as it did the first time (though
+67.1 is a long way from the earlier attempt's 55.0). **Breaking a tie is a different and much
+easier question**, and it is the one worth asking. A chord reading does not have to be good enough
+to identify a key from nothing; it has to be good enough to say which of four shortlisted keys the
+music keeps landing on.
+
+Dropping the 168 time-resolved chroma features from the re-ranker costs 0.1 point. The eighteen
+chord features are carrying it alone.
+
+## What the model learned
+
+By standardised weight, after the profile's own margin and rank:
+
+    changes_into_tonic    +0.251   how often a chord change *lands* on the tonic chord
+    time_on_tonic         +0.196   how much of the time that chord is sounding
+    time_diatonic         +0.166   how much of the time is spent in the key at all
+    cadence_V_to_tonic    +0.136   the dominant resolving
+    cadence_IV_to_tonic   +0.120   the plagal cadence
+
+That is the order a musician would give, which is the best evidence available that it is reading
+music rather than fitting noise.
+
+## What it does, and what it is not allowed to do
+
+Out of fold, over 1356 decisions:
+
+    keeps the analyzer's answer      86.2%
+    overrules it                     13.8%
+      fixed a wrong answer             87  (47% of overrules)
+      broke a right one                44  (24%)
+      net                             +43 clips
+
+It overrules at a median top-two gap of 0.0017 and defers at a median of 0.0046 — it breaks ties,
+which is what it was built to do. The CLI now makes that structural rather than emergent: above a
+0.008 gap the chord front end is **not run at all**, and the engine keeps the classifier's answer.
+That threshold is where the leader is already right 88% of the time (against 46% below 0.003), and
+restricting the re-ranker to the closest three-quarters of calls scores 76.5/67.1 against 76.6/66.8
+for running it always — the same number for a quarter less work, on a process that repeats every
+four seconds for as long as the app is open.
+
+## Two safety properties
+
+* The CLI reproduces libKeyFinder's 24-candidate ranking itself, because `keyOfChromaVector`
+  returns only the winner. That reintroduces exactly the risk this document warned about in 2026-09-19
+  — a home-grown ranking silently replacing the shipped verdict — so the shortlist is emitted
+  **only when the replication's own top choice matches what libKeyFinder returned**. Measured
+  60/60 on clips with audio; the four that disagree are the blocked-video captures where
+  libKeyFinder returns silence, and there the shortlist is correctly withheld.
+* `key_reranker::rerank` returns `None` — leaving the verdict untouched — for a missing shortlist,
+  a short one, the wrong number of features, or any non-finite value. An older CLI that emits no
+  `candidates` field degrades to the previous behaviour exactly.
+
+The synthetic scoreboard is unchanged by all of this: 100% note-set, 80.6% tonic, 58/72 exact, 14
+relative slips. Synthetic clips are equal-duration loops with no melody, so they have no
+arrangement for the chord features to read and the margin is usually wide enough that the gate
+skips them.
+
+## Where this leaves the engine
+
+| | note-set | tonic |
+|---|---|---|
+| where this document started (2026-09-19, synthetic only) | 97.2%* | 66.7%* |
+| the first real-audio measurement | 71.7% | 65.0% |
+| the 167-song corpus, Sha'ath profiles | 65.9% | 58.8% |
+| generative fitted profile (shipped that morning) | 69.7% | 57.9% |
+| \+ discriminative refinement | 72.7% | 60.0% |
+| \+ log aggregation | 74.9% | 63.5% |
+| \+ chord tie-break | **77.3%** | **68.6%** |
+
+\* synthetic corpus, not comparable.
+
+**+7.6 note-set and +10.7 tonic in one day**, all of it cross-validated by song on real recordings.
+
+## A bug worth the two points it cost
+
+The separation wrote its mask back into the spectrogram while the frequency-axis window still had
+to read eight bins below it, so the filter saw values it had already modified. It was not the
+median filter it claimed to be, and it drifted further from the Python reference the further up the
+spectrum it went. Copying the column out before masking fixes it, and is also the faster way to
+walk the data — the same window spans seventeen different rows, which is a cache miss per sample
+taken the obvious way.
+
+Fixing it gained **+0.6 note-set and +1.7 tonic**, and it closed the gap between the two
+implementations: the tuning estimate went from disagreeing on 2 clips in 16 to 0, no binary feature
+flips any more, and the largest feature difference fell from 1.0 to 0.047.
+
+It was found by profiling rather than by testing, which is worth noticing. The two front ends were
+known to disagree slightly and that had been written off as argmax sensitivity around ties — a
+plausible story, and wrong. The check that would have caught it is the one that was already there
+(`verify_chords.py`) being read as a measurement rather than as a pass/fail.
+
+## Where the remaining headroom is
+
+With the tie-break in place, the ceiling the shortlist imposes is note-set 86.8% and exact key
+84.6%. The engine keeps 77.3% and 68.6% of those, so **9 points of note-set and 16 of tonic are
+still sitting inside the four candidates the classifier already found**. That is where the next
+attempt belongs, and it is a chord-recognition problem rather than a modelling one: the recogniser
+is a plain triad template match with fixed smoothing, no beat tracking, no transition model and no
+seventh chords.
+
+## Four more things that did not work
+
+All measured on the real corpus with the top-4 re-ranker held fixed, against the shipped
+recogniser's 77.5/68.7:
+
+| | note-set | tonic |
+|---|---|---|
+| **plain triads, HPSS chroma (shipped)** | **77.5%** | **68.7%** |
+| log compression before chord matching | 77.0% | 68.3% |
+| sqrt compression before chord matching | 76.8% | 67.9% |
+| harmonic templates (partials folded in), decay 0.8 | 77.4% | 66.6% |
+| harmonic templates, decay 0.6 | 76.9% | 66.8% |
+| twelve extra features: bass line, chord durations, sevenths | 76.8% | 67.9% |
+
+The compression result is the interesting one, because compression is exactly what gained two
+points on the tone profile. It loses here for a reason that is visible once stated: the profile
+aggregates a whole clip, where one loud band can dominate a sum, while the chord decision is a
+per-frame argmax where what matters is the *contrast* between a chord tone and a passing note —
+and compression flattens precisely that.
+
+The extended feature set is the same lesson as every other losing model in this document. Twelve
+more features against 167 songs is not a richer description, it is thinner evidence per parameter.
+
+# The corpus doubled, and everything fitted to it moved (2026-09-21)
+
+Prompted by a field recording rather than a test: a capture of "Dimyon Hofshi" (E minor) in which
+the readout found E minor, hedged it, and then locked **G major at 100%**. Three separate defects
+were behind that one screen, and finding them started with a number that should not have been
+possible to disagree with.
+
+## The scoreboard was measuring a pipeline the app does not have
+
+`tests/key_accuracy_scoreboard.rs::analyze` read the CLI's own `key` field. But `key_detection.rs`
+hands the shortlist to `key_reranker::rerank` before anything downstream sees a key, so the
+scoreboard scored the tone profile alone while the product shipped profile-plus-chord-tie-break.
+Two numbers existed for one engine and neither was wrong about what it measured.
+
+The scoreboard now applies the re-ranker. It also applies the relative-pair hedge below, so its
+"what the player is actually told" section describes the readout rather than one gate of it.
+
+## The fitted constants were stale, and the sweep optima had moved
+
+The corpus grew from 226 clips / 167 songs to **396 clips / 337 songs** without a refit.
+`refit_all.py` re-swept everything, and it moved:
+
+| | was | now |
+|---|---|---|
+| generative blend | 0.80 | **0.70** |
+| discriminative pull | 7.0 | **5.0** |
+| shortlist size | 4 | **3** |
+| re-ranker L2 | 0.3 | **0.03** |
+
+6-fold cross-validation split by song, 8 partitions, 396 clips:
+
+| | note-set | tonic |
+|---|---|---|
+| generative only | 71.0% ± 0.6 | 62.9% ± 0.6 |
+| \+ discriminative refinement | 74.0% ± 0.4 | 65.4% ± 0.6 |
+| \+ chord tie-break | **74.7% ± 0.5** | **67.1% ± 0.7** |
+
+**The chord tie-break is worth about a third of what the smaller corpus said.** It read +2.4
+note-set and +5.1 tonic on 226 clips; on 396 it reads +0.7 and +1.7. Nothing about it broke — the
+earlier number was measured on a corpus small enough for a 21-parameter model to flatter itself,
+and this is what that looks like when more songs arrive. The re-ranker also became more
+conservative on its own: it now overrules the profile on 11.3% of clips rather than 13.8%, the
+weight on `score_gap_to_leader` more than doubled, and its tipping point against compelling rival
+chord evidence moved from a 0.021 cosine gap to 0.0115.
+
+End to end on the 273-song capture, through the shipped path including the re-ranker:
+
+```
+             note-set    tonic
+before          68.1%    61.9%
+after           71.4%    65.9%
+```
+
+That run is partly in-sample — the refit saw these songs — so **74.7 / 67.1 remains the honest
+number** and this one is an integration check that the Rust and C++ sides reproduce it.
+
+## Vote agreement cannot settle a relative pair
+
+The third defect, and the one that put G major on screen at full confidence.
+`aggregate_results` decided the pair was open by comparing the top two entries of the **window
+vote**. Once the windows consolidated on one end, the runner-up left the vote, the margin ran to
+1.0, and the hedge disappeared — so the more consistently the engine was wrong, the more certain
+it sounded. On a relative pair that test cannot work at all: both names describe the same seven
+notes, so windows agreeing is not evidence about which one is home.
+
+The analyzer's own margin between them is. `WindowAnalysisResult::relative_pair_gap` carries it
+from the CLI, and it is calibrated over 396 clips — of the 281 whose top two are a relative pair:
+
+| gap | n | leader right | runner-up right |
+|---|---|---|---|
+| 0.000–0.002 | 59 | **47.5%** | 22.0% |
+| 0.002–0.004 | 72 | 66.7% | 13.9% |
+| 0.004–0.008 | 112 | 85.7% | 1.8% |
+| 0.008–0.015 | 35 | 88.6% | 0.0% |
+
+Only the first row is not a verdict. Scored end to end on every wrong answer rather than only the
+relative slips, `gap < 0.002` withdraws 20 of 93 wrong roots and hedges 19 of 180 right ones;
+0.003 withdraws 30 and hedges 37, and it is worse than one-for-one from there on. The trade is
+worth taking at 0.002 only because the two sides are not equal — a hedged root still draws the
+correct seven notes and names the alternative, while an asserted wrong root puts every bend
+outside the key.
+
+**Measured and rejected:** restricting the hedge to clips the re-ranker left alone, on the theory
+that a re-ranked answer has already consulted chord evidence. 15 wrong roots withdrawn for 15
+right ones, against 20 for 19 — strictly worse than not asking.
+
+This costs no time. `readyToApply` is carried into the trace log and gates nothing; the neck
+follows a hedged reading through `fuseKey` exactly as it follows a settled one, which is what the
+iron rule requires.
+
+## A coin flip was allowed to repaint the neck every four seconds
+
+In the recording the readout hedged E minor at a pair margin of 0.288 and four seconds later moved
+the root marker to G major at **0.107** — it followed the weaker evidence, at the moment the engine
+was least sure. `keyFusion.ts` consulted `held` only when there was no detection at all, so nothing
+gave the answer already on the neck a tie.
+
+It now anchors: while the engine is hedging a relative pair and the song has not changed, the end
+of the pair the neck already shows keeps it, and the new leader becomes the named alternative. The
+moment the engine stops calling the pair open the ordinary path runs and a real modulation lands.
+
+## The hedge shipped unreachable, and a second live run caught it (2026-09-21, later)
+
+The first build of the relative-pair hedge fired correctly and did nothing useful. A second capture
+of the same song logged `pairGap=0.002` — the gate working — and then
+`neck.follow ... (hedged, 35%) why: engine_ambiguous_but_shown`, which is the *fallback* branch.
+
+`aggregate_results` builds `alternatives` from the window vote, and a consolidated vote has one
+entry. The hedge set `relative_pair_unresolved` and wrote the other name into `reason`, but the
+readout recovers "this is a relative pair" from `alternatives` — `keyFusion.ts::relativeHedge`
+never reads `reason`. So the list was empty, the hedge downgraded a correct diagram to "unsure"
+instead of "notes settled, root open", and the anchoring that was supposed to hold the neck could
+not run at all: it lives inside the branch that needs a named relative.
+
+`apply_tonic_evidence` had solved this a session earlier, by inserting the relative at the head of
+`alternatives` with a comment saying exactly why. The new gate did not, because it was written
+against `reason`, which is the diagnostic channel rather than the decision one.
+
+Two lessons worth the space. **A gate that fires is not a gate that works** — the log said the
+threshold was correct and the outcome was still wrong, and only the `why:` field gave it away.
+And **the log had two different quantities under one name**: `pairMargin` was a normalised share
+of the window vote in one branch and a raw cosine gap in another, so one number appeared to drift
+between 0.002 and 0.652 while meaning two unrelated things. It is now `pairGap` when the analyzer's
+margin decided and `pairMargin` when the vote did.
+
+## The anchor held for a minute, then leaked twice (2026-09-21, third run)
+
+The third capture is the one that settled the design. The neck held **E minor through a full minute
+of G major readings** — `#0336`-`#0349`, no `neck.follow` line in the whole run — and then lost it
+twice, for two different reasons.
+
+**Leak one: the anchor asked the engine instead of the keys.** At `#0350` the engine attributed the
+same doubt to `gating_denied` rather than `relative_pair_ambiguity`, so `relative_pair_unresolved`
+was false, no relative went into `alternatives`, and `relativeHedge` returned null. The anchor lived
+inside that branch, so a single cycle of differently-labelled doubt was enough. Whether two keys are
+a relative pair is a fact about the keys; it is now derived with `compareKeys(held, local)` and does
+not depend on the engine naming anything.
+
+**Leak two: a confident reading of the same seven notes.** At `#0354`-`#0360` the engine promoted
+G major to `likely_key` at 100% on four agreeing windows and `readyToApply`. The anchor deliberately
+yielded to that, on the reasoning that confidence has earned the change.
+
+That reasoning was wrong, and wrong by this document's own argument. The engine's confidence here is
+the window vote consolidating, and window agreement provably cannot separate two names for one
+pitch-class set. A 100% that is *about this distinction* carries no information, whatever the number
+says. The anchor now holds against a confident relative too.
+
+This does not freeze the neck, and the limit is structural rather than a tuning choice: it applies
+only where `compareKeys` returns `relative`, so both readings draw the identical diagram and the
+entire cost of being wrong is the root marker — which `tonic_open` is already stepping back from.
+Any move to a different note set is `unrelated` and passes through at any confidence.
+
+**What the three runs cost, stated plainly:** the gate was measured before it was built, and it
+still shipped broken twice — once unreachable, once leaking. Neither failure was visible in the
+accuracy numbers, in 88 Rust tests, or in 258 frontend tests, because all of them assert on the
+engine's verdict and both bugs were in what the *readout* did with it. The `why:` field of
+`neck.follow` was the only thing that showed either one.
