@@ -243,6 +243,36 @@ export function relativeHedge(detected: DetectedCandidate): KeyCandidate | null 
   return null;
 }
 
+/**
+ * The end of a relative pair the neck already shows, when the engine has just named the other one.
+ *
+ * Deliberately derived from the two keys themselves rather than from `detected.alternatives`. An
+ * earlier version asked the engine "is this a relative pair?" and only held when it said so, which
+ * failed on a live run: the engine attributed the same doubt to `gating_denied` on one cycle
+ * instead of `relative_pair_ambiguity`, sent an empty alternatives list with it, and the neck
+ * flipped E minor -> G major on that one gap. But whether two keys are a relative pair is a fact
+ * about the keys, not a thing the engine has to tell us, and holding is safe by construction: the
+ * two names draw the identical seven notes, so the diagram cannot be made wrong by this.
+ *
+ * Not applied to a new song — `trackIdentity` changing means there is nothing to hold — and not to
+ * a merely held leftover, which is not evidence about the song now playing. A verified key
+ * short-circuits above this and is never resisted.
+ */
+function relativeAnchor(
+  held: FusedKey | null,
+  local: KeyCandidate,
+  trackIdentity: string | null,
+): KeyCandidate | null {
+  if (!held || held.source !== 'detected' || !held.root || !held.scale) {
+    return null;
+  }
+  if (held.trackIdentity !== trackIdentity) {
+    return null;
+  }
+  const current = { key: held.root, mode: held.scale };
+  return compareKeys(current, local) === 'relative' ? current : null;
+}
+
 export function fuseKey({ verified, detected, held, trackIdentity = null }: FusionInput): FusedKey {
   if (verified) {
     return fromCandidate(
@@ -262,6 +292,36 @@ export function fuseKey({ verified, detected, held, trackIdentity = null }: Fusi
   const local = usableDetected(detected);
   if (local) {
     const engine = Math.round(Math.max(0, Math.min(1, detected.confidence || 0)) * 100);
+    // Checked before the engine's own `ambiguous` flag, and that placement is the whole point.
+    //
+    // A first version held only while the engine was hedging, on the reasoning that a confident
+    // reading has earned the change. A live capture of "Dimyon Hofshi" (E minor) showed why that is
+    // wrong: the neck held E minor for a full minute of hedged G major readings, the engine then
+    // promoted G major to `likely_key` at 100% on four agreeing windows, and the wrong root walked
+    // straight in. That confidence is the window vote consolidating — the one thing that provably
+    // cannot separate two names for the same seven notes. Confidence about *this* distinction is
+    // not evidence, whatever number it carries.
+    //
+    // This does not freeze the neck. It applies only between a key and its relative, where both
+    // readings draw the same diagram, so the cost of being wrong is the root marker alone — and
+    // that is exactly what `tonic_open` steps back from. Any genuine move to a different note set
+    // is `unrelated` here and passes through untouched.
+    const anchor = relativeAnchor(held, local, trackIdentity);
+    if (anchor) {
+      return fromCandidate(
+        anchor,
+        {
+          source: 'detected',
+          certainty: 'tonic_open',
+          confidencePct: CERTAINTY_PCT.tonicOpen,
+          notesSettled: true,
+          tonicSettled: false,
+          relativeAlternative: displayOf(local),
+          why: 'relative_flip_resisted',
+        },
+        trackIdentity,
+      );
+    }
     if (detected.ambiguous) {
       // A relative-pair hedge is not the same defect as "no idea". The seven notes are agreed;
       // only the root is open. Saying "unsure" here would understate a correct fretboard, and

@@ -112,6 +112,110 @@ describe('fuseKey', () => {
       });
     });
 
+    /**
+     * Taken from a field recording of "Dimyon Hofshi" (E minor). The readout hedged E minor at a
+     * pair margin of 0.288, and four seconds later moved the root marker to G major at 0.107 — it
+     * followed the *weaker* evidence, because nothing gave the answer already on the neck a tie.
+     */
+    describe('a coin flip does not get to repaint the neck every four seconds', () => {
+      const showingEmin: FusedKey = {
+        root: 'E',
+        scale: 'minor',
+        displayName: 'E minor',
+        source: 'detected',
+        certainty: 'tonic_open',
+        confidencePct: CERTAINTY_PCT.tonicOpen,
+        notesSettled: true,
+        tonicSettled: false,
+        relativeAlternative: 'G major',
+        trackIdentity: null,
+        why: 'engine_relative_pair_unresolved',
+      };
+
+      it('keeps the end of the pair the neck already shows', () => {
+        expect(fuse({ detected: torn, held: showingEmin })).toMatchObject({
+          root: 'E',
+          scale: 'minor',
+          certainty: 'tonic_open',
+          notesSettled: true,
+          tonicSettled: false,
+          relativeAlternative: 'G major',
+          why: 'relative_flip_resisted',
+        });
+      });
+
+      /**
+       * The engine reaches `likely_key` at 100% by counting agreeing windows, and window agreement
+       * is the one thing that cannot separate two names for the same seven notes. In the live
+       * capture this is precisely how G major got in after a minute of being held off.
+       */
+      it('does not yield to a confident reading of the same seven notes', () => {
+        expect(fuse({ detected: { ...torn, ambiguous: false }, held: showingEmin })).toMatchObject({
+          root: 'E',
+          scale: 'minor',
+          certainty: 'tonic_open',
+          why: 'relative_flip_resisted',
+        });
+      });
+
+      /** The anchor is about one note set with two names. A different note set is not its business. */
+      it('lets a genuinely different key through at any confidence', () => {
+        const elsewhere = engine({
+          primaryKey: 'Bb',
+          primaryScale: 'major',
+          displayName: 'Bb major',
+          ambiguous: false,
+        });
+        expect(fuse({ detected: elsewhere, held: showingEmin })).toMatchObject({
+          root: 'Bb',
+          scale: 'major',
+          certainty: 'lone',
+        });
+      });
+
+      /**
+       * The hole the second live run found: the engine attributed the same doubt to `gating_denied`
+       * on one cycle and sent no alternatives with it, and the neck flipped on that single gap.
+       * The anchor must not depend on the engine naming the pair.
+       */
+      it('holds even when the engine names no alternative at all', () => {
+        const unnamed = engine({
+          primaryKey: 'G',
+          primaryScale: 'major',
+          displayName: 'G major',
+          ambiguous: true,
+          alternatives: [],
+        });
+        expect(fuse({ detected: unnamed, held: showingEmin })).toMatchObject({
+          root: 'E',
+          scale: 'minor',
+          why: 'relative_flip_resisted',
+        });
+      });
+
+      it('does not hold a new song back with the last one\'s root', () => {
+        expect(
+          fuse({ detected: torn, held: showingEmin, trackIdentity: 'a-different-song' }),
+        ).toMatchObject({ root: 'G', why: 'engine_relative_pair_unresolved' });
+      });
+
+      it('does not anchor to a merely held leftover', () => {
+        const leftover: FusedKey = { ...showingEmin, source: 'held', certainty: 'held' };
+        expect(fuse({ detected: torn, held: leftover })).toMatchObject({
+          root: 'G',
+          why: 'engine_relative_pair_unresolved',
+        });
+      });
+
+      it('does not anchor to an unrelated key that happens to be on the neck', () => {
+        const unrelated: FusedKey = { ...showingEmin, root: 'D', scale: 'minor', displayName: 'D minor' };
+        expect(fuse({ detected: torn, held: unrelated })).toMatchObject({
+          root: 'G',
+          why: 'engine_relative_pair_unresolved',
+        });
+      });
+    });
+
     it('never claims an open tonic when the engine is not hedging at all', () => {
       expect(relativeHedge({ ...torn, ambiguous: false })).toBeNull();
       expect(fuse({ detected: { ...torn, ambiguous: false } })).toMatchObject({
