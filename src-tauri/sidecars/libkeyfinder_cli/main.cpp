@@ -46,6 +46,8 @@
 #include <keyfinder/workspace.h>
 #include <keyfinder/chromagram.h>
 
+#include "chord_frontend.h"
+
 namespace {
 
 const char* const PITCH_NAMES[12] = {"C",  "C#", "D",  "D#", "E",  "F",
@@ -61,6 +63,28 @@ const char* const PITCH_NAMES[12] = {"C",  "C#", "D",  "D#", "E",  "F",
 // key_engine.rs keeps this honest against a libKeyFinder upgrade that moves it.
 const int BAND_ZERO_PITCH_CLASS = 0;  // C
 
+/// How many of the profile's ranked candidates the engine is offered for re-ranking.
+///
+/// Measured on 396 clips / 337 songs: the true key is in the top 1 for 65.5% of clips, top 2 for
+/// 77.0%, top 3 for 80.7%, top 4 for 84.1%, top 5 for 86.7%. A wider shortlist holds the answer
+/// more often and gives the re-ranker more chances to pick something silly. Four was the peak on
+/// the 167-song corpus; `refit_all.py` now puts it at three, and four is within noise of it.
+const int SHORTLIST_SIZE = 3;
+
+/// Above this margin between the top two candidates, the chord front end is not run at all.
+///
+/// Two things fall out of one constant. The chord analysis is an STFT, a median-filter pass and a
+/// filterbank over the whole buffer, and the engine re-analyses every four seconds for as long as
+/// the app is open — so not running it is worth real battery. And the margin is strongly predictive
+/// on its own: below 0.003 the classifier's leader is right 46% of the time, from 0.003 to 0.008
+/// 75%, and above 0.008 **88%**. There is very little there to win and a confident answer to lose.
+///
+/// Measured over the real corpus, restricting the re-ranker to the closest three-quarters of calls
+/// scores 76.5/67.1 against 76.6/66.8 for running it always — the same number, a quarter less work.
+/// It also makes "this only breaks ties" a property of the code rather than an observation about
+/// the fitted weights.
+const double CHORD_TIE_BREAK_MAX_GAP = 0.008;
+
 // Krumhansl-Kessler key profiles, indexed from the tonic. Used only to rank the 24 candidates;
 // libKeyFinder's own classifier still decides `key`/`scale`.
 const double MAJOR_PROFILE[12] = {6.35, 2.23, 3.48, 2.33, 4.38, 4.09,
@@ -74,11 +98,11 @@ const double MINOR_PROFILE[12] = {6.33, 2.68, 3.52, 5.38, 2.60, 3.53,
 // octave-resolved tone profile. Its built-in profiles are Sha'ath's, shaped for DJ software.
 // Nothing about them came from the music this app listens to.
 //
-// Fitted in two steps, both against the 167-song / 226-clip real corpus, and both measured by
-// 6-fold cross-validation split **by song** over ten random partitions (scripts/key-research):
+// Fitted in two steps, both against the 337-song / 396-clip real corpus, and both measured by
+// 6-fold cross-validation split **by song** over eight random partitions (scripts/key-research):
 //
 //   1. **generatively** — every clip's chromagram rotated so its true tonic sits at the profile's
-//      origin, averaged per mode, blended 0.80 toward the fitted shape as regularisation. This
+//      origin, averaged per mode, blended 0.70 toward the fitted shape as regularisation. This
 //      asks "what does a major key look like", which is not the question the classifier answers.
 //   2. **discriminatively** — the result is then nudged to minimise the classifier's own
 //      cross-entropy over all 24 candidates. The errors that remain are near misses (IV, V, the
@@ -86,32 +110,35 @@ const double MINOR_PROFILE[12] = {6.33, 2.68, 3.52, 5.38, 2.60, 3.53,
 //      what distinguishes C major from G major is not what they have in common.
 //
 //     Sha'ath (libKeyFinder default)  note-set 65.9%          tonic 58.8%
-//     generative only                 note-set 69.7% +/- 0.8  tonic 57.9% +/- 1.0
-//     + discriminative refinement     note-set 72.7% +/- 0.9  tonic 60.0% +/- 0.7
-//     + the log aggregation below     note-set 74.9% +/- 0.7  tonic 63.5% +/- 0.7
+//     generative only                 note-set 71.0% +/- 0.6  tonic 62.9% +/- 0.6
+//     + discriminative refinement     note-set 74.0% +/- 0.4  tonic 65.4% +/- 0.6
 //
-// The refinement's regularisation sits on a plateau running pull 5 to 14, so it is not a tuned
+// The refinement's regularisation sits on a plateau running pull 3 to 14, so it is not a tuned
 // point. A single fold split is not a measurement here: on the first 64-song corpus one partition
 // gave 77.2% and another 71.5% for the same profile, which is why every number above is a mean
-// over ten partitions.
+// over several partitions.
+//
+// The blend moved 0.80 -> 0.70 and the pull 7.0 -> 5.0 when the corpus grew from 226 clips to 396.
+// That is the expected direction and the reason `refit_all.py` re-sweeps rather than just refits:
+// 144 free numbers need less holding back once there is more data behind them.
 //
 // libKeyFinder still does the classifying. Only what it matches against has changed.
 const double FITTED_MAJOR_72[72] = {
-    1.224143, 0.805402, 0.970389, 0.844917, 1.164742, 1.022740, 0.866868, 1.153762, 0.904857, 1.308164, 0.821600, 1.084137,
-    2.787149, 1.545346, 1.665085, 1.389100, 2.217212, 2.161821, 1.555460, 2.574744, 1.607528, 2.469213, 1.640102, 1.929317,
-    3.574733, 1.972868, 2.390691, 1.591326, 2.877206, 2.206250, 1.518903, 3.214113, 1.785263, 2.936017, 1.844812, 2.431618,
-    4.166277, 2.084742, 2.861616, 2.012884, 3.787006, 2.603826, 1.595455, 3.534424, 1.833725, 3.071926, 1.728430, 2.762407,
-    4.419814, 2.251903, 3.423980, 2.302556, 4.155970, 2.562381, 2.137849, 4.035311, 2.071780, 3.485709, 2.213780, 3.481206,
-    3.935668, 2.562503, 3.158089, 2.528175, 3.976413, 2.724510, 2.756631, 3.942531, 2.604121, 3.274325, 2.475740, 3.433313,
+    1.334442, 0.859841, 1.009998, 0.877515, 1.350038, 1.189011, 0.927015, 1.395977, 0.906033, 1.300184, 0.839941, 1.115790,
+    2.953808, 1.599249, 1.683811, 1.414608, 2.406321, 2.203207, 1.509953, 2.749655, 1.647672, 2.572881, 1.618709, 2.008102,
+    3.669849, 1.907642, 2.310250, 1.684681, 3.117925, 2.325612, 1.546720, 3.300310, 1.766055, 2.888168, 1.701154, 2.413111,
+    4.325291, 2.188119, 2.826211, 2.045063, 3.888725, 2.408240, 1.559870, 3.619400, 1.825540, 3.090804, 1.706559, 2.798242,
+    4.426339, 2.184902, 3.246398, 2.279188, 4.194006, 2.390116, 2.060556, 4.034842, 2.053654, 3.442280, 2.160612, 3.415163,
+    3.893780, 2.425726, 2.992980, 2.402799, 3.864770, 2.512832, 2.468230, 3.848533, 2.464719, 3.185617, 2.371330, 3.307898,
 };
 
 const double FITTED_MINOR_72[72] = {
-    1.635556, 0.770443, 1.097478, 1.121405, 0.918963, 1.065661, 1.090132, 1.340917, 1.022736, 1.012000, 1.152781, 1.079227,
-    3.211326, 1.712475, 1.984737, 2.427782, 1.641578, 1.818657, 1.615026, 2.422201, 2.116011, 1.685003, 2.435985, 1.780377,
-    3.489368, 1.733772, 2.349046, 3.087215, 1.988610, 2.393947, 1.759969, 3.030297, 2.143130, 1.580804, 2.925985, 1.899470,
-    3.644938, 1.638610, 2.752734, 3.781366, 2.105785, 2.760771, 2.037997, 3.736912, 2.287337, 1.545076, 3.024380, 1.874764,
-    3.958783, 2.050441, 3.360843, 3.990411, 2.278684, 3.239105, 2.405293, 4.099668, 2.201954, 2.099979, 3.576308, 2.130131,
-    3.617709, 2.396145, 3.271911, 3.555571, 2.641071, 3.183060, 2.713885, 4.059938, 2.446621, 2.742045, 3.632906, 2.631368,
+    1.681035, 0.777636, 1.134312, 1.113087, 0.918785, 1.099956, 1.101001, 1.501846, 1.102711, 1.018655, 1.254441, 1.050005,
+    3.304111, 1.607273, 2.006906, 2.529368, 1.640573, 1.776874, 1.657507, 2.580399, 2.089110, 1.616467, 2.503608, 1.809013,
+    3.476734, 1.579608, 2.336038, 3.188736, 1.905645, 2.323271, 1.882311, 3.241404, 2.183051, 1.513615, 2.973395, 1.875040,
+    3.700081, 1.576485, 2.765545, 3.939201, 2.156978, 2.754712, 2.176140, 3.864956, 2.154496, 1.487198, 3.134951, 1.914266,
+    4.000097, 2.007426, 3.317190, 4.076018, 2.200190, 3.195512, 2.469583, 4.181344, 2.129204, 2.006316, 3.639411, 2.143189,
+    3.626696, 2.263298, 3.169266, 3.592133, 2.473995, 3.050816, 2.620903, 3.966215, 2.301869, 2.484694, 3.602314, 2.518359,
 };
 
 /// Collapse the per-hop chromagram into the 72 numbers the classifier matches against.
@@ -242,6 +269,70 @@ int pitch_class_of(const std::string& name) {
     return -1;
 }
 
+/// Cosine similarity of the chromagram against every one of the 24 candidate keys.
+///
+/// This is libKeyFinder's `KeyClassifier::classify` written out, for one reason: the classifier
+/// returns only its winner, and the tie-break that follows needs the runners-up. Candidate `i` has
+/// tonic `(9 + i/2) % 12` and is major when `i` is even, matching `key_t`'s order; the three
+/// semitone shift is `ToneProfile`'s constructor rotating C-indexed bands onto an A-indexed enum.
+///
+/// The caller must check `ranking_agrees_with` before trusting the order. An earlier version of
+/// this tool scored the 24 keys with Krumhansl-Kessler profiles and agreed with libKeyFinder's own
+/// classifier only 45.8% of the time; feeding that into the engine would have silently replaced
+/// the shipped verdict. This reproduces the real thing rather than approximating it, and says so
+/// out loud if it ever stops doing that.
+std::vector<double> candidate_scores(const std::vector<double>& bands,
+                                     const double major[72], const double minor[72]) {
+    std::vector<double> scores(24, 0.0);
+    double band_norm = 0.0;
+    for (int i = 0; i < 72; i++) {
+        band_norm += bands[i] * bands[i];
+    }
+    band_norm = std::sqrt(band_norm);
+    for (int candidate = 0; candidate < 24; candidate++) {
+        const double* profile = (candidate % 2 == 0) ? major : minor;
+        const int offset = candidate / 2;
+        double dot = 0.0;
+        double profile_norm = 0.0;
+        for (int octave = 0; octave < 6; octave++) {
+            for (int i = 0; i < 12; i++) {
+                const double p = profile[octave * 12 + ((i + 3 - offset + 12) % 12)];
+                dot += bands[octave * 12 + i] * p;
+                profile_norm += p * p;
+            }
+        }
+        profile_norm = std::sqrt(profile_norm);
+        scores[candidate] =
+            (band_norm > 0.0 && profile_norm > 0.0) ? dot / (band_norm * profile_norm) : 0.0;
+    }
+    return scores;
+}
+
+/// Does the replicated ranking's winner match what libKeyFinder actually returned?
+bool ranking_agrees_with(const std::vector<double>& scores, KeyFinder::key_t key) {
+    int best = 0;
+    for (int i = 1; i < 24; i++) {
+        if (scores[i] > scores[best]) {
+            best = i;
+        }
+    }
+    static const KeyFinder::key_t ORDER[24] = {
+        KeyFinder::A_MAJOR,       KeyFinder::A_MINOR,
+        KeyFinder::B_FLAT_MAJOR,  KeyFinder::B_FLAT_MINOR,
+        KeyFinder::B_MAJOR,       KeyFinder::B_MINOR,
+        KeyFinder::C_MAJOR,       KeyFinder::C_MINOR,
+        KeyFinder::D_FLAT_MAJOR,  KeyFinder::D_FLAT_MINOR,
+        KeyFinder::D_MAJOR,       KeyFinder::D_MINOR,
+        KeyFinder::E_FLAT_MAJOR,  KeyFinder::E_FLAT_MINOR,
+        KeyFinder::E_MAJOR,       KeyFinder::E_MINOR,
+        KeyFinder::F_MAJOR,       KeyFinder::F_MINOR,
+        KeyFinder::G_FLAT_MAJOR,  KeyFinder::G_FLAT_MINOR,
+        KeyFinder::G_MAJOR,       KeyFinder::G_MINOR,
+        KeyFinder::A_FLAT_MAJOR,  KeyFinder::A_FLAT_MINOR,
+    };
+    return ORDER[best] == key;
+}
+
 void print_chroma(const char* name, const std::vector<double>& chroma, bool trailing_comma) {
     std::cout << "\"" << name << "\":[";
     for (int i = 0; i < 12; i++) {
@@ -333,6 +424,52 @@ int main(int argc, char** argv) {
             std::cout << "]";
         }
         std::cout << "],\"key\":\"" << to_label(key) << "\"}" << std::endl;
+        return 0;
+    }
+
+    // --chords: the chord-derived evidence, 18 numbers per candidate key.
+    //
+    // This is a second front end (chord_frontend.h) reading the same audio at five times
+    // libKeyFinder's time resolution, because the tie-break between a key and its relative,
+    // subdominant or dominant is about *which chord the music rests on* and a 3.7-second FFT frame
+    // cannot see one. Emitted so the research harness can check the C++ against the Python it was
+    // fitted in; the shipped path carries the same numbers inside the main output.
+    if (argc >= 3 && std::string(argv[2]) == "--chords") {
+        const bool diagnostics = (argc >= 4 && std::string(argv[3]) == "--diagnostics");
+        const gsv::ChordEvidence evidence =
+            gsv::analyse_chords(samples, info.channels, info.samplerate, diagnostics);
+        std::cout << "{\"valid\":" << (evidence.valid ? "true" : "false")
+                  << ",\"tuningCents\":" << std::fixed << std::setprecision(1)
+                  << evidence.tuning_cents << ",\"frames\":" << evidence.frames;
+        if (diagnostics) {
+            std::cout << ",\"chromaTotals\":[";
+            for (size_t i = 0; i < evidence.chroma_totals.size(); i++) {
+                if (i) std::cout << ",";
+                std::cout << std::fixed << std::setprecision(4) << evidence.chroma_totals[i];
+            }
+            std::cout << "],\"bassTotals\":[";
+            for (size_t i = 0; i < evidence.bass_totals.size(); i++) {
+                if (i) std::cout << ",";
+                std::cout << std::fixed << std::setprecision(4) << evidence.bass_totals[i];
+            }
+            std::cout << "],\"chordLabels\":[";
+            for (size_t i = 0; i < evidence.chord_labels.size(); i++) {
+                if (i) std::cout << ",";
+                std::cout << evidence.chord_labels[i];
+            }
+            std::cout << "]";
+        }
+        std::cout << ",\"features\":[";
+        for (size_t c = 0; c < evidence.features.size(); c++) {
+            if (c) std::cout << ",";
+            std::cout << "[";
+            for (size_t f = 0; f < evidence.features[c].size(); f++) {
+                if (f) std::cout << ",";
+                std::cout << std::fixed << std::setprecision(6) << evidence.features[c][f];
+            }
+            std::cout << "]";
+        }
+        std::cout << "]}" << std::endl;
         return 0;
     }
 
@@ -433,6 +570,73 @@ int main(int argc, char** argv) {
             std::cout << std::fixed << std::setprecision(6) << bass_segments[s][i];
         }
         std::cout << "]";
+    }
+    std::cout << "],";
+
+    // The shortlist, and the chord evidence for each entry on it.
+    //
+    // The profile puts the true key first 63.8% of the time and inside its top four 84.6% of the
+    // time, so a fifth of every wrong answer is a candidate the classifier had already found and
+    // then ranked second. Separating those needs evidence a 3.7-second FFT frame cannot hold —
+    // which chord the music rests on — so `chord_frontend.cpp` reads the same audio again at five
+    // times the time resolution and this hands the result over per candidate.
+    //
+    // Emitted only when the replicated ranking reproduces libKeyFinder's own winner. If it ever
+    // does not, the shortlist is withheld rather than shipped wrong, and the engine falls back to
+    // the classifier's single answer.
+    const std::vector<double> scores = candidate_scores(collapsed_chroma, FITTED_MAJOR_72, FITTED_MINOR_72);
+    const bool ranking_trustworthy = ranking_agrees_with(scores, key);
+
+    std::vector<int> order(24);
+    for (int i = 0; i < 24; i++) {
+        order[i] = i;
+    }
+    std::sort(order.begin(), order.end(),
+              [&scores](int a, int b) { return scores[a] > scores[b]; });
+    const double top_gap = scores[order[0]] - scores[order[1]];
+    const bool close_enough_to_be_worth_asking = top_gap <= CHORD_TIE_BREAK_MAX_GAP;
+
+    const gsv::ChordEvidence chord_evidence =
+        (ranking_trustworthy && close_enough_to_be_worth_asking)
+            ? gsv::analyse_chords(samples, info.channels, info.samplerate)
+            : gsv::ChordEvidence{};
+
+    std::cout << "\"rankingAgrees\":" << (ranking_trustworthy ? "true" : "false")
+              << ",\"topGap\":" << std::fixed << std::setprecision(6) << top_gap
+              << ",\"chordEvidence\":" << (chord_evidence.valid ? "true" : "false")
+              << ",\"tuningCents\":" << std::fixed << std::setprecision(1)
+              << chord_evidence.tuning_cents << ",\"candidates\":[";
+    if (ranking_trustworthy) {
+        for (int slot = 0; slot < SHORTLIST_SIZE; slot++) {
+            const int candidate = order[slot];
+            if (slot) std::cout << ",";
+            const int candidate_pc = (9 + candidate / 2) % 12;
+            const bool candidate_major = (candidate % 2 == 0);
+            // Each candidate carries its *own* fit to the chroma. Without this the engine would
+            // weight a re-ranked key by how well the chroma fitted the key it replaced, which is a
+            // different number about a different key — and `strength` is what the consensus layer
+            // votes with.
+            const double candidate_strength = normalized(correlate(
+                chroma, candidate_major ? MAJOR_PROFILE : MINOR_PROFILE, candidate_pc));
+            std::cout << "{\"key\":\"" << PITCH_NAMES[candidate_pc] << "\","
+                      << "\"scale\":\"" << (candidate_major ? "major" : "minor") << "\","
+                      << "\"score\":" << std::fixed << std::setprecision(6) << scores[candidate]
+                      << ",\"strength\":" << std::fixed << std::setprecision(6) << candidate_strength
+                      << ",\"chordFeatures\":[";
+            // Empty when there is no chord evidence — the margin was wide enough that the front
+            // end was never run, or the audio was silent. An empty list makes the engine's
+            // re-ranker decline outright rather than score a row of zeros and arrive at the same
+            // place by arithmetic; "we did not ask" and "we asked and learned nothing" should not
+            // look the same on the wire.
+            if (chord_evidence.valid) {
+                for (int f = 0; f < gsv::CHORD_FEATURE_COUNT; f++) {
+                    if (f) std::cout << ",";
+                    std::cout << std::fixed << std::setprecision(6)
+                              << chord_evidence.features[candidate][f];
+                }
+            }
+            std::cout << "]}";
+        }
     }
     std::cout << "]}" << std::endl;
     return 0;

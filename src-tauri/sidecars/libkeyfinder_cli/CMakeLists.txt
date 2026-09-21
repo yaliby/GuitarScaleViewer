@@ -11,7 +11,7 @@ pkg_check_modules(SNDFILE REQUIRED IMPORTED_TARGET sndfile)
 # header/library search so a locally built libKeyFinder still links.
 pkg_check_modules(KEYFINDER IMPORTED_TARGET libkeyfinder)
 
-add_executable(gsv-libkeyfinder-cli main.cpp)
+add_executable(gsv-libkeyfinder-cli main.cpp chord_frontend.cpp)
 target_link_libraries(gsv-libkeyfinder-cli PRIVATE PkgConfig::SNDFILE)
 
 if(KEYFINDER_FOUND)

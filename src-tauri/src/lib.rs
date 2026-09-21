@@ -1,9 +1,15 @@
 mod audio_capture;
-mod audio_models;
-mod key_detection;
+/// Public for the same reason as `key_engine`: the accuracy harness replays a growing capture
+/// buffer through the real decision path, which means it has to hold the real window type.
+pub mod audio_models;
+/// Public so the harness analyzes audio with the *shipped* detector. A second implementation of
+/// "call the CLI and read its JSON" is a second thing to keep in step, and the one it would
+/// diverge from is the one that ships.
+pub mod key_detection;
 /// Public so the accuracy harness (`tests/key_accuracy_scoreboard.rs`) scores the *shipped*
 /// tonic-evidence gate rather than a copy of it that can drift away from the real one.
 pub mod key_engine;
+pub mod key_reranker;
 mod media_session;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

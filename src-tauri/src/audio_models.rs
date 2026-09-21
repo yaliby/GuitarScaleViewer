@@ -30,6 +30,15 @@ pub struct WindowAnalysisResult {
     pub first_to_second_relative_strength: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub candidates: Option<Vec<WindowKeyCandidate>>,
+    /// The profile's score gap between its top two candidates, **when those two are a relative
+    /// major/minor pair** — and `None` when they are not, or when the analyzer sent no shortlist.
+    ///
+    /// This is the only evidence that answers "is the root a coin flip here", and it has to travel
+    /// separately from `candidates` because the consensus layer cannot answer it. A relative pair
+    /// is one pitch-class set with two names, so every window agreeing tells you nothing about
+    /// which end is home; vote agreement is precisely the wrong evidence for this question.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relative_pair_gap: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tuning_cents: Option<f32>,
     pub window_start_ms: u64,

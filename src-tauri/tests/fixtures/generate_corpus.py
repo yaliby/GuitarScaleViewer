@@ -15,6 +15,15 @@ Two things it does that the old generator does not:
   in-scale notes. Each template opens and closes on the tonic and — for minor — uses the major
   V of harmonic minor, which is the cue real minor music leans on.
 
+It writes two manifests, because they answer different questions and must not share a
+denominator:
+
+* `corpus_manifest.json` — 72 stationary clips, the accuracy baseline. One loop from start to
+  finish, which is what makes it a clean test of the relative-pair decision.
+* `corpus_nonstationary_manifest.json` — 24 clips that leave home for a middle section and come
+  back. Nothing in the stationary corpus can measure whether the readout *holds* a key, which is
+  what `MIN_READY_STREAK` exists for. See `docs/KEY_LATENCY.md`.
+
 The output is build output, not source: it lands in `corpus/`, which is gitignored. Re-run this
 whenever the corpus definition changes.
 
@@ -65,8 +74,22 @@ TEMPLATES = {
 
 BEAT_SECONDS = 0.55
 # 4 chords x 4 beats x 7 loops = 112 beats = 61.6 seconds, which clears the engine's
-# REQUIRED_AUDIO_SECONDS gate of 45 with room to spare when the clip is played live.
+# REQUIRED_AUDIO_SECONDS gate with room to spare when the clip is played live.
 LOOPS = 7
+LOOP_SECONDS = 4 * 4 * BEAT_SECONDS  # 8.8s
+
+# A second corpus, for a question the one above cannot answer.
+#
+# Every clip above is one loop from start to finish, so it can measure whether the engine hears a
+# key but never whether it holds one. `MIN_READY_STREAK` exists for the passage that briefly
+# implies somewhere else — and on a stationary corpus a streak of 2 scores exactly like a streak
+# of 6, which is not evidence that the streak is unnecessary, only that the experiment never ran.
+#
+# So: the same cadence in the home key, a middle section that genuinely modulates to the
+# subdominant, then home again. Seventeen and a half seconds away is long enough to move a
+# 44-second analysis window and short enough that a player would still name the home key. The
+# expected answer is home; anything that locks the subdominant has been fooled by a middle eight.
+EXCURSION_SECTIONS = [(0, 2), (5, 2), (0, 3)]  # (semitones from home, loops)
 
 
 def midi_to_freq(midi: int) -> float:
@@ -133,19 +156,34 @@ def noise(n: int, amp: float) -> list[float]:
     return out
 
 
-def build_clip(tonic_pc: int, mode: str, template: list[tuple[int, int]]) -> list[float]:
+def render_loops(tonic_pc: int, mode: str, template: list[tuple[int, int]], loops: int) -> list[float]:
     degrees = MAJOR_DEGREES if mode == "major" else MINOR_DEGREES
     out: list[float] = []
-    for _ in range(LOOPS):
+    for _ in range(loops):
         for degree_idx, beats in template:
             offset, quality = degrees[degree_idx]
             duration = beats * BEAT_SECONDS
             out.extend(render_chord((tonic_pc + offset) % 12, quality, duration))
+    return out
+
+
+def finish(out: list[float]) -> list[float]:
     n = noise(len(out), 0.006)
     peak = max((abs(v) for v in out), default=1.0) or 1.0
     # Normalize to -3dBFS so clip loudness is not itself a variable between fixtures.
     gain = 0.70 / peak
     return [out[i] * gain + n[i] for i in range(len(out))]
+
+
+def build_clip(tonic_pc: int, mode: str, template: list[tuple[int, int]]) -> list[float]:
+    return finish(render_loops(tonic_pc, mode, template, LOOPS))
+
+
+def build_excursion(tonic_pc: int, mode: str, template: list[tuple[int, int]]) -> list[float]:
+    out: list[float] = []
+    for semitones, loops in EXCURSION_SECTIONS:
+        out.extend(render_loops((tonic_pc + semitones) % 12, mode, template, loops))
+    return finish(out)
 
 
 def write_wav(path: Path, samples: list[float]) -> None:
@@ -185,6 +223,38 @@ def main() -> None:
         json.dumps({"sampleRateHz": SR, "clips": manifest}, indent=2) + "\n"
     )
     print(f"\ngenerated {len(manifest)} clips into {OUT}")
+
+    # Kept in its own manifest so the accuracy baseline keeps its denominator. These clips answer
+    # a different question and must not move the headline number.
+    moving = []
+    for tonic_pc in range(12):
+        for mode in ("major", "minor"):
+            tonic = PITCH_NAMES[tonic_pc]
+            clip_id = f"{tonic.replace('#', 's')}_{mode}_excursion"
+            write_wav(OUT / f"{clip_id}.wav", build_excursion(tonic_pc, mode, TEMPLATES[mode]["cadence"]))
+            away_at = EXCURSION_SECTIONS[0][1] * LOOP_SECONDS
+            moving.append(
+                {
+                    "id": clip_id,
+                    "path": f"corpus/{clip_id}.wav",
+                    "template": "excursion",
+                    "expectedKey": tonic,
+                    "expectedMode": mode,
+                    # What the middle section says instead, and when it says it. The harness needs
+                    # both to tell "fooled by the excursion" apart from "wrong for some other
+                    # reason".
+                    "decoyKey": PITCH_NAMES[(tonic_pc + EXCURSION_SECTIONS[1][0]) % 12],
+                    "decoyMode": mode,
+                    "decoyFromSeconds": away_at,
+                    "decoyToSeconds": away_at + EXCURSION_SECTIONS[1][1] * LOOP_SECONDS,
+                }
+            )
+            print(f"  {clip_id}")
+
+    (OUT / "corpus_nonstationary_manifest.json").write_text(
+        json.dumps({"sampleRateHz": SR, "clips": moving}, indent=2) + "\n"
+    )
+    print(f"generated {len(moving)} non-stationary clips into {OUT}")
 
 
 if __name__ == "__main__":

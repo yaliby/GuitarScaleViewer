@@ -10,16 +10,36 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
-const REQUIRED_AUDIO_SECONDS: f32 = 45.0;
-const ANALYSIS_WINDOW_SECONDS: usize = 12;
-const ANALYSIS_HOP_SECONDS: usize = 4;
+// The timing constants are `pub` so `tests/key_accuracy_scoreboard.rs` can report against the
+// values that ship instead of a copy that goes stale the first time one of them is tuned.
+/// How much audio the buffer must hold before the engine will call an answer anything but
+/// `warming_up`. Everything the player waits for is downstream of this number.
+///
+/// Twenty seconds is where the accuracy curve flattens, not a guess: measured over the corpus,
+/// note-set accuracy reaches 100% at 20s and 98.6% of clips already hold the answer they will
+/// still hold at 60s. The 45 it replaced predated any measurement of what the extra 25 seconds
+/// bought, which was nothing. See `docs/KEY_LATENCY.md`.
+pub const REQUIRED_AUDIO_SECONDS: f32 = 20.0;
+pub const ANALYSIS_WINDOW_SECONDS: usize = 12;
+pub const ANALYSIS_HOP_SECONDS: usize = 4;
+/// The most audio handed to the analyzer in one pass. Also the point at which the buffer starts
+/// sliding, which is what makes consecutive passes describe different audio.
+pub const MAX_ANALYSIS_SPAN_SECONDS: usize = 44;
 const ANALYZE_EVERY_MS: u64 = 3_000;
 const MIN_CONFIDENCE_READY: f32 = 0.84;
 const MIN_STABILITY_READY: f32 = 0.82;
 const MIN_CONFIDENCE_LIKELY: f32 = 0.78;
 const MIN_STABILITY_LIKELY: f32 = 0.76;
 const STALE_CAPTURE_TIMEOUT_MS: u64 = 7_000;
-const MIN_READY_STREAK: usize = 6;
+/// How many consecutive agreeing analyses the readout waits for before it stops hedging.
+///
+/// Four, not six, and the two seconds' difference is the only part of it that was ever measured
+/// as a benefit. On the stationary corpus every value from 2 to 6 locks the same clips with the
+/// same accuracy; on the non-stationary one — songs with a middle section in another key — no
+/// value ever asserts the key the song left, because the resistance comes from analyzing 44
+/// seconds at once and not from counting repeats. What six did buy was silence: a song with a
+/// middle eight never settled at all inside its first minute. See `docs/KEY_LATENCY.md`.
+pub const MIN_READY_STREAK: usize = 4;
 const KEY_SWITCH_HYSTERESIS_CONF_MARGIN: f32 = 0.08;
 const CAPTURE_STABLE_MIN_CYCLES: usize = 3;
 const SESSION_STABLE_MIN_CYCLES: usize = 3;
@@ -27,8 +47,8 @@ const PRIMARY_KEY_REPEAT_MIN: usize = 7;
 const DISRUPTION_COOLDOWN_MS: u64 = 9_000;
 const ANALYZER_UNAVAILABLE_LOG_THROTTLE_MS: u64 = 12_000;
 const LAST_GOOD_HOLD_MS: u64 = 25_000;
-const HISTORY_HORIZON: usize = 16;
-const AGGREGATION_RECENT_WINDOW_COUNT: usize = 9;
+pub const HISTORY_HORIZON: usize = 16;
+pub const AGGREGATION_RECENT_WINDOW_COUNT: usize = 9;
 const MAX_TONIC_ENTROPY: f32 = 0.76;
 const MIN_DOMINANCE_SHARE: f32 = 0.84;
 const MIN_PRIMARY_MARGIN: f32 = 0.34;
@@ -43,8 +63,13 @@ static ANALYZER_RESOURCE_DIR: OnceLock<PathBuf> = OnceLock::new();
 static ENGINE_STOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static ENGINE_THREAD: OnceLock<Mutex<Option<std::thread::JoinHandle<()>>>> = OnceLock::new();
 
+/// Every window verdict the engine still counts as evidence about the music playing now.
+///
+/// Public for the accuracy harness: window bookkeeping is the first of the three steps in a
+/// cycle (accept → `recent` → [`decide_from_windows`]), and a replay that reimplemented it would
+/// be measuring its own bookkeeping rather than the engine's.
 #[derive(Default)]
-struct AnalysisEvidence {
+pub struct AnalysisEvidence {
     windows: Vec<WindowAnalysisResult>,
     last_window_end_ms: u64,
     last_analyzed_endpoint: u64,
@@ -59,7 +84,22 @@ impl AnalysisEvidence {
         // Revisions remain monotonic across track/capture resets.
     }
 
-    fn accept(&mut self, windows: &[WindowAnalysisResult], start_ms: u64, endpoint: u64) -> bool {
+    /// The windows the consensus is allowed to see this cycle: recent enough to describe what is
+    /// playing now rather than what played a minute ago.
+    pub fn recent(&self) -> Vec<WindowAnalysisResult> {
+        let cutoff = self
+            .last_window_end_ms
+            .saturating_sub((AGGREGATION_RECENT_WINDOW_COUNT * ANALYSIS_HOP_SECONDS * 1000) as u64);
+        self.windows
+            .iter()
+            .filter(|w| w.window_end_ms > cutoff)
+            .cloned()
+            .collect()
+    }
+
+    /// Fold a cycle's analysis into the evidence. Returns whether any of it was new — a verdict
+    /// about audio already accounted for is not a second opinion, and must not count as one.
+    pub fn accept(&mut self, windows: &[WindowAnalysisResult], start_ms: u64, endpoint: u64) -> bool {
         self.last_analyzed_endpoint = endpoint;
         let previous_end = self.last_window_end_ms;
         let mut fresh = false;
@@ -92,7 +132,7 @@ fn aligned_analysis_samples(mut samples: Vec<f32>, endpoint: u64, rate: u32) -> 
     samples.truncate(samples.len().saturating_sub(tail));
     // Keep an integral number of hops, ending on the absolute sample grid.
     let available = samples.len() / hop as usize * hop as usize;
-    let count = available.min(44 * rate as usize);
+    let count = available.min(MAX_ANALYSIS_SPAN_SECONDS * rate as usize);
     let samples = samples[samples.len().saturating_sub(count)..].to_vec();
     let start_ms = (aligned.saturating_sub(samples.len() as u64)) * 1000 / rate as u64;
     (samples, start_ms, aligned)
@@ -303,7 +343,7 @@ fn circular_interval(a: i32, b: i32) -> i32 {
     d.min(12 - d)
 }
 
-fn is_relative_major_minor(key_a: &str, scale_a: &str, key_b: &str, scale_b: &str) -> bool {
+pub fn is_relative_major_minor(key_a: &str, scale_a: &str, key_b: &str, scale_b: &str) -> bool {
     let (Some(pc_a), Some(pc_b)) = (tonic_to_pc(key_a), tonic_to_pc(key_b)) else {
         return false;
     };
@@ -318,6 +358,65 @@ fn is_relative_major_minor(key_a: &str, scale_a: &str, key_b: &str, scale_b: &st
 
 fn relative_pair_label(key_a: &str, scale_a: &str, key_b: &str, scale_b: &str) -> String {
     format!("{key_a} {scale_a} vs {key_b} {scale_b}")
+}
+
+/// Below this gap between the profile's top two — when those two are relatives — the root is a coin
+/// flip and the readout says so instead of picking a side.
+///
+/// Calibrated over 396 clips, on the analyzer's own cosine scores. Of the 281 clips whose top two
+/// candidates are a relative pair:
+///
+/// ```text
+///   gap            n    leader right   runner-up right
+///   0.000-0.002   59          47.5%             22.0%
+///   0.002-0.004   72          66.7%             13.9%
+///   0.004-0.008  112          85.7%              1.8%
+///   0.008-0.015   35          88.6%              0.0%
+/// ```
+///
+/// The first row is the only one that is not a verdict: the leader loses more often than it wins
+/// and the runner-up takes a fifth. Every threshold was then scored end to end on what it does to
+/// the readout, counting every wrong answer rather than only the relative slips:
+///
+/// ```text
+///   gap < 0.001   withdraws 13/93 wrong roots, hedges 12/180 right ones
+///   gap < 0.002   withdraws 20/93,             hedges 19/180
+///   gap < 0.003   withdraws 30/93,             hedges 37/180
+///   gap < 0.004   withdraws 36/93,             hedges 47/180
+/// ```
+///
+/// 0.002 is where it stops paying for itself: one wrong root withdrawn per right one stepped back,
+/// and worse than one-for-one beyond. That trade is worth taking only because the two sides are not
+/// equal — a hedged root still draws the correct seven notes and names the alternative, while an
+/// asserted wrong root puts every bend outside the key. Only the root marker and the degree ruler
+/// step back (`keyFusion.ts`); the neck does not change.
+///
+/// Also measured and rejected: restricting this to clips the re-ranker left alone, on the theory
+/// that a re-ranked answer has already consulted chord evidence. It withdraws 15 wrong roots for
+/// 15 right ones — strictly worse than not asking the question.
+pub const RELATIVE_PAIR_COIN_FLIP_GAP: f32 = 0.002;
+
+/// The analyzer's relative-pair gap for the windows that are actually voting, as a median.
+///
+/// A median rather than a mean because a single window landing on an unrelated key reports `None`
+/// and would otherwise drag an average; and rather than "any window", because one close call in
+/// nine is how the music moves, not a coin flip. `None` when no voting window saw a relative pair
+/// on top, which is also what an older CLI with no shortlist reports.
+fn winner_relative_pair_gap(
+    results: &[WindowAnalysisResult],
+    winners: &[WindowWinner],
+) -> Option<f32> {
+    let mut gaps: Vec<f32> = results
+        .iter()
+        .filter(|r| winners.iter().any(|w| w.window_start_ms == r.window_start_ms))
+        .filter_map(|r| r.relative_pair_gap)
+        .filter(|gap| gap.is_finite())
+        .collect();
+    if gaps.is_empty() {
+        return None;
+    }
+    gaps.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    Some(gaps[gaps.len() / 2])
 }
 
 /// The other name for the same seven notes: C major <-> A minor.
@@ -822,6 +921,31 @@ fn save_debug_artifacts(
     );
 }
 
+/// One analysis cycle's verdict: the consensus over the windows in evidence, then the
+/// tonic-evidence gate over that consensus.
+///
+/// The engine loop calls this rather than composing the two itself, so that the accuracy harness
+/// can replay a growing buffer through the decision the app actually makes. The pair has to stay
+/// in this order — the gate withdraws a root the consensus was willing to assert, and reversing
+/// them would gate a single window instead of the agreed answer.
+pub fn decide_from_windows(
+    results: &[WindowAnalysisResult],
+    capture_mode: CaptureMode,
+    target_app: Option<String>,
+    enough_audio: bool,
+    stability_history: &VecDeque<String>,
+    chroma: Option<&[f32]>,
+) -> DetectedKeyPayload {
+    let payload = aggregate_results(
+        results,
+        capture_mode,
+        target_app,
+        enough_audio,
+        stability_history,
+    );
+    apply_tonic_evidence(payload, chroma)
+}
+
 fn aggregate_results(
     results: &[WindowAnalysisResult],
     capture_mode: CaptureMode,
@@ -908,6 +1032,45 @@ fn aggregate_results(
             relative_pair_unresolved = relative_pair_margin <= 0.34;
         }
     }
+    // The vote is not allowed to be the last word on this. The test above asks how close the two
+    // *names* are in the window vote, and that question resolves itself for the wrong reason: once
+    // the windows consolidate on one end of the pair the margin runs to 1.0 and the hedge silently
+    // disappears, so a relative slip is presented at full confidence. A field recording of
+    // "Dimyon Hofshi" (E minor) showed exactly that — hedged at pairMargin 0.288, flipped to the
+    // relative at 0.107, then locked G major at 100% once every window agreed.
+    //
+    // Window agreement cannot settle a relative pair, because both names describe the same seven
+    // notes. Only the analyzer's own margin between them can, so that is what decides here, and it
+    // overrides the vote in both directions.
+    // When it fires with the pair absent from the vote, the other name has to be *named*: the
+    // readout recovers "this is a relative pair" from `alternatives`, not from `reason`, and a
+    // consolidated vote leaves `alternatives` empty. Without this the hedge downgrades a correct
+    // diagram to "unsure" instead of "notes settled, root open" — and `keyFusion.ts` cannot tell
+    // the two ends apart to hold one of them, which is the whole point.
+    // Reported separately from the vote ratio above rather than overwriting it: one is a cosine gap
+    // between two candidates and the other a normalised share of the window vote. Printing both as
+    // `pairMargin` made two unrelated quantities look like one number drifting, which cost a
+    // debugging session on a real log.
+    let mut coin_flip_gap = None;
+    let mut coin_flip_relative = None;
+    if let Some((gap, leader)) = winner_relative_pair_gap(results, &winners).zip(ranked.first()) {
+        relative_pair_unresolved = gap < RELATIVE_PAIR_COIN_FLIP_GAP;
+        if relative_pair_unresolved {
+            coin_flip_gap = Some(gap);
+            let (relative_pc, relative_scale) =
+                relative_of(tonic_to_pc(&leader.0).unwrap_or(0), &leader.1);
+            let relative_key = PITCH_NAMES[relative_pc as usize];
+            if relative_pair_label_value.is_none() {
+                relative_pair_label_value = Some(relative_pair_label(
+                    &leader.0,
+                    &leader.1,
+                    relative_key,
+                    relative_scale,
+                ));
+            }
+            coin_flip_relative = Some((relative_key.to_string(), relative_scale.to_string()));
+        }
+    }
     let total_score: f32 = ranked.iter().map(|x| x.3).sum::<f32>().max(1e-6);
     let top = ranked.first().cloned();
     let second = ranked.get(1).cloned();
@@ -929,6 +1092,20 @@ fn aggregate_results(
             display_name: display.clone(),
             confidence: (*score / total_score).min(1.0),
         });
+    }
+    // At the head, so the frontend's `relativeHedge()` finds it as the runner-up — the same
+    // placement `apply_tonic_evidence` uses for the same reason.
+    if let Some((relative_key, relative_scale)) = coin_flip_relative.as_ref() {
+        alternatives.retain(|c| !(&c.key == relative_key && &c.scale == relative_scale));
+        alternatives.insert(
+            0,
+            KeyCandidate {
+                key: relative_key.clone(),
+                scale: relative_scale.clone(),
+                display_name: format!("{relative_key} {relative_scale}"),
+                confidence: top_share.min(1.0),
+            },
+        );
     }
 
     let history_size = stability_history.len().max(1) as f32;
@@ -988,8 +1165,14 @@ fn aggregate_results(
     } else if disagreement.family_mixture {
         Some("contradiction_detected_mixed_tonic_family".to_string())
     } else if relative_pair_unresolved {
-        Some(format!("relative_pair_ambiguity:pair={} pairMargin={:.3}",
-            relative_pair_label_value.unwrap_or_else(|| "unknown".into()), relative_pair_margin))
+        let pair = relative_pair_label_value.unwrap_or_else(|| "unknown".into());
+        Some(match coin_flip_gap {
+            // The analyzer could not separate the two names. `pairGap` is its own cosine margin,
+            // measured against `RELATIVE_PAIR_COIN_FLIP_GAP` — not a share of the window vote, and
+            // it is what decided this, whatever the windows happen to be doing.
+            Some(gap) => format!("relative_pair_ambiguity:pair={pair} pairGap={gap:.4}"),
+            None => format!("relative_pair_ambiguity:pair={pair} pairMargin={relative_pair_margin:.3}"),
+        })
     } else if separation < 0.20 {
         Some("top_candidate_too_close_to_alternative".to_string())
     } else if stability < 0.68 {
@@ -1395,11 +1578,23 @@ fn libkeyfinder_cli_candidates() -> Vec<PathBuf> {
     out
 }
 
-fn build_detector() -> Box<dyn KeyDetector> {
-    let analyzer_backend = std::env::var("KEY_ANALYZER_BACKEND")
+/// The analyzer the app runs with when nothing asks for another one.
+///
+/// It is `libkeyfinder` because that is the backend the accuracy work was measured on and the
+/// one `dev.sh`, `dev.ps1` and the README all call the default. Defaulting to the python sidecar
+/// instead meant a launch without the env var reported `analyzer_unavailable` on a machine where
+/// the native CLI was built and working — a shipped default disagreeing with its own docs.
+/// Missing CLI is still handled: `build_detector` falls back to the sidecar and says so.
+fn selected_backend() -> String {
+    std::env::var("KEY_ANALYZER_BACKEND")
         .ok()
         .map(|s| s.trim().to_ascii_lowercase())
-        .unwrap_or_else(|| "current".to_string());
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "libkeyfinder".to_string())
+}
+
+fn build_detector() -> Box<dyn KeyDetector> {
+    let analyzer_backend = selected_backend();
     if analyzer_backend == "libkeyfinder" {
         if let Some(det) = build_libkeyfinder_detector() {
             return det;
@@ -1515,10 +1710,7 @@ pub fn spawn_key_engine(app: AppHandle) {
                 .ok()
                 .map(|v| v.trim() == "1" || v.trim().eq_ignore_ascii_case("true"))
                 .unwrap_or(false);
-            let backend_selected = std::env::var("KEY_ANALYZER_BACKEND")
-                .ok()
-                .map(|s| s.trim().to_ascii_lowercase())
-                .unwrap_or_else(|| "current".to_string());
+            let backend_selected = selected_backend();
             let ab_current = if backend_selected == "current" || !ab_enabled {
                 None
             } else {
@@ -1992,8 +2184,7 @@ pub fn spawn_key_engine(app: AppHandle) {
                         Ok(mut output) => {
                             fresh_analysis = evidence.accept(&output.windows, sample_start_ms, aligned_endpoint);
                             if fresh_analysis {
-                                let cutoff = evidence.last_window_end_ms.saturating_sub((AGGREGATION_RECENT_WINDOW_COUNT * ANALYSIS_HOP_SECONDS * 1000) as u64);
-                                output.windows = evidence.windows.iter().filter(|w| w.window_end_ms > cutoff).cloned().collect();
+                                output.windows = evidence.recent();
                             }
                             analysis_cycles = analysis_cycles.saturating_add(1);
                             let backend_used = output.backend_used.clone();
@@ -2229,17 +2420,18 @@ pub fn spawn_key_engine(app: AppHandle) {
                                 snapshot.capture_mode,
                                 snapshot.buffer_seconds
                             );
-                            let mut payload = aggregate_results(
+                            // The consensus, then the tonic-evidence gate that withdraws a root
+                            // the audio never earned. The gate runs on the agreed answer rather
+                            // than on a single window, so a chord that happens to carry a leading
+                            // tone cannot settle the whole song by itself.
+                            let mut payload = decide_from_windows(
                                 &output.windows,
                                 snapshot.capture_mode,
                                 snapshot.target_app.clone().or(media.source_app.clone()),
                                 enough_audio,
                                 &decision_history,
+                                output.chroma.as_deref(),
                             );
-                            // Withdraw the root when the audio never earned it. Runs on the
-                            // consensus rather than on a single window so a chord that happens
-                            // to carry a leading tone cannot settle the whole song by itself.
-                            payload = apply_tonic_evidence(payload, output.chroma.as_deref());
                             if backend_used == "numpy_fallback" {
                                 // Preserve the measured consensus score for Live Jam's
                                 // estimate gate. This is evidence, not calibrated accuracy.
@@ -2824,6 +3016,192 @@ mod tonic_evidence_tests {
         assert_eq!(relative_of(2, "major"), (11, "minor")); // D major -> B minor
     }
 
+    /// One libkeyfinder pass over a buffer `span_ms` long, dated the way the detector dates it.
+    fn whole_buffer_pass(key: &str, scale: &str, span_ms: u64) -> WindowAnalysisResult {
+        serde_json::from_value(serde_json::json!({
+            "profileType": "libkeyfinder",
+            "key": key,
+            "scale": scale,
+            "displayName": format!("{key} {scale}"),
+            "strength": 0.63,
+            "firstToSecondRelativeStrength": 0.25,
+            "windowStartMs": 0,
+            "windowEndMs": span_ms,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_pass_over_more_audio_is_new_evidence() {
+        let mut evidence = AnalysisEvidence::default();
+        assert!(evidence.accept(&[whole_buffer_pass("A", "minor", 12_000)], 0, 12));
+        assert!(
+            evidence.accept(&[whole_buffer_pass("A", "minor", 16_000)], 0, 16),
+            "four seconds of audio the analyzer had not heard before is a new observation"
+        );
+    }
+
+    #[test]
+    fn the_same_span_judged_twice_is_not_a_second_opinion() {
+        let mut evidence = AnalysisEvidence::default();
+        assert!(evidence.accept(&[whole_buffer_pass("A", "minor", 12_000)], 0, 12));
+        assert!(
+            !evidence.accept(&[whole_buffer_pass("A", "minor", 12_000)], 0, 12),
+            "re-running the analyzer on audio already counted must not corroborate itself"
+        );
+    }
+
+    /// Replays what a capture does in its first half-minute: the same answer, re-derived from a
+    /// buffer that keeps growing. Returns the last reading and how many of the eight cycles
+    /// brought evidence the engine had not already counted.
+    ///
+    /// That count is the whole story of the streak. `likely_streak` only advances on a cycle that
+    /// was both fresh and settled, so a run of confident readings built from audio already judged
+    /// moves the player no closer to an answer.
+    fn replay_a_growing_buffer(span_of: impl Fn(u64) -> u64) -> (DetectedKeyPayload, usize) {
+        let mut evidence = AnalysisEvidence::default();
+        let mut history: VecDeque<String> = VecDeque::new();
+        let mut fresh_cycles = 0usize;
+        let mut latest = None;
+        for heard_ms in (12_000u64..=44_000).step_by(4_000) {
+            let fresh = evidence.accept(
+                &[whole_buffer_pass("A", "minor", span_of(heard_ms))],
+                0,
+                heard_ms / 1000,
+            );
+            let payload = decide_from_windows(
+                &evidence.recent(),
+                CaptureMode::ProcessLoopback,
+                None,
+                true,
+                &history,
+                None,
+            );
+            if fresh {
+                fresh_cycles += 1;
+                if let (Some(key), Some(scale)) = (&payload.primary_key, &payload.primary_scale) {
+                    history.push_back(format!("{key}:{scale}"));
+                }
+            }
+            latest = Some(payload);
+        }
+        (latest.expect("the replay ran at least one cycle"), fresh_cycles)
+    }
+
+    #[test]
+    fn a_verdict_that_holds_as_the_buffer_grows_can_reach_the_streak() {
+        let (settled, fresh_cycles) = replay_a_growing_buffer(|heard_ms| heard_ms);
+        assert!(!settled.ambiguous, "a held reading is settled: {settled:?}");
+        assert_eq!(settled.state, "likely_key");
+        assert!(
+            fresh_cycles >= MIN_READY_STREAK,
+            "thirty-two seconds of new audio has to be worth at least {MIN_READY_STREAK} \
+             observations, or no song can ever satisfy the streak; got {fresh_cycles}"
+        );
+    }
+
+    #[test]
+    fn a_pass_that_misreports_its_span_never_advances_the_streak() {
+        // What the libkeyfinder detector used to do: claim twelve seconds however much audio it
+        // was handed. The reading still looks confident — and that is the trap, because every
+        // pass after the first is audio already counted, so the streak the readout waits on
+        // stalls at one until the buffer is long enough to start sliding.
+        let (reading, fresh_cycles) = replay_a_growing_buffer(|_| 12_000);
+        assert!(!reading.ambiguous, "the reading itself still looks settled");
+        assert_eq!(
+            fresh_cycles, 1,
+            "a detector that re-dates every pass as the same window has corroborated nothing"
+        );
+    }
+
+    /// Every window agreeing on one end of a relative pair, which is what a long listen produces.
+    fn consolidated_relative_pair(gap: Option<f32>) -> Vec<WindowAnalysisResult> {
+        (0..8)
+            .map(|i| WindowAnalysisResult {
+                profile_type: "libkeyfinder".to_string(),
+                key: "G".to_string(),
+                scale: "major".to_string(),
+                display_name: "G major".to_string(),
+                strength: 0.95,
+                first_to_second_relative_strength: Some(0.25),
+                candidates: None,
+                relative_pair_gap: gap,
+                tuning_cents: None,
+                window_start_ms: i * 4_000,
+                window_end_ms: i * 4_000 + 12_000,
+            })
+            .collect()
+    }
+
+    /// The defect a field recording of "Dimyon Hofshi" (E minor) exposed: the readout hedged the
+    /// pair while the windows disagreed, then locked G major at 100% once they all agreed. Vote
+    /// agreement is the one thing that cannot settle a relative pair — both names are the same
+    /// seven notes — so consolidation must not be mistaken for evidence about the root.
+    #[test]
+    fn a_consolidated_vote_does_not_settle_a_relative_pair() {
+        let history = VecDeque::from(vec!["G:major".to_string(); 8]);
+        let out = aggregate_results(
+            &consolidated_relative_pair(Some(RELATIVE_PAIR_COIN_FLIP_GAP / 2.0)),
+            CaptureMode::EndpointLoopback,
+            None,
+            true,
+            &history,
+        );
+        assert!(
+            out.ambiguous,
+            "eight windows agreeing on G major says nothing about G vs E minor"
+        );
+        let reason = out.reason.unwrap();
+        assert!(reason.contains("relative_pair_ambiguity"), "{reason}");
+        // The notes are still drawn at full strength; only the root steps back.
+        assert_eq!(out.primary_key.as_deref(), Some("G"));
+        assert!(reason.contains("E minor"), "the other reading must be named: {reason}");
+
+        // The part that has to be in `alternatives` and not only in `reason`. A consolidated vote
+        // has one entry, so without this the list is empty, `keyFusion.ts::relativeHedge` finds no
+        // relative, and the readout falls back to "unsure" — downgrading a correct diagram and
+        // leaving nothing for the neck to anchor to. Shipped once without it; the log of a real
+        // run said `engine_ambiguous_but_shown` where it should have said `tonic_open`.
+        let offered = out.alternatives.first().expect("the other name must be offered");
+        assert_eq!(
+            (offered.key.as_str(), offered.scale.as_str()),
+            ("E", "minor"),
+            "the relative belongs at the head of the alternatives"
+        );
+    }
+
+    /// The other half, and the reason the threshold is a measured number rather than "always
+    /// hedge a relative pair": above the coin-flip gap the analyzer's leader is right 83% of the
+    /// time and withdrawing it would be a worse readout, not a humbler one.
+    #[test]
+    fn a_separable_relative_pair_is_still_asserted() {
+        let history = VecDeque::from(vec!["G:major".to_string(); 8]);
+        let out = aggregate_results(
+            &consolidated_relative_pair(Some(0.006)),
+            CaptureMode::EndpointLoopback,
+            None,
+            true,
+            &history,
+        );
+        assert!(!out.ambiguous, "a separated pair is a verdict: {:?}", out.reason);
+        assert_eq!(out.state, "likely_key");
+    }
+
+    /// An older CLI sends no shortlist and therefore no gap. That must leave the vote-based test
+    /// exactly as it was rather than hedging everything or nothing.
+    #[test]
+    fn no_shortlist_falls_back_to_the_vote() {
+        let history = VecDeque::from(vec!["G:major".to_string(); 8]);
+        let out = aggregate_results(
+            &consolidated_relative_pair(None),
+            CaptureMode::EndpointLoopback,
+            None,
+            true,
+            &history,
+        );
+        assert!(!out.ambiguous, "unchanged legacy behaviour: {:?}", out.reason);
+    }
+
     fn payload(key: &str, scale: &str) -> DetectedKeyPayload {
         let mut p = DetectedKeyPayload::unavailable("test");
         p.primary_key = Some(key.to_string());
@@ -3155,6 +3533,7 @@ mod tests {
                 strength: 0.79,
                 first_to_second_relative_strength: Some(0.14),
                 candidates: None,
+                relative_pair_gap: None,
                 tuning_cents: None,
                 window_start_ms: 0,
                 window_end_ms: 12_000,
@@ -3167,6 +3546,7 @@ mod tests {
                 strength: 0.76,
                 first_to_second_relative_strength: Some(0.11),
                 candidates: None,
+                relative_pair_gap: None,
                 tuning_cents: None,
                 window_start_ms: 4_000,
                 window_end_ms: 16_000,
@@ -3195,6 +3575,7 @@ mod tests {
                 strength: 0.91,
                 first_to_second_relative_strength: Some(0.35),
                 candidates: None,
+                relative_pair_gap: None,
                 tuning_cents: None,
                 window_start_ms: 0,
                 window_end_ms: 12_000,
@@ -3207,6 +3588,7 @@ mod tests {
                 strength: 0.88,
                 first_to_second_relative_strength: Some(0.31),
                 candidates: None,
+                relative_pair_gap: None,
                 tuning_cents: None,
                 window_start_ms: 4_000,
                 window_end_ms: 16_000,
@@ -3219,6 +3601,7 @@ mod tests {
                 strength: 0.86,
                 first_to_second_relative_strength: Some(0.29),
                 candidates: None,
+                relative_pair_gap: None,
                 tuning_cents: None,
                 window_start_ms: 8_000,
                 window_end_ms: 20_000,
@@ -3255,6 +3638,7 @@ mod tests {
                 strength: 0.93,
                 first_to_second_relative_strength: Some(0.38),
                 candidates: None,
+                relative_pair_gap: None,
                 tuning_cents: None,
                 window_start_ms: 0,
                 window_end_ms: 12_000,
@@ -3273,6 +3657,7 @@ mod tests {
                     strength: *strength,
                     first_to_second_relative_strength: Some(0.30),
                     candidates: None,
+                    relative_pair_gap: None,
                     tuning_cents: None,
                     window_start_ms: start,
                     window_end_ms: end,
@@ -3309,6 +3694,7 @@ mod tests {
                     strength: 0.63,
                     first_to_second_relative_strength: Some(0.22),
                     candidates: None,
+                    relative_pair_gap: None,
                     tuning_cents: None,
                     window_start_ms: start,
                     window_end_ms: start + 12_000,
@@ -3326,6 +3712,7 @@ mod tests {
                     strength: 0.72,
                     first_to_second_relative_strength: Some(0.14),
                     candidates: None,
+                    relative_pair_gap: None,
                     tuning_cents: None,
                     window_start_ms: start,
                     window_end_ms: start + 12_000,
