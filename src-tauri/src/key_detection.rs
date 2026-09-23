@@ -506,16 +506,7 @@ impl KeyDetector for SidecarKeyDetector {
         hop_seconds: usize,
     ) -> Result<AnalysisOutput, String> {
         // Sending large PCM arrays as JSON is unstable on Windows (pipe/memory). Write a temp WAV instead.
-        let temp_dir = std::env::temp_dir();
-        let name = format!(
-            "gsv_key_window_{}_{}.wav",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis()
-        );
-        let wav_path = temp_dir.join(name);
+        let wav_path = temp_wav_path();
         let _temp_wav = TempWav(wav_path.clone());
         write_temp_wav_f32_mono(&wav_path, sample_rate_hz, mono_samples)?;
 
@@ -639,16 +630,7 @@ impl KeyDetector for LibKeyFinderDetector {
         _window_seconds: usize,
         _hop_seconds: usize,
     ) -> Result<AnalysisOutput, String> {
-        let temp_dir = std::env::temp_dir();
-        let name = format!(
-            "gsv_key_window_{}_{}.wav",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis()
-        );
-        let wav_path = temp_dir.join(name);
+        let wav_path = temp_wav_path();
         write_temp_wav_f32_mono(&wav_path, sample_rate_hz, mono_samples)?;
         let mut wav_path_arg = wav_path.to_string_lossy().to_string();
         if self.launch.program.eq_ignore_ascii_case("wsl") {
@@ -691,144 +673,20 @@ impl KeyDetector for LibKeyFinderDetector {
             }
             return Err(format!("libkeyfinder analyzer failed: {status}"));
         }
-        let parsed: LibKeyFinderResponse = serde_json::from_str(stdout.trim())
-            .map_err(|e| format!("decode libkeyfinder response: {e}; stdout={stdout}"))?;
-        let backend = parsed
-            .backend_used
-            .unwrap_or_else(|| "libkeyfinder".to_string());
-        if let Ok(mut h) = self.last_health.lock() {
-            *h = DetectorHealth {
-                healthy: true,
-                backend: backend.clone(),
-                reason: None,
-            };
-        }
-
-        let key = parsed.key.trim().to_string();
-        let scale = parsed.scale.trim().to_ascii_lowercase();
-        let is_unknown = key.is_empty()
-            || key == "UNKNOWN"
-            || key == "SILENCE"
-            || scale.is_empty()
-            || scale == "unknown"
-            || scale == "silence";
-        if is_unknown {
-            log::warn!(
-                "key_detection: libkeyfinder returned unknown/silence key='{}' scale='{}'; emitting zero windows",
-                key,
-                scale
-            );
-            return Ok(AnalysisOutput {
-                windows: Vec::new(),
-                backend_used: backend,
-                fallback_reason: Some("libkeyfinder_unknown_or_silence".to_string()),
-                chroma: None,
-            });
-        }
-
-        // Break a near-tie in the classifier's ranking with chord evidence it cannot see.
-        //
-        // The tone profile puts the true key first 63.8% of the time and somewhere in its top four
-        // 84.6% of the time, so a fifth of every wrong answer is a key it had already found and
-        // ranked second. `key_reranker` reads the chord features the CLI emits alongside each
-        // candidate and reorders them; measured over the real corpus that is worth 1.7 points of
-        // note-set and 3.3 of tonic. It declines — leaving this verdict exactly as it was — for
-        // silence, for an older CLI that emits no shortlist, and for anything malformed.
-        let candidates = parsed.candidates.unwrap_or_default();
-        let shortlist: Vec<key_reranker::ShortlistEntry> = candidates
-            .iter()
-            .map(|c| key_reranker::ShortlistEntry {
-                key: c.key.trim().to_string(),
-                scale: c.scale.trim().to_ascii_lowercase(),
-                score: c.score,
-                chord_features: c.chord_features.clone(),
-            })
-            .collect();
-        // Whether the root is a coin flip, measured before the re-ranker gets a vote and kept
-        // whichever way it votes. When the profile's top two are relatives, the gap between them
-        // is calibrated: below 0.002 its leader is right 47.5% of the time and the runner-up 22.0%,
-        // which is not a verdict. From 0.002 to 0.004 the leader is right 66.7%, and by 0.008 it is
-        // 85.7%. `key_engine::RELATIVE_PAIR_COIN_FLIP_GAP` carries the table and the threshold, and
-        // turns this into the readout's `tonic_open`.
-        let relative_pair_gap = match shortlist.as_slice() {
-            [first, second, ..]
-                if key_engine::is_relative_major_minor(
-                    &first.key,
-                    &first.scale,
-                    &second.key,
-                    &second.scale,
-                ) =>
-            {
-                Some(first.score - second.score).filter(|gap| gap.is_finite())
-            }
-            _ => None,
-        };
-        let mut moved_strength = None;
-        let (key, scale) = match key_reranker::rerank(&shortlist) {
-            Some(position) if position > 0 => {
-                let chosen = &shortlist[position];
-                log::debug!(
-                    "key_detection: chord evidence moved {} {} -> {} {} (position {position})",
-                    key,
-                    scale,
-                    chosen.key,
-                    chosen.scale
-                );
-                moved_strength = candidates[position].strength.filter(|s| s.is_finite());
-                (chosen.key.clone(), chosen.scale.clone())
-            }
-            _ => (key, scale),
-        };
-
-        let display = format!("{} {}", key, scale);
-        // The CLI now measures how well the chroma fits the key it named. Older builds do not,
-        // and for those the legacy constant is kept rather than inventing a zero — a zero would
-        // read as "no tonal fit at all" and trip the engine's weak-fit gate on every window.
-        //
-        // When the re-ranker moved the answer, this has to move with it: the consensus layer votes
-        // with `strength`, and the fit of the key that was replaced says nothing about the key that
-        // replaced it. An older CLI that sends no per-candidate strength cannot re-rank at all, so
-        // there is no case where the fallback and the move are both in play.
-        let strength = moved_strength
-            .or(parsed.strength)
-            .filter(|s| s.is_finite())
-            .unwrap_or(0.90);
-        // How much audio this verdict is actually about. The CLI reads everything it is handed,
-        // which is the whole capture buffer and not one window of it, so reporting a fixed
-        // twelve seconds made consecutive passes over a growing buffer look identical to
-        // `AnalysisEvidence::accept` — it dropped each one as audio it had already counted, and
-        // the engine could not begin a stability streak until the buffer was full enough to
-        // start sliding. Measured cost of that: no settled answer before about seventy seconds.
-        // See `tests/key_accuracy_scoreboard.rs::key_engine_time_to_answer_curve`.
         let span_ms = if sample_rate_hz > 0 {
             (mono_samples.len() as u64) * 1000 / sample_rate_hz as u64
         } else {
             0
         };
-        Ok(AnalysisOutput {
-            windows: vec![WindowAnalysisResult {
-                profile_type: "libkeyfinder".to_string(),
-                key,
-                scale,
-                display_name: display,
-                strength,
-                // Still a constant: the CLI reports one verdict, not a ranking, so there is no
-                // measured runner-up to take a margin against. What used to be faked here — the
-                // question of whether a rival reading is in play — is now answered from the
-                // chroma by `key_engine::tonic_is_supported`.
-                first_to_second_relative_strength: Some(0.25),
-                candidates: None,
-                relative_pair_gap,
-                tuning_cents: None,
-                window_start_ms: 0,
-                window_end_ms: span_ms,
-            }],
-            backend_used: backend,
-            fallback_reason: None,
-            chroma: parsed
-                .chroma
-                .filter(|c| c.len() == 12 && c.iter().all(|v| v.is_finite())),
-        })
+        let output = analysis_from_cli_stdout(&stdout, span_ms)?;
+        if let Ok(mut h) = self.last_health.lock() {
+            *h = DetectorHealth {
+                healthy: true,
+                backend: output.backend_used.clone(),
+                reason: None,
+            };
+        }
+        Ok(output)
     }
 
     fn health(&self) -> DetectorHealth {
@@ -837,6 +695,186 @@ impl KeyDetector for LibKeyFinderDetector {
             .map(|h| h.clone())
             .unwrap_or_else(|_| DetectorHealth::unavailable("health_lock_poisoned"))
     }
+}
+
+/// One CLI answer, turned into what the engine votes with.
+///
+/// Split out of [`LibKeyFinderDetector::analyze`] so that a replay over *cached* CLI output runs
+/// the same parsing, the same chord re-ranking and the same span bookkeeping as the app — the
+/// research cache (`scripts/key-research/cache_spans.py`) stores the CLI's stdout for every clip at
+/// every buffer length, and a harness that re-implemented this would be measuring its copy.
+///
+/// `span_ms` is how much audio the CLI was handed; see the note on `window_end_ms` below for why
+/// that, and not a fixed window, is what the verdict has to be dated with.
+pub fn analysis_from_cli_stdout(stdout: &str, span_ms: u64) -> Result<AnalysisOutput, String> {
+    let parsed: LibKeyFinderResponse = serde_json::from_str(stdout.trim())
+        .map_err(|e| format!("decode libkeyfinder response: {e}; stdout={stdout}"))?;
+    let backend = parsed
+        .backend_used
+        .unwrap_or_else(|| "libkeyfinder".to_string());
+
+    let key = parsed.key.trim().to_string();
+    let scale = parsed.scale.trim().to_ascii_lowercase();
+    let is_unknown = key.is_empty()
+        || key == "UNKNOWN"
+        || key == "SILENCE"
+        || scale.is_empty()
+        || scale == "unknown"
+        || scale == "silence";
+    if is_unknown {
+        log::warn!(
+            "key_detection: libkeyfinder returned unknown/silence key='{}' scale='{}'; emitting zero windows",
+            key,
+            scale
+        );
+        return Ok(AnalysisOutput {
+            windows: Vec::new(),
+            backend_used: backend,
+            fallback_reason: Some("libkeyfinder_unknown_or_silence".to_string()),
+            chroma: None,
+        });
+    }
+
+    // Break a near-tie in the classifier's ranking with chord evidence it cannot see.
+    //
+    // The tone profile puts the true key first 63.8% of the time and somewhere in its top four
+    // 84.6% of the time, so a fifth of every wrong answer is a key it had already found and
+    // ranked second. `key_reranker` reads the chord features the CLI emits alongside each
+    // candidate and reorders them; measured over the real corpus that is worth 1.7 points of
+    // note-set and 3.3 of tonic. It declines — leaving this verdict exactly as it was — for
+    // silence, for an older CLI that emits no shortlist, and for anything malformed.
+    let candidates = parsed.candidates.unwrap_or_default();
+    let shortlist: Vec<key_reranker::ShortlistEntry> = candidates
+        .iter()
+        .map(|c| key_reranker::ShortlistEntry {
+            key: c.key.trim().to_string(),
+            scale: c.scale.trim().to_ascii_lowercase(),
+            score: c.score,
+            chord_features: c.chord_features.clone(),
+        })
+        .collect();
+    // Whether the root is a coin flip, measured before the re-ranker gets a vote and kept
+    // whichever way it votes. When the profile's top two are relatives, the gap between them
+    // is calibrated: below 0.002 its leader is right 47.5% of the time and the runner-up 22.0%,
+    // which is not a verdict. From 0.002 to 0.004 the leader is right 66.7%, and by 0.008 it is
+    // 85.7%. `key_engine::RELATIVE_PAIR_COIN_FLIP_GAP` carries the table and the threshold, and
+    // turns this into the readout's `tonic_open`.
+    let relative_pair_gap = match shortlist.as_slice() {
+        [first, second, ..]
+            if key_engine::is_relative_major_minor(
+                &first.key,
+                &first.scale,
+                &second.key,
+                &second.scale,
+            ) =>
+        {
+            Some(first.score - second.score).filter(|gap| gap.is_finite())
+        }
+        _ => None,
+    };
+    let mut moved_strength = None;
+    let (key, scale) = match key_reranker::rerank(&shortlist) {
+        Some(position) if position > 0 => {
+            let chosen = &shortlist[position];
+            log::debug!(
+                "key_detection: chord evidence moved {} {} -> {} {} (position {position})",
+                key,
+                scale,
+                chosen.key,
+                chosen.scale
+            );
+            moved_strength = candidates[position].strength.filter(|s| s.is_finite());
+            (chosen.key.clone(), chosen.scale.clone())
+        }
+        _ => (key, scale),
+    };
+
+    // What `key_confidence` reads: how far this verdict stands above the best key with different
+    // notes. The shortlist always holds one — only one other key, the relative, shares a note set —
+    // so this needs nothing the CLI does not already send. Taken after the re-ranker, because the
+    // question is about the key the engine is about to show.
+    let verdict_score = shortlist
+        .iter()
+        .find(|entry| entry.key == key && entry.scale == scale)
+        .map(|entry| entry.score);
+    let note_set_margin = verdict_score.and_then(|score| {
+        shortlist
+            .iter()
+            .filter(|entry| {
+                !crate::key_confidence::same_note_set(&entry.key, &entry.scale, &key, &scale)
+            })
+            .map(|entry| entry.score)
+            .reduce(f32::max)
+            .map(|best_other| score - best_other)
+            .filter(|margin| margin.is_finite())
+    });
+    let top_score = shortlist.first().map(|entry| entry.score).filter(|s| s.is_finite());
+
+    let display = format!("{} {}", key, scale);
+    // The CLI now measures how well the chroma fits the key it named. Older builds do not,
+    // and for those the legacy constant is kept rather than inventing a zero — a zero would
+    // read as "no tonal fit at all" and trip the engine's weak-fit gate on every window.
+    //
+    // When the re-ranker moved the answer, this has to move with it: the consensus layer votes
+    // with `strength`, and the fit of the key that was replaced says nothing about the key that
+    // replaced it. An older CLI that sends no per-candidate strength cannot re-rank at all, so
+    // there is no case where the fallback and the move are both in play.
+    let strength = moved_strength
+        .or(parsed.strength)
+        .filter(|s| s.is_finite())
+        .unwrap_or(0.90);
+    Ok(AnalysisOutput {
+        windows: vec![WindowAnalysisResult {
+            profile_type: "libkeyfinder".to_string(),
+            key,
+            scale,
+            display_name: display,
+            strength,
+            // Still a constant: the CLI reports one verdict, not a ranking, so there is no
+            // measured runner-up to take a margin against. What used to be faked here — the
+            // question of whether a rival reading is in play — is now answered from the
+            // chroma by `key_engine::tonic_is_supported`.
+            first_to_second_relative_strength: Some(0.25),
+            candidates: None,
+            relative_pair_gap,
+            tuning_cents: None,
+            note_set_margin,
+            top_score,
+            window_start_ms: 0,
+            // How much audio this verdict is actually about. The CLI reads everything it is
+            // handed, which is the whole capture buffer and not one window of it, so reporting a
+            // fixed twelve seconds made consecutive passes over a growing buffer look identical to
+            // `AnalysisEvidence::accept` — it dropped each one as audio it had already counted,
+            // and the engine could not begin a stability streak until the buffer was full enough
+            // to start sliding. Measured cost of that: no settled answer before about seventy
+            // seconds. See `tests/key_accuracy_scoreboard.rs::key_engine_time_to_answer_curve`.
+            window_end_ms: span_ms,
+        }],
+        backend_used: backend,
+        fallback_reason: None,
+        chroma: parsed
+            .chroma
+            .filter(|c| c.len() == 12 && c.iter().all(|v| v.is_finite())),
+    })
+}
+
+/// A scratch path for the wav an analyzer pass hands its subprocess, unique per call.
+///
+/// The sequence number is what makes it unique, not the clock. The engine analyses once every
+/// three seconds so a millisecond stamp was enough for it, but the accuracy harnesses run one
+/// analysis per core and two of those land in the same millisecond routinely — where the older
+/// name had them writing and deleting each other's wav.
+fn temp_wav_path() -> PathBuf {
+    static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    std::env::temp_dir().join(format!(
+        "gsv_key_window_{}_{}_{}.wav",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis(),
+        SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ))
 }
 
 fn write_temp_wav_f32_mono(

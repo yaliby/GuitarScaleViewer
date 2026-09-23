@@ -26,6 +26,16 @@
 //! hears a key; `key_engine_time_to_answer_curve` asks *when*, by replaying a growing capture
 //! buffer through the real decision path. See `docs/KEY_LATENCY.md`.
 //!
+//! **They disagree about how much audio the engine gets, deliberately — and that has bitten
+//! once.** The replay applies `MAX_ANALYSIS_SPAN_SECONDS`; this test hands the CLI the whole clip,
+//! because what it benchmarks is the analyzer rather than the buffer policy. While the cap was 44
+//! and corpus clips were ~58 seconds, that meant the published 71.4% / 65.9% was a number the
+//! shipped app could not reach — it was being scored on a quarter more audio than it ever
+//! received, and the gap went unnoticed for a session. It is closed now only because the cap (60)
+//! exceeds what a corpus clip holds. Lower the cap below the clip length and this test quietly
+//! goes back to flattering the product. See "The ceiling that was not there" in
+//! `docs/KEY_ACCURACY_BASELINE.md`.
+//!
 //! Running it
 //! ----------
 //! ```text
@@ -46,12 +56,18 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 use app_lib::audio_models::CaptureMode;
 use app_lib::key_detection::{KeyDetector, LibKeyFinderDetector};
 use app_lib::key_engine::{
-    decide_from_windows, AnalysisEvidence, ANALYSIS_HOP_SECONDS, ANALYSIS_WINDOW_SECONDS,
-    HISTORY_HORIZON, MAX_ANALYSIS_SPAN_SECONDS, MIN_READY_STREAK, REQUIRED_AUDIO_SECONDS,
+    contradiction_metrics_from_history, decide_from_windows, dominant_margin_of, evidence_is_calibrated, live_gate,
+    relative_pair_unresolved_in, window_evidence, AnalysisEvidence, LiveGateInputs,
+    ANALYSIS_HOP_SECONDS, ANALYSIS_WINDOW_SECONDS, CAPTURE_STABLE_MIN_CYCLES,
+    CONTRADICTION_CLEAR_CLEAN_CYCLES, CONTRADICTION_COOLDOWN_MS, HISTORY_HORIZON,
+    MAX_ANALYSIS_SPAN_SECONDS, MIN_READY_STREAK, PRIMARY_KEY_REPEAT_MIN, REQUIRED_AUDIO_SECONDS,
+    SESSION_STABLE_MIN_CYCLES,
 };
 use app_lib::key_reranker;
 use serde::Deserialize;
@@ -626,6 +642,16 @@ struct Cycle {
     settled: bool,
     /// Whether this cycle brought new evidence. The engine only counts a streak when it did.
     fresh: bool,
+    /// Whether the engine loop's own gate would let the readout assert this — `live_gate`, the
+    /// forty lines that used to sit inline in the async loop and that no test could reach.
+    /// `settled` above is only the consensus's opinion; this is the one the player feels.
+    gate_allowed: bool,
+    /// The first condition that refused, in the order the gate tests them. `None` when it allowed.
+    /// The `why:` field is the only thing that has ever caught a bug in this gate.
+    gate_block: Option<&'static str>,
+    /// Whether the buffer still agrees with its own newest [`TAIL_SECONDS`]. `None` until the
+    /// buffer is long enough for that to be a different stretch of music.
+    tail_agrees: Option<bool>,
 }
 
 /// Mono `f32` at the file's own sample rate, which is what the detector takes.
@@ -686,18 +712,64 @@ fn summed_chroma(
 /// records what the audio itself supports, and `lock_point` can then apply any candidate gate to
 /// the same recording. Replaying once per candidate would multiply analyzer runs by the size of
 /// the sweep and measure nothing extra.
+///
+/// `history_from_seconds` is the one thing that cannot be applied afterwards, because the vote is
+/// an input to the verdict rather than a filter on it: a reading that enters `history` changes
+/// `dominant_share` for every cycle that follows. 0 is what ships — every fresh cycle votes,
+/// including the ones the engine itself labels `warming_up`.
 fn replay(
     detector: &LibKeyFinderDetector,
     samples: &[f32],
     rate: u32,
     pass: Pass,
     max_seconds: usize,
+    history_from_seconds: usize,
 ) -> Vec<Cycle> {
-    let mut evidence = AnalysisEvidence::default();
-    let mut history: VecDeque<String> = VecDeque::new();
-    let mut chroma_by_window_end: BTreeMap<u64, Vec<f32>> = BTreeMap::new();
-    let mut cycles = Vec::new();
+    let inputs = analyze_cycles(detector, samples, rate, pass, max_seconds);
+    decide_cycles(&inputs, pass, HISTORY_HORIZON, history_from_seconds, CaptureMode::ProcessLoopback, PRIMARY_KEY_REPEAT_MIN)
+}
 
+/// One cycle's analyzer output, kept so that a sweep over consensus settings costs nothing.
+///
+/// The CLI's verdict does not depend on the history it is later voted into, so re-running the
+/// analyzer once per arm of a sweep buys an identical answer at full price — and the analyzer is
+/// all of the cost. Splitting the replay here turned a five-value sweep over the real corpus from
+/// eighty minutes into sixteen.
+struct CycleInput {
+    heard_seconds: usize,
+    windows: Vec<app_lib::audio_models::WindowAnalysisResult>,
+    start_ms: u64,
+    endpoint: u64,
+    chroma: Option<Vec<f32>>,
+    /// The same analyzer over only the newest [`TAIL_SECONDS`] of the same buffer, when the buffer
+    /// is long enough for that to be a different question. `None` while it is not.
+    ///
+    /// This is the cheapest second opinion the engine can have. Every pass over a growing buffer
+    /// is a nested span of every other, so they cannot contradict each other — which is why the
+    /// consensus collapsed to a single winner and the window vote stopped carrying information.
+    /// A trailing window is not nested: it is a different stretch of music, and asking whether the
+    /// whole buffer still agrees with its own recent past is one extra classification of a
+    /// chromagram the CLI has already computed.
+    tail: Option<(u8, &'static str)>,
+}
+
+/// How much of the newest audio the second opinion reads.
+///
+/// Thirty, from `exp_recent_agreement.py` over 396 clips out of fold. The separation grows with
+/// the tail while the share of clips it can speak about shrinks, and 30s is where the disagreeing
+/// group is worst — right only 46.0% of the time against 67.8% for the agreeing group, which is
+/// the whole point of the signal.
+const TAIL_SECONDS: usize = 30;
+
+/// The expensive half: one analyzer pass per hop.
+fn analyze_cycles(
+    detector: &LibKeyFinderDetector,
+    samples: &[f32],
+    rate: u32,
+    pass: Pass,
+    max_seconds: usize,
+) -> Vec<CycleInput> {
+    let mut inputs = Vec::new();
     let clip_seconds = samples.len() / rate as usize;
     let last_cycle = max_seconds.min(clip_seconds);
     let mut heard = ANALYSIS_WINDOW_SECONDS;
@@ -721,23 +793,131 @@ fn replay(
                 window.window_end_ms = span as u64 * 1000;
             }
         }
+        // The second opinion, when there is enough buffer for it to be about different audio.
+        // A tail as long as the span would be the same pass at full price.
+        let tail = (span > TAIL_SECONDS)
+            .then(|| {
+                let from = heard - TAIL_SECONDS;
+                detector
+                    .analyze(
+                        &samples[from * rate as usize..heard * rate as usize],
+                        rate,
+                        ANALYSIS_WINDOW_SECONDS,
+                        ANALYSIS_HOP_SECONDS,
+                    )
+                    .ok()
+                    .and_then(|out| {
+                        let window = out.windows.first()?;
+                        pitch_class(&window.key).zip(normalize_mode(&window.scale))
+                    })
+            })
+            .flatten();
+        inputs.push(CycleInput {
+            heard_seconds: heard,
+            windows: output.windows,
+            start_ms: start_seconds as u64 * 1000,
+            endpoint: heard as u64 * rate as u64,
+            chroma: output.chroma,
+            tail,
+        });
+        heard += ANALYSIS_HOP_SECONDS;
+    }
+    inputs
+}
 
-        let start_ms = start_seconds as u64 * 1000;
-        if let Some(chroma) = output.chroma.as_ref() {
-            for window in &output.windows {
-                chroma_by_window_end.insert(window.window_end_ms + start_ms, chroma.clone());
+/// Every clip's cycles, analysed once, across the machine's cores.
+///
+/// The analyzer runs are the only expensive part of any sweep in this file — everything after
+/// them is arithmetic over `CycleInput`, and one pass over a 273-clip corpus is thirteen CLI
+/// invocations per clip. Serially that is twenty minutes for numbers that then take a second to
+/// compute, which is enough friction to make a sweep something you do once and squint at rather
+/// than re-run after every change. `LibKeyFinderDetector::analyze` takes `&self` and keeps no
+/// per-call state beyond its scratch wav, which is named per call.
+fn analyse_corpus(
+    detector: &LibKeyFinderDetector,
+    root: &Path,
+    clips: &[CorpusClip],
+    pass: Pass,
+    max_seconds: usize,
+) -> Vec<((u8, &'static str), Vec<CycleInput>)> {
+    let next = AtomicUsize::new(0);
+    let done: Mutex<Vec<(usize, (u8, &'static str), Vec<CycleInput>)>> = Mutex::new(Vec::new());
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .min(clips.len().max(1));
+    std::thread::scope(|scope| {
+        for _ in 0..threads {
+            scope.spawn(|| loop {
+                let index = next.fetch_add(1, Ordering::Relaxed);
+                let Some(clip) = clips.get(index) else { break };
+                let expected = (
+                    pitch_class(&clip.expected_key).expect("key"),
+                    normalize_mode(&clip.expected_mode).expect("mode"),
+                );
+                let (samples, rate) = read_mono_f32(&root.join(&clip.path));
+                let cycles = analyze_cycles(detector, &samples, rate, pass, max_seconds);
+                done.lock().expect("collect").push((index, expected, cycles));
+            });
+        }
+    });
+    let mut rows = done.into_inner().expect("collect");
+    rows.sort_by_key(|(index, _, _)| *index);
+    rows.into_iter()
+        .map(|(_, expected, cycles)| (expected, cycles))
+        .collect()
+}
+
+/// The cheap half: the evidence buffer and the consensus, under a given vote policy.
+///
+/// `history_horizon` is how many past cycles get a vote. It is `HISTORY_HORIZON` in the engine, and
+/// the reason it is a parameter here is that it sets how long a *correction* takes to take hold:
+/// `aggregate_results` scores `temporal_stability` as the share of the window agreeing with the
+/// current answer, so after the engine changes its mind the old readings keep voting against it
+/// for the whole horizon.
+fn decide_cycles(
+    inputs: &[CycleInput],
+    pass: Pass,
+    history_horizon: usize,
+    history_from_seconds: usize,
+    capture_mode: CaptureMode,
+    repeat_min: usize,
+) -> Vec<Cycle> {
+    let mut evidence = AnalysisEvidence::default();
+    let mut history: VecDeque<String> = VecDeque::new();
+    let mut chroma_by_window_end: BTreeMap<u64, Vec<f32>> = BTreeMap::new();
+    let mut cycles = Vec::new();
+
+    // The engine loop's own state, mirrored. A clean replay is never disrupted and never goes
+    // silent, so `capture_stable` and `session_stable` simply come true after their streaks; the
+    // rest are real state machines and are run as such.
+    let cooldown_cycles = (CONTRADICTION_COOLDOWN_MS as usize)
+        .div_ceil(ANALYSIS_HOP_SECONDS * 1000)
+        .max(1);
+    let mut capture_stable_streak = 0usize;
+    let mut session_stable_streak = 0usize;
+    let mut primary_key_repeat_streak = 0usize;
+    let mut last_primary_key_choice: Option<String> = None;
+    let mut contradiction_active = false;
+    let mut contradiction_clean_streak = 0usize;
+    let mut cooldown_left = 0usize;
+
+    for input in inputs {
+        if let Some(chroma) = input.chroma.as_ref() {
+            for window in &input.windows {
+                chroma_by_window_end.insert(window.window_end_ms + input.start_ms, chroma.clone());
             }
         }
-        let fresh = evidence.accept(&output.windows, start_ms, heard as u64 * rate as u64);
+        let fresh = evidence.accept(&input.windows, input.start_ms, input.endpoint);
         // Exactly what the loop hands the consensus: the recent evidence when this cycle added
         // to it, and the bare pass when it did not.
         let windows = if fresh {
             evidence.recent()
         } else {
-            output.windows.clone()
+            input.windows.clone()
         };
         let chroma = match pass {
-            Pass::WholeBuffer | Pass::WholeBufferDatedHonestly => output.chroma.clone(),
+            Pass::WholeBuffer | Pass::WholeBufferDatedHonestly => input.chroma.clone(),
             Pass::NewestWindow => summed_chroma(&windows, &chroma_by_window_end),
         };
 
@@ -749,14 +929,107 @@ fn replay(
             &history,
             chroma.as_deref(),
         );
-        if fresh {
+        if fresh && input.heard_seconds >= history_from_seconds {
             if let (Some(key), Some(scale)) = (&payload.primary_key, &payload.primary_scale) {
-                if history.len() == HISTORY_HORIZON {
+                while history.len() >= history_horizon.max(1) {
                     history.pop_front();
                 }
                 history.push_back(format!("{key}:{scale}"));
             }
         }
+
+        // --- the engine loop, from the vote to the gate ---
+        let ev = window_evidence(&windows);
+        if ev.contradiction_burst {
+            contradiction_active = true;
+            contradiction_clean_streak = 0;
+            cooldown_left = cooldown_cycles;
+        } else if contradiction_active {
+            contradiction_clean_streak += 1;
+            if contradiction_clean_streak >= CONTRADICTION_CLEAR_CLEAN_CYCLES {
+                contradiction_active = false;
+                contradiction_clean_streak = 0;
+            }
+        } else {
+            contradiction_clean_streak = 0;
+        }
+        if fresh {
+            match (payload.primary_key.as_deref(), payload.primary_scale.as_deref()) {
+                (Some(k), Some(s)) => {
+                    let choice = format!("{k}:{s}");
+                    if last_primary_key_choice.as_deref() == Some(choice.as_str()) {
+                        primary_key_repeat_streak += 1;
+                    } else {
+                        primary_key_repeat_streak = 1;
+                        last_primary_key_choice = Some(choice);
+                    }
+                }
+                _ => {
+                    primary_key_repeat_streak = 0;
+                    last_primary_key_choice = None;
+                }
+            }
+        }
+        capture_stable_streak += 1;
+        session_stable_streak += 1;
+        let gate = live_gate(
+            &LiveGateInputs {
+                capture_mode,
+                capture_stable: capture_stable_streak >= CAPTURE_STABLE_MIN_CYCLES,
+                session_stable: session_stable_streak >= SESSION_STABLE_MIN_CYCLES,
+                repeated_key: primary_key_repeat_streak >= repeat_min,
+                recent_disruption: false,
+                contradiction_active,
+                contradiction_cooldown: cooldown_left > 0,
+                recent_silence: false,
+                relative_pair_unresolved: relative_pair_unresolved_in(&payload),
+                primary_key_repeat_streak,
+                dominant_margin: dominant_margin_of(&payload),
+                window_dominance: ev.window_dominance,
+                window_distinct_tonics: ev.window_distinct_tonics,
+                evidence_calibrated: evidence_is_calibrated(&windows, &payload),
+            },
+            &contradiction_metrics_from_history(&history),
+        );
+        cooldown_left = cooldown_left.saturating_sub(1);
+        // The gate only runs on a payload the consensus already called `likely_key`.
+        let gate_allowed = !payload.ambiguous && gate.allowed;
+        let gate_block = if payload.ambiguous {
+            // `aggregate_results` already names which of its eleven terms fired; bucketing that is
+            // better than re-deriving it, and it is the field the engine logs anyway.
+            Some(match payload.reason.as_deref().unwrap_or("none") {
+                r if r.starts_with("relative_pair_ambiguity") => "relative_pair_ambiguity",
+                r if r.starts_with("contradiction_detected_multiple_tonics") => "multiple_tonics",
+                r if r.starts_with("contradiction_detected_major_minor_conflict") => "major_minor_conflict",
+                r if r.starts_with("contradiction_detected_profile_disagreement") => "profile_disagreement",
+                r if r.starts_with("contradiction_detected_mixed_tonic_family") => "mixed_tonic_family",
+                "weak_absolute_tonal_fit" => "weak_absolute_tonal_fit",
+                "top_candidate_too_close_to_alternative" => "separation_too_close",
+                "unstable_across_windows" => "unstable_across_windows",
+                "low_confidence" => "low_confidence",
+                _ => "ambiguous_unnamed",
+            })
+        } else if gate.allowed {
+            None
+        } else if primary_key_repeat_streak < repeat_min {
+            Some("repeated_key")
+        } else if contradiction_active {
+            Some("contradiction_active")
+        } else if ev.contradiction_burst {
+            Some("contradiction_burst")
+        } else if relative_pair_unresolved_in(&payload) {
+            Some("relative_pair_unresolved")
+        } else if !gate.stable_tonics {
+            Some("stable_tonics")
+        } else if !gate.recent_windows_clean {
+            Some("recent_windows_clean")
+        } else if !gate.endpoint_conservative_ok {
+            Some("endpoint_conservative_ok")
+        } else if !gate.margin_ok {
+            Some("margin_ok")
+        } else {
+            Some("other")
+        };
 
         let got = payload
             .primary_key
@@ -764,12 +1037,14 @@ fn replay(
             .and_then(pitch_class)
             .zip(payload.primary_scale.as_deref().and_then(normalize_mode));
         cycles.push(Cycle {
-            heard_seconds: heard,
+            heard_seconds: input.heard_seconds,
             got,
             settled: !payload.ambiguous,
             fresh,
+            gate_allowed,
+            gate_block,
+            tail_agrees: input.tail.map(|tail| got == Some(tail)),
         });
-        heard += ANALYSIS_HOP_SECONDS;
     }
     cycles
 }
@@ -852,7 +1127,7 @@ fn key_engine_time_to_answer_curve() {
         let (samples, rate) = read_mono_f32(&wav);
         let by_pass = passes
             .iter()
-            .map(|pass| (*pass, replay(&detector, &samples, rate, *pass, max_seconds)))
+            .map(|pass| (*pass, replay(&detector, &samples, rate, *pass, max_seconds, 0)))
             .collect();
         replays.push(ClipReplay { expected, by_pass });
     }
@@ -971,8 +1246,9 @@ fn key_engine_time_to_answer_curve() {
             moving_clips.len()
         );
         println!(
-            "each song leaves home for {:.0}s..{:.0}s and comes back; locking the key it left for \
-             means the readout was fooled",
+            "each song leaves home for {:.0}s..{:.0}s and comes back; `decoy shown` counts the \
+             clips that assert the excursion at some point, which is only a fault after the song \
+             is home again",
             first.decoy_from_seconds, first.decoy_to_seconds
         );
         println!(
@@ -997,7 +1273,7 @@ fn key_engine_time_to_answer_curve() {
                 .and_then(pitch_class)
                 .zip(clip.decoy_mode.as_deref().and_then(normalize_mode));
             let (samples, rate) = read_mono_f32(&wav);
-            let cycles = replay(&detector, &samples, rate, Pass::WholeBuffer, max_seconds);
+            let cycles = replay(&detector, &samples, rate, Pass::WholeBuffer, max_seconds, 0);
             moving.push((expected, decoy, cycles));
         }
 
@@ -1053,19 +1329,41 @@ fn key_engine_time_to_answer_curve() {
             println!("  no setting locked the key the song left");
         }
 
-        // The shipped setting is the one that has to hold. A song that steps out for seventeen
-        // seconds and comes home must not leave the player reading the wrong neck with no hedge
-        // on it.
-        let shipped_never_asserts_the_decoy = moving.iter().all(|(_, decoy, cycles)| {
-            decoy.is_none()
-                || !unhedged_cycles(cycles, REQUIRED_AUDIO_SECONDS as usize, MIN_READY_STREAK)
-                    .iter()
-                    .any(|c| c.got == *decoy)
-        });
+        // What this used to assert, and why it cannot any more.
+        //
+        // The old claim was that the shipped setting *never* asserts the excursion. It held for
+        // one session and the reason was a defect: `window_winners_from_results` bucketed every
+        // pass over a growing buffer together and kept the loudest-fitting one, which froze the
+        // readout on an early reading — and these clips all start at home, so the frozen reading
+        // was always right. The consensus was not resisting the modulation, it was ignoring all
+        // the audio after the first twelve seconds. Fixing that was worth +6.6 note-set and +7.7
+        // tonic on real recordings ("The readout was quoting a twelve-second guess").
+        //
+        // The claim was also too strong on its own terms. From 18s to 35s these clips *are* in the
+        // excursion, and the analyzer says so — asserting it there is right, not a fault. What is
+        // a fault is still saying it once the song is home, and that is what is measured now: the
+        // engine reads the whole sixty-second buffer, so a seventeen-second excursion keeps its
+        // pull for about twenty seconds after it ends. At the last cycle 21 of 24 clips are home
+        // again and 3 are not.
+        //
+        // A floor rather than a claim, in the same spirit as `slips_asserted` above. Lower it only
+        // with a measurement that says the lag is genuinely shorter.
+        let still_wrong_at_the_end = moving
+            .iter()
+            .filter(|(_, decoy, cycles)| {
+                decoy.is_some()
+                    && unhedged_cycles(cycles, REQUIRED_AUDIO_SECONDS as usize, MIN_READY_STREAK)
+                        .last()
+                        .map(|c| c.got == *decoy)
+                        .unwrap_or(false)
+            })
+            .count();
         assert!(
-            shipped_never_asserts_the_decoy,
-            "at the shipped buffer gate and streak, the readout asserted the key of a middle \
-             section the song had already left"
+            still_wrong_at_the_end <= 3,
+            "{still_wrong_at_the_end} of {} clips were still asserting the excursion at the end of \
+             the clip, twenty-five seconds after the song came home — the buffer is holding a \
+             passage it should have grown out of",
+            moving.len()
         );
     }
 
@@ -1137,4 +1435,762 @@ mod tests {
         assert_eq!(tally.note_set_pct(), 50.0);
         assert_eq!(tally.tonic_pct(), 25.0);
     }
+}
+
+/// What a guess made before the buffer gate opens costs the rest of the song.
+///
+/// From a live capture of "You've Got a Friend in Me" (E♭ major, 127 seconds). At 15.2 seconds of
+/// buffer — `enoughAudio: false`, state `warming_up` — the engine read A# major, the dominant.
+/// From 55 seconds on it read E♭ on every single cycle and was never wrong again. It never
+/// settled: `dominantShare` crawled 0.643 -> 0.750 against a `MIN_DOMINANCE_SHARE` of 0.84, and
+/// the song ended while the player was still looking at "hedged, 35%".
+///
+/// The mechanism is one missing condition. `key_engine.rs` writes `decision_history` under
+/// `fresh_analysis` alone, so a reading the engine has just labelled "not enough audio yet" votes
+/// in the consensus exactly like any other — and `HISTORY_HORIZON` of 16 needs about 72 seconds to
+/// flush it. Showing an early reading on the neck is a deliberate policy (`keyFusion.ts`: nothing
+/// is ever withheld). Letting it *vote* is not written down anywhere.
+///
+/// This measures the fix rather than assuming it: the same clips replayed with the vote open from
+/// 12s (shipped) and from `REQUIRED_AUDIO_SECONDS`, scored on whether the app ever stops hedging,
+/// how long that takes, and whether the answer it locks is right.
+///
+/// **Measured and rejected, 273 real clips:**
+///
+/// ```text
+///                                       locks   median lock   locked right  right but mute
+/// every fresh cycle votes (shipped)       58%          32s            75%             18%
+/// the vote waits for the buffer gate      57%          36s            76%             19%
+/// ```
+///
+/// Four seconds slower for nothing. The reasoning was wrong about the capture that prompted it:
+/// only the first of the three A# readings was below the gate, and by the time the block mattered
+/// the 16-cycle horizon reached back only to *after* the gate opened, so no sub-gate vote was left
+/// in the window at all. What actually blocks is in the next test — the horizon itself.
+///
+/// Kept because the run is 32 minutes and the numbers above are the reason not to spend them
+/// again. What it does establish is the size of the real problem: **58% of clips ever stop
+/// hedging, and on 18% the engine holds the right answer while the readout stays unsure.**
+#[test]
+#[ignore = "replays every clip twice; run with --ignored --nocapture"]
+fn an_early_guess_must_not_vote_in_the_consensus() {
+    let cli = require_cli();
+    let (root, clips, label) = load_corpus();
+    let detector = LibKeyFinderDetector::from_executable(cli);
+    let max_seconds = 60usize;
+    let arms = [
+        ("every fresh cycle votes (shipped)", 0usize),
+        ("the vote waits for the buffer gate", REQUIRED_AUDIO_SECONDS as usize),
+    ];
+
+    println!("\n=== an early guess in the vote: {} clips ({label}) ===", clips.len());
+    println!(
+        "{:<38}{:>7}{:>14}{:>15}{:>16}",
+        "", "locks", "median lock", "locked right", "right but mute"
+    );
+
+    for (arm_label, history_from) in arms {
+        let mut locked = 0usize;
+        let mut locked_right = 0usize;
+        let mut lock_times = Vec::new();
+        // The failure the capture showed: the engine holds the right answer at the end and the
+        // readout never stops hedging, so the player is told "unsure" about a correct diagram.
+        let mut right_but_never_locked = 0usize;
+
+        for clip in &clips {
+            let wav = root.join(&clip.path);
+            let expected = (
+                pitch_class(&clip.expected_key).expect("key"),
+                normalize_mode(&clip.expected_mode).expect("mode"),
+            );
+            let (samples, rate) = read_mono_f32(&wav);
+            let cycles = replay(
+                &detector,
+                &samples,
+                rate,
+                Pass::WholeBuffer,
+                max_seconds,
+                history_from,
+            );
+            let lock = lock_point(&cycles, REQUIRED_AUDIO_SECONDS as usize, MIN_READY_STREAK);
+            let final_right = cycles.last().and_then(|c| c.got) == Some(expected);
+            match lock {
+                Some(cycle) => {
+                    locked += 1;
+                    lock_times.push(cycle.heard_seconds);
+                    if cycle.got == Some(expected) {
+                        locked_right += 1;
+                    }
+                }
+                None if final_right => right_but_never_locked += 1,
+                None => {}
+            }
+        }
+
+        let n = clips.len().max(1);
+        println!(
+            "{:<38}{:>6.0}%{:>13}{:>14.0}%{:>15.0}%",
+            arm_label,
+            100.0 * locked as f64 / n as f64,
+            median(lock_times).map(|s| format!("{s}s")).unwrap_or_else(|| "—".into()),
+            if locked > 0 { 100.0 * locked_right as f64 / locked as f64 } else { 0.0 },
+            100.0 * right_but_never_locked as f64 / n as f64,
+        );
+    }
+}
+
+/// How long a correction takes to take hold, and what shortening that costs.
+///
+/// The previous test rules out the warm-up vote. What is left is the horizon itself.
+/// `aggregate_results` scores `temporal_stability` as the share of `decision_history` agreeing
+/// with the current answer, and the engine loop gates on `cm.dominant_share` the same way — so
+/// when the engine changes its mind, every reading from before the change votes against the new
+/// one until it ages out. At `HISTORY_HORIZON` of 16 and a cycle every ~4.5 seconds that is a
+/// **72-second** tail, and the two gates downstream want 14/16 and 15/16 of the window:
+///
+/// ```text
+///   stable_tonics            dominant_share >= 0.84  ->  14/16,  2 stale votes tolerated
+///   endpoint_conservative_ok dominant_share >= 0.88  ->  15/16,  1 stale vote  tolerated
+/// ```
+///
+/// On the capture that prompted this — "You've Got a Friend in Me", 127 seconds — the engine read
+/// the dominant for 55 seconds, corrected to E♭, and then needed another 68 seconds of unbroken
+/// agreement to be allowed to say so. It had 72. `repeatedKey=true` appeared at 21:45:42, meaning
+/// `primary_key_repeat_streak` already knew the engine had settled, while the window count kept
+/// overruling it for another minute.
+///
+/// A count over a fixed window cannot tell "D# and A# alternating" from "A# and then D#". Those
+/// are different situations and only one of them is instability. This sweeps the horizon to find
+/// what that conflation is worth, and prices it against the clips that exist to punish a short
+/// memory: the non-stationary ones, whose middle section is in another key the readout must never
+/// lock onto.
+///
+/// **What it measured: nothing, and that is the result.** Every horizon from 16 down to 1 scores
+/// identically on both corpora —
+///
+/// ```text
+///   273 real clips        locks 58%   median 32s   locked right 75%   right but mute 18%
+///   72 synthetic clips    locks 31%   median 60s   locked right 100%  right but mute 39%
+/// ```
+///
+/// — including the degenerate horizon of 1, where `temporal_stability` can only be 0.0 or 1.0.
+/// A knob that scores the same at 1 as at 16 is not connected to the outcome: `ambiguous` in
+/// `aggregate_results` is a wide OR and something else in it binds first, so the vote horizon
+/// never gets to decide anything here.
+///
+/// **The gate that actually blocked the capture is not in this harness at all.** `stable_tonics`
+/// and `endpoint_conservative_ok` live in the engine loop in `key_engine.rs`, downstream of
+/// `decide_from_windows`, and they read `cm.dominant_share` — which is where the 14/16 and 15/16
+/// arithmetic bites. `replay` stops at `decide_from_windows`, so no test in this repository
+/// exercises the gate that decides whether a player is ever shown a confident key. That is the
+/// reason this defect survived, and building that harness is the next piece of work, not another
+/// sweep against this one.
+///
+/// The numbers above are still worth having for what they do say: **58% of real clips ever stop
+/// hedging, and on 18% the engine holds the right answer while the readout stays unsure.**
+#[test]
+#[ignore = "sweeps the vote horizon over every clip; run with --ignored --nocapture"]
+fn how_long_a_correction_takes_to_take_hold() {
+    let cli = require_cli();
+    let (root, clips, label) = load_corpus();
+    let detector = LibKeyFinderDetector::from_executable(cli);
+    let max_seconds = 60usize;
+    // 1 is in the sweep as a plumbing check, not a candidate: at a horizon of one, every cycle
+    // either fully agrees with its predecessor or fully disagrees, so `temporal_stability` can
+    // only be 0.0 or 1.0. If that scores the same as 16, the knob is not connected to anything.
+    let horizons = [HISTORY_HORIZON, 8, 4, 2, 1];
+
+    // Analysed once; every horizon re-runs only the consensus over the same evidence.
+    let mut analysed: Vec<((u8, &'static str), Vec<CycleInput>)> = Vec::new();
+    for clip in &clips {
+        let wav = root.join(&clip.path);
+        let expected = (
+            pitch_class(&clip.expected_key).expect("key"),
+            normalize_mode(&clip.expected_mode).expect("mode"),
+        );
+        let (samples, rate) = read_mono_f32(&wav);
+        analysed.push((
+            expected,
+            analyze_cycles(&detector, &samples, rate, Pass::WholeBuffer, max_seconds),
+        ));
+    }
+
+    println!("\n=== how long a correction takes to take hold: {} clips ({label}) ===", analysed.len());
+    println!(
+        "{:>9}{:>9}{:>14}{:>15}{:>17}",
+        "horizon", "locks", "median lock", "locked right", "right but mute"
+    );
+    for horizon in horizons {
+        let (mut locked, mut locked_right, mut mute) = (0usize, 0usize, 0usize);
+        let mut lock_times = Vec::new();
+        for (expected, inputs) in &analysed {
+            let cycles = decide_cycles(inputs, Pass::WholeBuffer, horizon, 0, CaptureMode::ProcessLoopback, PRIMARY_KEY_REPEAT_MIN);
+            match lock_point(&cycles, REQUIRED_AUDIO_SECONDS as usize, MIN_READY_STREAK) {
+                Some(cycle) => {
+                    locked += 1;
+                    lock_times.push(cycle.heard_seconds);
+                    if cycle.got == Some(*expected) {
+                        locked_right += 1;
+                    }
+                }
+                None if cycles.last().and_then(|c| c.got) == Some(*expected) => mute += 1,
+                None => {}
+            }
+        }
+        let n = analysed.len().max(1);
+        println!(
+            "{:>9}{:>8.0}%{:>13}{:>14.0}%{:>16.0}%",
+            horizon,
+            100.0 * locked as f64 / n as f64,
+            median(lock_times).map(|s| format!("{s}s")).unwrap_or_else(|| "—".into()),
+            if locked > 0 { 100.0 * locked_right as f64 / locked as f64 } else { 0.0 },
+            100.0 * mute as f64 / n as f64,
+        );
+    }
+
+    // --- the cost: clips whose middle section is in another key ---
+    let Some((decoy_root, decoy_clips)) = load_nonstationary_corpus() else {
+        println!("\n(no non-stationary clips here; run without GSV_REAL_CORPUS for the cost side)");
+        return;
+    };
+    let mut moving = Vec::new();
+    for clip in &decoy_clips {
+        let wav = decoy_root.join(&clip.path);
+        let expected = (
+            pitch_class(&clip.expected_key).expect("key"),
+            normalize_mode(&clip.expected_mode).expect("mode"),
+        );
+        let decoy = clip
+            .decoy_key
+            .as_deref()
+            .and_then(pitch_class)
+            .zip(clip.decoy_mode.as_deref().and_then(normalize_mode));
+        let (samples, rate) = read_mono_f32(&wav);
+        moving.push((
+            expected,
+            decoy,
+            analyze_cycles(&detector, &samples, rate, Pass::WholeBuffer, max_seconds),
+        ));
+    }
+
+    println!(
+        "\n-- what a shorter memory costs: {} clips that change key partway through --",
+        moving.len()
+    );
+    println!("{:>9}{:>14}{:>13}{:>16}", "horizon", "locked home", "locked decoy", "decoy ever shown");
+    for horizon in horizons {
+        let (mut home, mut decoyed, mut shown) = (0usize, 0usize, 0usize);
+        for (expected, decoy, inputs) in &moving {
+            let cycles = decide_cycles(inputs, Pass::WholeBuffer, horizon, 0, CaptureMode::ProcessLoopback, PRIMARY_KEY_REPEAT_MIN);
+            let open = unhedged_cycles(&cycles, REQUIRED_AUDIO_SECONDS as usize, MIN_READY_STREAK);
+            if decoy.is_some() && open.iter().any(|c| c.got == *decoy) {
+                shown += 1;
+            }
+            if let Some(lock) = open.first() {
+                if lock.got == Some(*expected) {
+                    home += 1;
+                } else if lock.got.is_some() && lock.got == *decoy {
+                    decoyed += 1;
+                }
+            }
+        }
+        let n = moving.len().max(1);
+        println!(
+            "{:>9}{:>13.0}%{:>12.0}%{:>15.0}%",
+            horizon,
+            100.0 * home as f64 / n as f64,
+            100.0 * decoyed as f64 / n as f64,
+            100.0 * shown as f64 / n as f64,
+        );
+    }
+}
+
+/// What the gate the player actually feels refuses, and why.
+///
+/// This is the harness that did not exist. `live_gate` — thirteen conditions that decide whether
+/// the readout may stop hedging — sat inline in the engine's async loop, so every measurement in
+/// this file stopped one step short of it and a defect lived there behind numbers that all looked
+/// fine. `decide_cycles` now mirrors the loop state around it: the contradiction machine, the
+/// cooldown, the repeat streak, the window vote.
+///
+/// Both capture modes, because they are not the same gate. `endpoint_conservative_ok` applies only
+/// to `EndpointLoopback` and asks for `dominant_share >= 0.88` — 15 of a 16-cycle window — where
+/// `ProcessLoopback` asks for nothing. On Linux the app runs on endpoint capture.
+#[test]
+#[ignore = "replays every clip through the live gate; run with --ignored --nocapture"]
+fn what_the_live_gate_refuses() {
+    let cli = require_cli();
+    let (root, clips, label) = load_corpus();
+    let detector = LibKeyFinderDetector::from_executable(cli);
+    let analysed = analyse_corpus(&detector, &root, &clips, Pass::WholeBuffer, 60);
+
+    println!("\n=== what the live gate refuses: {} clips ({label}) ===", analysed.len());
+    // `PRIMARY_KEY_REPEAT_MIN` is swept because it is the honest version of a signal the engine
+    // used to get by accident. Until `window_disagreement_metrics` keyed windows by their whole
+    // span, a mind-change anywhere in the retained evidence read as `profile_disagreement` and
+    // blocked the assert outright. That was a real caution wearing a wrong name; the streak is
+    // the same idea said properly, and this is what it is worth.
+    for (mode, repeat_min) in [CaptureMode::ProcessLoopback, CaptureMode::EndpointLoopback]
+        .into_iter()
+        .flat_map(|m| [5usize, 7, 9, 11, 13, 16].into_iter().map(move |r| (m, r)))
+    {
+        let arm = gate_arm(&analysed, mode, repeat_min, HISTORY_HORIZON);
+        let n = analysed.len().max(1);
+        println!(
+            "\n-- {:?}, repeat_min {} --\n  {}",
+            mode,
+            repeat_min,
+            arm.summary(n)
+        );
+        let mut ranked: Vec<_> = arm.blockers.into_iter().collect();
+        ranked.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
+        println!("  what stops it at the last cycle:");
+        for (reason, count) in ranked {
+            println!("    {reason:<26}{count:>4}  ({:.0}%)", 100.0 * count as f64 / n as f64);
+        }
+    }
+
+    // --- and the horizon, which only became a live knob once the winner was fixed ---
+    //
+    // Swept once before and found inert at every value from 16 to 1. That measurement is
+    // withdrawn: it was taken while `window_winners_from_results` grouped every pass over the
+    // growing buffer into one bucket and kept the highest-strength one, which froze the consensus
+    // on a single early reading — so `decision_history` was uniform *by construction* and a knob
+    // over its contents could not move anything. With the winner superseded by span the history
+    // holds what the analyzer actually said, `stable_tonics` went from blocking 5% of clips to
+    // 13%, and the width of that window is now the thing deciding them.
+    println!("\n-- the vote horizon, at the shipped repeat_min {PRIMARY_KEY_REPEAT_MIN} --");
+    println!(
+        "{:>18}{:>9}{:>9}{:>10}{:>25}{:>17}",
+        "capture", "horizon", "asserts", "median", "right when it asserts", "right but mute"
+    );
+    for mode in [CaptureMode::ProcessLoopback, CaptureMode::EndpointLoopback] {
+        for horizon in [HISTORY_HORIZON, 12, 9, 6, 4, 2] {
+            let arm = gate_arm(&analysed, mode, PRIMARY_KEY_REPEAT_MIN, horizon);
+            let n = analysed.len().max(1);
+            println!(
+                "{:>18}{:>9}{:>8.0}%{:>10}{:>24.0}%{:>16.0}%",
+                format!("{mode:?}"),
+                horizon,
+                100.0 * arm.asserts as f64 / n as f64,
+                median(arm.first_assert.clone())
+                    .map(|s| format!("{s}s"))
+                    .unwrap_or_else(|| "—".into()),
+                if arm.asserts > 0 {
+                    100.0 * arm.asserts_right as f64 / arm.asserts as f64
+                } else {
+                    0.0
+                },
+                100.0 * arm.mute_but_right as f64 / n as f64,
+            );
+        }
+    }
+}
+
+/// One arm of the live-gate sweep: what the readout did to every clip under one setting.
+struct GateArm {
+    asserts: usize,
+    asserts_right: usize,
+    /// Asserts whose *note set* is right, which includes the relative slips. Split out because the
+    /// two kinds of wrong assert cost the player completely different things: a slip draws the
+    /// identical diagram and only misplaces the root marker, while a wrong note set puts every
+    /// bend outside the key. Scoring them as one number prices a hedge against the wrong thing.
+    asserts_notes_right: usize,
+    mute_but_right: usize,
+    first_assert: Vec<usize>,
+    /// Only the clips it asserted *correctly*. A setting that fires early on the clips it gets
+    /// wrong flatters `first_assert`, and the player's wait is the wait for a right answer.
+    first_right_assert: Vec<usize>,
+    first_notes_right_assert: Vec<usize>,
+    blockers: BTreeMap<&'static str, usize>,
+}
+
+impl GateArm {
+    fn summary(&self, n: usize) -> String {
+        format!(
+            "asserts {:.0}%   median {}   right when it asserts {:.0}%   right but mute {:.0}%",
+            100.0 * self.asserts as f64 / n as f64,
+            median(self.first_assert.clone())
+                .map(|s| format!("{s}s"))
+                .unwrap_or_else(|| "—".into()),
+            if self.asserts > 0 {
+                100.0 * self.asserts_right as f64 / self.asserts as f64
+            } else {
+                0.0
+            },
+            100.0 * self.mute_but_right as f64 / n as f64,
+        )
+    }
+}
+
+/// Every clip's cycles under one consensus setting, ready to be scored against any gate.
+///
+/// Split out from `gate_arm` because `repeat_min` and the horizon are the only two of the four
+/// knobs that change what the consensus *decides*; `REQUIRED_AUDIO_SECONDS` and
+/// `MIN_READY_STREAK` are read off the cycles afterwards. Sweeping all four jointly without this
+/// split re-runs the consensus twenty-five times for twenty-five identical answers.
+fn gate_cycles(
+    analysed: &[((u8, &'static str), Vec<CycleInput>)],
+    mode: CaptureMode,
+    repeat_min: usize,
+    horizon: usize,
+) -> Vec<((u8, &'static str), Vec<Cycle>)> {
+    analysed
+        .iter()
+        .map(|(expected, inputs)| {
+            (
+                *expected,
+                decide_cycles(inputs, Pass::WholeBuffer, horizon, 0, mode, repeat_min),
+            )
+        })
+        .collect()
+}
+
+/// What the readout did to every clip, under a candidate buffer gate and ready streak.
+fn score_gate(
+    decided: &[((u8, &'static str), Vec<Cycle>)],
+    required_seconds: usize,
+    min_streak: usize,
+) -> GateArm {
+    score_gate_with(decided, required_seconds, min_streak, false)
+}
+
+/// As `score_gate`, optionally also requiring that the buffer agrees with its own recent tail.
+fn score_gate_with(
+    decided: &[((u8, &'static str), Vec<Cycle>)],
+    required_seconds: usize,
+    min_streak: usize,
+    need_tail_agreement: bool,
+) -> GateArm {
+    let (mut asserts, mut asserts_right, mut mute_but_right) = (0usize, 0usize, 0usize);
+    let mut asserts_notes_right = 0usize;
+    let mut first_assert = Vec::new();
+    let mut first_right_assert = Vec::new();
+    let mut first_notes_right_assert = Vec::new();
+    let mut blockers: BTreeMap<&'static str, usize> = BTreeMap::new();
+    for (expected, cycles) in decided {
+        // The shipped gate plus the buffer gate and the streak, which is what the player waits
+        // through: `min_streak` consecutive fresh cycles the gate allowed.
+        let mut streak = 0usize;
+        let mut opened: Option<&Cycle> = None;
+        for cycle in cycles {
+            // `None` — a buffer too short for a tail to be different audio — is not a refusal.
+            // Treating it as one would only re-time the gate, which is what this is an
+            // alternative to.
+            let tail_ok = !need_tail_agreement || cycle.tail_agrees != Some(false);
+            let ok = cycle.gate_allowed && tail_ok && cycle.heard_seconds >= required_seconds;
+            if cycle.fresh && ok {
+                streak += 1;
+            } else if !ok {
+                streak = 0;
+            }
+            if ok && streak >= min_streak && opened.is_none() {
+                opened = Some(cycle);
+            }
+        }
+        // Where the last cycle stood, so a clip that never opens still says what stopped it.
+        if let Some(last) = cycles
+            .iter()
+            .filter(|c| c.heard_seconds >= required_seconds)
+            .next_back()
+        {
+            if let Some(reason) = last.gate_block {
+                *blockers.entry(reason).or_insert(0) += 1;
+            }
+        }
+        match opened {
+            Some(cycle) => {
+                asserts += 1;
+                first_assert.push(cycle.heard_seconds);
+                match classify(*expected, cycle.got) {
+                    Outcome::Exact => {
+                        asserts_right += 1;
+                        asserts_notes_right += 1;
+                        first_right_assert.push(cycle.heard_seconds);
+                        first_notes_right_assert.push(cycle.heard_seconds);
+                    }
+                    Outcome::RelativeSlip => {
+                        asserts_notes_right += 1;
+                        first_notes_right_assert.push(cycle.heard_seconds);
+                    }
+                    Outcome::WrongNotes | Outcome::NoAnswer => {}
+                }
+            }
+            None if cycles.last().and_then(|c| c.got) == Some(*expected) => mute_but_right += 1,
+            None => {}
+        }
+    }
+    GateArm {
+        asserts,
+        asserts_right,
+        asserts_notes_right,
+        mute_but_right,
+        first_assert,
+        first_right_assert,
+        first_notes_right_assert,
+        blockers,
+    }
+}
+
+fn gate_arm(
+    analysed: &[((u8, &'static str), Vec<CycleInput>)],
+    mode: CaptureMode,
+    repeat_min: usize,
+    horizon: usize,
+) -> GateArm {
+    score_gate(
+        &gate_cycles(analysed, mode, repeat_min, horizon),
+        REQUIRED_AUDIO_SECONDS as usize,
+        MIN_READY_STREAK,
+    )
+}
+
+/// The two streaks the player waits through, measured together for the first time.
+///
+/// `PRIMARY_KEY_REPEAT_MIN` (7) counts identical primaries inside `live_gate`; `MIN_READY_STREAK`
+/// (4) then counts cycles the gate allowed, outside it. Both are "the same answer N times
+/// running", counted twice in different places, and each was chosen against a sweep that held
+/// the other fixed — 7 in `what_the_live_gate_refuses`, 4 in `key_engine_time_to_answer_curve`.
+/// Stacked they cost eleven cycles, forty-four seconds, which is most of what the player waits.
+///
+/// `REQUIRED_AUDIO_SECONDS` is in the sweep because the comment above it is no longer true.
+/// Twenty was "where the accuracy curve flattens", and that curve was withdrawn in
+/// `KEY_ACCURACY_BASELINE.md`: measured out of fold, twenty seconds is the engine's *worst*
+/// operating point, not its knee.
+///
+/// The column that matters is `correct` — the share of all clips that get a confident answer that
+/// is also right. `asserts` counts wrong ones too, and a setting can buy assert rate by asserting
+/// rubbish sooner.
+#[test]
+#[ignore = "replays every clip through the gate at every setting; run with --ignored --nocapture"]
+fn what_the_two_streaks_cost_together() {
+    let cli = require_cli();
+    let (root, clips, label) = load_corpus();
+    let detector = LibKeyFinderDetector::from_executable(cli);
+    let analysed = analyse_corpus(&detector, &root, &clips, Pass::WholeBuffer, 60);
+    let n = analysed.len().max(1);
+
+    println!("\n=== the two streaks, jointly: {n} clips ({label}) ===");
+    println!(
+        "  columns: asserts = confidently answered at all; notes = of those, the seven notes are \n\
+         \x20 right (exact + relative slip, the diagram a player solos over); exact = root and mode \n\
+         \x20 too; wrong = a different note set asserted confidently, which is the one that hurts. \n\
+         \x20 median is over the asserts whose notes are right — a setting cannot buy it by being \n\
+         \x20 fast and wrong."
+    );
+    for mode in [CaptureMode::EndpointLoopback, CaptureMode::ProcessLoopback] {
+        let mut rows: Vec<(usize, usize, usize, GateArm)> = Vec::new();
+        for repeat_min in [1usize, 2, 3, 4, 5, 7, 9] {
+            let decided = gate_cycles(&analysed, mode, repeat_min, HISTORY_HORIZON);
+            for buffer_gate in [12usize, 16, 20, 24, 28] {
+                for min_streak in [1usize, 2, 3, 4, 6] {
+                    rows.push((
+                        buffer_gate,
+                        repeat_min,
+                        min_streak,
+                        score_gate(&decided, buffer_gate, min_streak),
+                    ));
+                }
+            }
+        }
+
+        println!("\n-- {mode:?} --");
+        let header = || {
+            println!(
+                "{:>7}{:>8}{:>8}{:>10}{:>8}{:>8}{:>8}{:>9}{:>12}",
+                "buffer",
+                "repeat",
+                "streak",
+                "asserts",
+                "notes",
+                "exact",
+                "wrong",
+                "median",
+                "mute+right"
+            )
+        };
+        let medians = |arm: &GateArm| {
+            let show = |v: Vec<usize>| {
+                median(v)
+                    .map(|s| format!("{s}s"))
+                    .unwrap_or_else(|| "—".into())
+            };
+            (
+                show(arm.first_notes_right_assert.clone()),
+                show(arm.first_right_assert.clone()),
+            )
+        };
+        let line = |gate: usize, repeat: usize, streak: usize, arm: &GateArm, mark: &str| {
+            let (notes_median, exact_median) = medians(arm);
+            println!(
+                "{:>7}{:>8}{:>8}{:>9.0}%{:>7.0}%{:>7.0}%{:>7.0}%{:>9}{:>11.0}%  {}",
+                format!("{gate}s"),
+                repeat,
+                streak,
+                100.0 * arm.asserts as f64 / n as f64,
+                100.0 * arm.asserts_notes_right as f64 / n as f64,
+                100.0 * arm.asserts_right as f64 / n as f64,
+                100.0 * (arm.asserts - arm.asserts_notes_right) as f64 / n as f64,
+                if notes_median == exact_median {
+                    notes_median
+                } else {
+                    format!("{notes_median}/{exact_median}")
+                },
+                100.0 * arm.mute_but_right as f64 / n as f64,
+                mark,
+            );
+        };
+        let shipped = (
+            REQUIRED_AUDIO_SECONDS as usize,
+            PRIMARY_KEY_REPEAT_MIN,
+            MIN_READY_STREAK,
+        );
+
+        // The shipped point first, so every row below reads as a move away from something.
+        header();
+        for (gate, repeat, streak, arm) in &rows {
+            if (*gate, *repeat, *streak) == shipped {
+                line(*gate, *repeat, *streak, arm, "<- ships");
+            }
+        }
+
+        // The whole surface at the shipped buffer gate, because the frontier below reports the
+        // corners and the shape between them is what says whether a choice sits on a cliff.
+        println!("\n  every (repeat, streak) at the shipped {}s buffer gate:", shipped.0);
+        header();
+        for (gate, repeat, streak, arm) in &rows {
+            if *gate == shipped.0 {
+                line(*gate, *repeat, *streak, arm, "");
+            }
+        }
+
+        // The frontier: nothing else answers sooner, more often, *and* asserts fewer wrong note
+        // sets. Three objectives rather than two — the two-objective version of this sweep put
+        // every corner of the grid on the frontier, because asserting instantly always raises the
+        // count of right asserts and the cost never appeared in the comparison.
+        println!("\n  the frontier — nothing else is faster, righter and no more often wrong:");
+        header();
+        let key = |arm: &GateArm| {
+            (
+                median(arm.first_notes_right_assert.clone()).unwrap_or(usize::MAX),
+                arm.asserts_notes_right,
+                arm.asserts - arm.asserts_notes_right,
+            )
+        };
+        let mut frontier: Vec<&(usize, usize, usize, GateArm)> = rows
+            .iter()
+            .filter(|(_, _, _, arm)| arm.asserts_notes_right > 0)
+            .filter(|(_, _, _, arm)| {
+                let (secs, right, wrong) = key(arm);
+                !rows.iter().any(|(_, _, _, other)| {
+                    let (o_secs, o_right, o_wrong) = key(other);
+                    let no_worse = o_secs <= secs && o_right >= right && o_wrong <= wrong;
+                    let better = o_secs < secs || o_right > right || o_wrong < wrong;
+                    no_worse && better
+                })
+            })
+            .collect();
+        frontier.sort_by_key(|(_, _, _, arm)| key(arm));
+        for (gate, repeat, streak, arm) in frontier {
+            line(*gate, *repeat, *streak, arm, "");
+        }
+    }
+}
+
+/// Counting cycles is confidence made of time. This is confidence made of evidence.
+///
+/// The gate decides when to stop hedging by waiting for the same answer six times running, which
+/// costs every player thirty-two seconds whether or not the reading was ever in doubt. It waits
+/// because it has nothing else: every pass over a growing buffer is a nested span of every other
+/// one, so they cannot contradict each other, and since the winner became "the pass that heard
+/// most" the window vote has exactly one entry.
+///
+/// A trailing window is not nested. `exp_recent_agreement.py` prices it out of fold over 396
+/// clips: when the whole buffer still agrees with its newest thirty seconds — 87.6% of clips — the
+/// answer is right 67.8% of the time, and when it does not it is right **46.0%**. That is a
+/// sharper separation than any amount of repetition produces, and it costs one classification of
+/// a chromagram the analyzer has already built.
+///
+/// This asks whether the two are interchangeable: can the wait come down if the readout has to
+/// agree with its own recent past instead of with its own recent history?
+#[test]
+#[ignore = "two analyzer passes per cycle over every clip; run with --ignored --nocapture"]
+fn what_a_second_look_at_the_recent_audio_is_worth() {
+    let cli = require_cli();
+    let (root, clips, label) = load_corpus();
+    let detector = LibKeyFinderDetector::from_executable(cli);
+    let analysed = analyse_corpus(&detector, &root, &clips, Pass::WholeBuffer, 60);
+    let n = analysed.len().max(1);
+
+    println!(
+        "\n=== waiting versus looking again: {n} clips ({label}) ===\n\
+         the tail is the newest {TAIL_SECONDS}s of the same buffer, classified by the same profile"
+    );
+    println!(
+        "{:>8}{:>8}{:>8}{:>10}{:>8}{:>8}{:>8}{:>9}{:>12}",
+        "tail?", "repeat", "streak", "asserts", "notes", "exact", "wrong", "median", "mute+right"
+    );
+    for mode in [CaptureMode::EndpointLoopback] {
+        for (repeat_min, min_streak) in [(4usize, 3usize), (3, 2), (2, 2), (1, 1)] {
+            let decided = gate_cycles(&analysed, mode, repeat_min, HISTORY_HORIZON);
+            for need_tail in [false, true] {
+                let arm = score_gate_with(
+                    &decided,
+                    REQUIRED_AUDIO_SECONDS as usize,
+                    min_streak,
+                    need_tail,
+                );
+                println!(
+                    "{:>8}{:>8}{:>8}{:>9.0}%{:>7.0}%{:>7.0}%{:>7.0}%{:>9}{:>11.0}%{}",
+                    if need_tail { "agrees" } else { "—" },
+                    repeat_min,
+                    min_streak,
+                    100.0 * arm.asserts as f64 / n as f64,
+                    100.0 * arm.asserts_notes_right as f64 / n as f64,
+                    100.0 * arm.asserts_right as f64 / n as f64,
+                    100.0 * (arm.asserts - arm.asserts_notes_right) as f64 / n as f64,
+                    median(arm.first_notes_right_assert.clone())
+                        .map(|s| format!("{s}s"))
+                        .unwrap_or_else(|| "—".into()),
+                    100.0 * arm.mute_but_right as f64 / n as f64,
+                    if (repeat_min, min_streak)
+                        == (PRIMARY_KEY_REPEAT_MIN, MIN_READY_STREAK)
+                        && !need_tail
+                    {
+                        "  <- ships"
+                    } else {
+                        ""
+                    },
+                );
+            }
+        }
+    }
+
+    // What the signal is on its own, so the table above can be read as "did the gate use it".
+    let (mut agree, mut agree_right, mut differ, mut differ_right) = (0usize, 0, 0usize, 0);
+    for (expected, inputs) in &analysed {
+        let Some(last) = inputs.last() else { continue };
+        let Some(tail) = last.tail else { continue };
+        let whole = last
+            .windows
+            .first()
+            .and_then(|w| pitch_class(&w.key).zip(normalize_mode(&w.scale)));
+        let right = whole == Some(*expected);
+        if whole == Some(tail) {
+            agree += 1;
+            agree_right += usize::from(right);
+        } else {
+            differ += 1;
+            differ_right += usize::from(right);
+        }
+    }
+    println!(
+        "\n  at the last cycle: agree on {}/{} clips, right {:.0}% of the time; \
+         differ on {}, right {:.0}%",
+        agree,
+        agree + differ,
+        100.0 * agree_right as f64 / agree.max(1) as f64,
+        differ,
+        100.0 * differ_right as f64 / differ.max(1) as f64,
+    );
 }

@@ -126,9 +126,30 @@ pub fn rerank(shortlist: &[ShortlistEntry]) -> Option<usize> {
     }
 
     let leader_score = shortlist[0].score;
+    let leader = &shortlist[0];
     let mut best = 0usize;
     let mut best_score = f32::NEG_INFINITY;
     for (position, entry) in shortlist.iter().take(SHORTLIST_SIZE).enumerate() {
+        // Which end of the leader's note set is home — never a different note set.
+        //
+        // Replayed over every second of every clip in the span cache, the two kinds of move this
+        // model makes are not the same bet. Choosing the leader's relative instead of the leader
+        // helped the root at every buffer length and cannot touch the diagram (twelve seconds:
+        // 8 -> 12 right roots over 31 moves; thirty-six: 2 -> 9 over 20). Moving to a key with
+        // different notes lost at every length but one: 21 -> 13 right diagrams over 50 moves at
+        // twelve seconds, 27 -> 22 at eight, 14 -> 12 at thirty-six. The chord features are
+        // shares and counts over a buffer, and in the short buffers the neck is drawn from they
+        // are too thin to overrule the profile about which *notes* are playing.
+        //
+        // Restricted, out of fold by song (note-set / exact): 64.0 / 55.6 against 62.8 / 54.7 at
+        // twelve seconds, 62.2 / 53.0 against 60.5 / 52.1 at ten, and level-to-slightly-behind
+        // past twenty — where the unrestricted numbers are the in-sample ones, since these weights
+        // were fitted on those clips. See `scripts/key-research/exp_rerank_spans.py`.
+        if position > 0
+            && !crate::key_confidence::same_note_set(&entry.key, &entry.scale, &leader.key, &leader.scale)
+        {
+            continue;
+        }
         let context = [
             entry.score - leader_score,
             position as f32,
@@ -271,6 +292,26 @@ mod tests {
             entry("F", "major", 0.9280, typical()),
         ];
         assert_eq!(rerank(&beyond), Some(0));
+    }
+
+    /// Chord evidence decides which end of a note set is home; it is not allowed to change the note
+    /// set. The same compelling evidence that moves the root to the relative is ignored when it
+    /// points at a fifth-related key, however narrow the profile's lead.
+    #[test]
+    fn chord_evidence_never_moves_the_diagram_to_other_notes() {
+        let fifth_on_second = vec![
+            entry("C", "major", 0.9700, typical()),
+            entry("G", "major", 0.9699, compelling()),
+            entry("A", "minor", 0.9500, typical()),
+        ];
+        assert_eq!(rerank(&fifth_on_second), Some(0));
+        // With the relative behind the fifth, it is still the relative that may win.
+        let relative_on_third = vec![
+            entry("C", "major", 0.9700, typical()),
+            entry("G", "major", 0.9699, compelling()),
+            entry("A", "minor", 0.9690, compelling()),
+        ];
+        assert_eq!(rerank(&relative_on_third), Some(2));
     }
 
     #[test]

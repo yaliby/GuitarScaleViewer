@@ -41,6 +41,17 @@ pub struct WindowAnalysisResult {
     pub relative_pair_gap: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tuning_cents: Option<f32>,
+    /// How far the verdict's score stands above the best key with a *different* set of notes.
+    ///
+    /// The evidence behind `key_confidence`: over the real corpus it splits readings from 38% right
+    /// to 87% right at twelve seconds of audio, where the gap to the plain runner-up — often the
+    /// relative, which draws the same notes — says nothing about the notes at all. `None` when the
+    /// analyzer sent no shortlist.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note_set_margin: Option<f32>,
+    /// The profile's best score for this pass, which calibrates how much the margin is worth.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_score: Option<f32>,
     pub window_start_ms: u64,
     pub window_end_ms: u64,
 }
@@ -62,6 +73,23 @@ pub struct KeyCandidate {
     pub confidence: f32,
 }
 
+/// The evidence behind one reading, in the terms the neck's revision policy needs.
+///
+/// The run lengths are counted over the analyzer's readings, not over payloads: the engine emits a
+/// payload whenever anything in it changes, several per reading, so a frontend counting repeats
+/// would count the same audio more than once.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteSetEvidence {
+    /// The probability that the key's seven notes are the song's.
+    pub confidence: f32,
+    /// How many readings immediately before this one named the same seven notes (the key or its
+    /// relative).
+    pub note_set_run: u32,
+    /// How many readings immediately before this one named this exact key.
+    pub key_run: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DetectedKeyPayload {
@@ -73,6 +101,15 @@ pub struct DetectedKeyPayload {
     pub primary_scale: Option<String>,
     pub display_name: Option<String>,
     pub confidence: f32,
+    /// What `key_confidence` read off the analyzer about `primary_key` — and `None` whenever the
+    /// backend could not supply the evidence, or the newest reading named a different key.
+    ///
+    /// Separate from `confidence` because `confidence` has always meant whatever the backend's vote
+    /// produced, and for the python sidecar it still does. A reader that needs a probability — the
+    /// neck's revision policy in `keyFusion.ts` compares two of them — must be able to tell one
+    /// from a vote share, and a flag on the side would be one more thing to keep in step.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note_set_evidence: Option<NoteSetEvidence>,
     pub stability: f32,
     pub alternatives: Vec<KeyCandidate>,
     pub source: String,
@@ -96,6 +133,7 @@ impl DetectedKeyPayload {
             primary_scale: None,
             display_name: None,
             confidence: 0.0,
+            note_set_evidence: None,
             stability: 0.0,
             alternatives: Vec::new(),
             source: "audio_analysis".to_string(),
@@ -119,6 +157,7 @@ impl DetectedKeyPayload {
             primary_scale: None,
             display_name: None,
             confidence: 0.0,
+            note_set_evidence: None,
             stability: 0.0,
             alternatives: Vec::new(),
             source: "audio_analysis".to_string(),
