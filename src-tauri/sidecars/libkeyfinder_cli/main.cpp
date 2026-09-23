@@ -38,6 +38,7 @@
 #include <algorithm>
 #include <cmath>
 #include <iomanip>
+#include <cstdlib>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -112,6 +113,14 @@ const double MINOR_PROFILE[12] = {6.33, 2.68, 3.52, 5.38, 2.60, 3.53,
 //     Sha'ath (libKeyFinder default)  note-set 65.9%          tonic 58.8%
 //     generative only                 note-set 71.0% +/- 0.6  tonic 62.9% +/- 0.6
 //     + discriminative refinement     note-set 74.0% +/- 0.4  tonic 65.4% +/- 0.6
+//     refitted to separated audio     note-set 75.4% +/- 0.3  tonic 68.1% +/- 0.4
+//
+// The last row is the pair below. Since 2026-09-23 libKeyFinder reads the mix with its percussion
+// masked out (`gsv::harmonic_signal`), so the profile it is matched against was fitted on the
+// chromagrams of separated audio — `GSV_CHROMA_CACHE` built by this binary, `refit_all.py`, then
+// `emit_profiles.py`. The blend and pull optima did not move (0.70 and 5.0); the gain is the input,
+// not the fit. At twelve seconds of music, which is where the neck is first drawn, it is worth
+// 66.7 / 55.5 -> 68.2 / 59.7 (`exp_hpss_audio.py`).
 //
 // The refinement's regularisation sits on a plateau running pull 3 to 14, so it is not a tuned
 // point. A single fold split is not a measurement here: on the first 64-song corpus one partition
@@ -124,21 +133,21 @@ const double MINOR_PROFILE[12] = {6.33, 2.68, 3.52, 5.38, 2.60, 3.53,
 //
 // libKeyFinder still does the classifying. Only what it matches against has changed.
 const double FITTED_MAJOR_72[72] = {
-    1.334442, 0.859841, 1.009998, 0.877515, 1.350038, 1.189011, 0.927015, 1.395977, 0.906033, 1.300184, 0.839941, 1.115790,
-    2.953808, 1.599249, 1.683811, 1.414608, 2.406321, 2.203207, 1.509953, 2.749655, 1.647672, 2.572881, 1.618709, 2.008102,
-    3.669849, 1.907642, 2.310250, 1.684681, 3.117925, 2.325612, 1.546720, 3.300310, 1.766055, 2.888168, 1.701154, 2.413111,
-    4.325291, 2.188119, 2.826211, 2.045063, 3.888725, 2.408240, 1.559870, 3.619400, 1.825540, 3.090804, 1.706559, 2.798242,
-    4.426339, 2.184902, 3.246398, 2.279188, 4.194006, 2.390116, 2.060556, 4.034842, 2.053654, 3.442280, 2.160612, 3.415163,
-    3.893780, 2.425726, 2.992980, 2.402799, 3.864770, 2.512832, 2.468230, 3.848533, 2.464719, 3.185617, 2.371330, 3.307898,
+    1.339449, 0.849755, 0.980199, 0.861599, 1.395571, 1.231376, 0.918464, 1.394734, 0.880452, 1.257926, 0.875805, 1.122167,
+    2.978680, 1.615930, 1.524246, 1.348766, 2.448100, 2.215040, 1.499051, 2.690263, 1.723187, 2.605179, 1.594048, 2.022895,
+    3.707152, 1.778034, 2.014114, 1.550652, 3.296790, 2.397882, 1.494302, 3.258785, 1.797819, 3.010068, 1.584179, 2.375674,
+    4.569345, 2.181876, 2.788013, 1.986684, 4.162838, 2.507918, 1.558807, 3.797526, 1.811778, 3.326483, 1.582713, 2.874470,
+    4.700648, 2.109560, 3.262908, 2.150997, 4.498833, 2.410570, 2.057646, 4.119962, 1.948575, 3.655423, 1.991433, 3.532305,
+    3.863408, 2.312264, 2.844529, 2.216260, 3.942655, 2.355190, 2.320439, 3.847773, 2.374280, 3.227392, 2.156304, 3.328430,
 };
 
 const double FITTED_MINOR_72[72] = {
-    1.681035, 0.777636, 1.134312, 1.113087, 0.918785, 1.099956, 1.101001, 1.501846, 1.102711, 1.018655, 1.254441, 1.050005,
-    3.304111, 1.607273, 2.006906, 2.529368, 1.640573, 1.776874, 1.657507, 2.580399, 2.089110, 1.616467, 2.503608, 1.809013,
-    3.476734, 1.579608, 2.336038, 3.188736, 1.905645, 2.323271, 1.882311, 3.241404, 2.183051, 1.513615, 2.973395, 1.875040,
-    3.700081, 1.576485, 2.765545, 3.939201, 2.156978, 2.754712, 2.176140, 3.864956, 2.154496, 1.487198, 3.134951, 1.914266,
-    4.000097, 2.007426, 3.317190, 4.076018, 2.200190, 3.195512, 2.469583, 4.181344, 2.129204, 2.006316, 3.639411, 2.143189,
-    3.626696, 2.263298, 3.169266, 3.592133, 2.473995, 3.050816, 2.620903, 3.966215, 2.301869, 2.484694, 3.602314, 2.518359,
+    1.622738, 0.844162, 1.150086, 1.130131, 0.916659, 1.071396, 1.082933, 1.495682, 1.146352, 1.041164, 1.276351, 1.067936,
+    3.301293, 1.572886, 1.935924, 2.522515, 1.593180, 1.582067, 1.536799, 2.570394, 2.113201, 1.619280, 2.474309, 1.905422,
+    3.575193, 1.472348, 2.293001, 3.228171, 1.781197, 2.042895, 1.696841, 3.374028, 2.273980, 1.448612, 2.946427, 1.878204,
+    3.896555, 1.468165, 2.857352, 4.221021, 2.183823, 2.717671, 2.115105, 4.124986, 2.321428, 1.472787, 3.305864, 1.870890,
+    4.215399, 1.852129, 3.413067, 4.368815, 2.161719, 3.193961, 2.351135, 4.432010, 2.182138, 2.040211, 3.791915, 2.047900,
+    3.636558, 2.090939, 3.195507, 3.559920, 2.393967, 2.915081, 2.406433, 4.034969, 2.164079, 2.388027, 3.600084, 2.439209,
 };
 
 /// Collapse the per-hop chromagram into the 72 numbers the classifier matches against.
@@ -367,12 +376,26 @@ int main(int argc, char** argv) {
         return 4;
     }
 
+    // What libKeyFinder reads is the mix with its percussion masked out (`gsv::harmonic_signal`):
+    // drums put a broadband floor under every chromagram band, and the fitted profile below was
+    // fitted to separated audio. `GSV_SEPARATION=0` hands it the mix as recorded, which is the only
+    // way to measure the difference against the same binary — and the profile it is matched with
+    // then no longer fits, so that switch is for experiments, not for shipping.
+    //
+    // The chord evidence further down still reads `samples`, the original mix. Its weights were
+    // fitted there, and it runs its own separation tuned for chords rather than keys.
+    const char* separation_setting = std::getenv("GSV_SEPARATION");
+    const bool separate = !(separation_setting != nullptr && std::string(separation_setting) == "0");
+    const std::vector<float> key_audio =
+        separate ? gsv::harmonic_signal(samples, info.channels, info.samplerate) : samples;
+    const int key_channels = separate ? 1 : info.channels;
+
     KeyFinder::AudioData audio;
     audio.setFrameRate(info.samplerate);
-    audio.setChannels(info.channels);
-    audio.addToSampleCount(static_cast<int>(frames_read * info.channels));
-    for (size_t i = 0; i < static_cast<size_t>(frames_read) * static_cast<size_t>(info.channels); i++) {
-        audio.setSample(static_cast<int>(i), samples[i]);
+    audio.setChannels(key_channels);
+    audio.addToSampleCount(static_cast<int>(key_audio.size()));
+    for (size_t i = 0; i < key_audio.size(); i++) {
+        audio.setSample(static_cast<int>(i), key_audio[i]);
     }
 
     // The progressive path so the chromagram survives the call: `keyOfAudio` builds one
@@ -596,10 +619,18 @@ int main(int argc, char** argv) {
     const double top_gap = scores[order[0]] - scores[order[1]];
     const bool close_enough_to_be_worth_asking = top_gap <= CHORD_TIE_BREAK_MAX_GAP;
 
+    // --research: the shipped output, byte for byte in every field it already has, plus what an
+    // experiment needs to re-decide the answer without re-running the analysis — the 72 bands the
+    // classifier matched, all 24 scores, and the chord evidence for every candidate *whether or not*
+    // the shipped path would have asked for it. The per-candidate `chordFeatures` below still follow
+    // the shipped rule, so the engine's re-ranker sees exactly what it would see live.
+    const bool research = (argc >= 3 && std::string(argv[2]) == "--research");
+    const bool ask_chords = ranking_trustworthy && close_enough_to_be_worth_asking;
+    const gsv::ChordEvidence all_chords =
+        research ? gsv::analyse_chords(samples, info.channels, info.samplerate) : gsv::ChordEvidence{};
     const gsv::ChordEvidence chord_evidence =
-        (ranking_trustworthy && close_enough_to_be_worth_asking)
-            ? gsv::analyse_chords(samples, info.channels, info.samplerate)
-            : gsv::ChordEvidence{};
+        ask_chords ? (research ? all_chords : gsv::analyse_chords(samples, info.channels, info.samplerate))
+                   : gsv::ChordEvidence{};
 
     std::cout << "\"rankingAgrees\":" << (ranking_trustworthy ? "true" : "false")
               << ",\"topGap\":" << std::fixed << std::setprecision(6) << top_gap
@@ -638,6 +669,35 @@ int main(int argc, char** argv) {
             std::cout << "]}";
         }
     }
-    std::cout << "]}" << std::endl;
+    std::cout << "]";
+    if (research) {
+        std::cout << ",\"bands\":[";
+        for (size_t i = 0; i < collapsed_chroma.size(); i++) {
+            if (i) std::cout << ",";
+            std::cout << std::fixed << std::setprecision(6) << collapsed_chroma[i];
+        }
+        std::cout << "],\"scores\":[";
+        for (int i = 0; i < 24; i++) {
+            if (i) std::cout << ",";
+            std::cout << std::fixed << std::setprecision(6) << scores[i];
+        }
+        std::cout << "],\"allChordValid\":" << (all_chords.valid ? "true" : "false")
+                  << ",\"allChordFrames\":" << all_chords.frames
+                  << ",\"allTuningCents\":" << std::fixed << std::setprecision(1)
+                  << all_chords.tuning_cents << ",\"allChordFeatures\":[";
+        if (all_chords.valid) {
+            for (int c = 0; c < gsv::CANDIDATE_COUNT; c++) {
+                if (c) std::cout << ",";
+                std::cout << "[";
+                for (int f = 0; f < gsv::CHORD_FEATURE_COUNT; f++) {
+                    if (f) std::cout << ",";
+                    std::cout << std::fixed << std::setprecision(6) << all_chords.features[c][f];
+                }
+                std::cout << "]";
+            }
+        }
+        std::cout << "]";
+    }
+    std::cout << "}" << std::endl;
     return 0;
 }

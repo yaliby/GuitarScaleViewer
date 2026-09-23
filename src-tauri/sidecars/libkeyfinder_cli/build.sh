@@ -21,9 +21,14 @@ cmake --build "$build_dir" --parallel
 # app falls back to the python analyzer, finds no numpy, and reports analyzer_unavailable — the
 # default backend silently not existing is the worst of the failure modes.
 lib_path="$(ldd "$build_dir/gsv-libkeyfinder-cli" | awk '/libkeyfinder\.so/ {print $3}')"
-if [ -n "${lib_path:-}" ] && [ -f "$lib_path" ]; then
-  cp -L "$lib_path" "$build_dir/$(basename "$lib_path")"
-  echo "bundled: $build_dir/$(basename "$lib_path")"
+bundled="$build_dir/$(basename "${lib_path:-libkeyfinder.so}")"
+if [ -n "${lib_path:-}" ] && [ -f "$lib_path" ] && [ "$(realpath "$lib_path")" = "$(realpath -m "$bundled")" ]; then
+  # A rebuild: the `$ORIGIN` rpath already resolves to the copy made last time, and `cp` refuses to
+  # copy a file onto itself — which, under `set -e`, used to fail the whole build after it succeeded.
+  echo "bundled: $bundled (already in place)"
+elif [ -n "${lib_path:-}" ] && [ -f "$lib_path" ]; then
+  cp -L "$lib_path" "$bundled"
+  echo "bundled: $bundled"
 else
   echo "warning: libkeyfinder.so not located next to the binary; a packaged build will not run" >&2
 fi

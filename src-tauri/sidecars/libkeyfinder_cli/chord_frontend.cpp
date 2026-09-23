@@ -168,7 +168,8 @@ std::vector<std::vector<double>> spectrogram(const std::vector<double>& samples,
 ///
 /// The result is identical either way — the window holds the same multiset — so this changes no
 /// output value and needs no refit.
-class SlidingMedian {
+template <int Kernel>
+class SlidingMedianOf {
   public:
     void reset(const double* values, int count) {
         for (int i = 0; i < count; i++) {
@@ -198,9 +199,10 @@ class SlidingMedian {
     double median() const { return sorted_[size_ / 2]; }
 
   private:
-    double sorted_[MEDIAN_KERNEL + 1];
+    double sorted_[Kernel + 1];
     int size_ = 0;
 };
+using SlidingMedian = SlidingMedianOf<MEDIAN_KERNEL>;
 
 /// Soft-mask percussion out of the spectrogram.
 void remove_percussion(std::vector<std::vector<double>>& magnitude, int bin_limit) {
@@ -413,6 +415,67 @@ struct Run {
     int chord;
     int length;
 };
+
+/// The separation pass that runs before libKeyFinder: a short STFT at the chord front end's working
+/// rate. 2048 samples at 11025 Hz is a 0.19 s window with a 46 ms hop and 5.4 Hz per bin — sharp
+/// enough in time that a drum hit is a spike across one or two frames, sharp enough in frequency
+/// that a held note is a line along one bin.
+constexpr int SEPARATION_N_FFT = 2048;
+constexpr int SEPARATION_HOP = 512;
+
+/// Both median widths, in frames along time and bins along frequency: 1.4 s and 167 Hz.
+///
+/// Measured out of fold on the real corpus with the profile refitted to the separated audio
+/// (`scripts/key-research/exp_hpss_audio.py`): 17 and 31 both gain at every buffer length, and 31
+/// is the better of the two where the player starts listening — 68.2 / 59.7 at twelve seconds
+/// against 67.9 / 58.4, and 66.7 / 55.5 for no separation at all.
+constexpr int SEPARATION_KERNEL = 31;
+
+/// libKeyFinder decimates by ten before it builds its chromagram, so at 44.1 kHz nothing above
+/// 2.2 kHz ever reaches it. Separating up to a little past that and zeroing the rest halves the
+/// median work and changes nothing the classifier can see.
+constexpr double SEPARATION_TOP_HZ = 2600.0;
+
+void inverse_fft_in_place(std::vector<std::complex<double>>& data) {
+    for (std::complex<double>& v : data) {
+        v = std::conj(v);
+    }
+    fft_in_place(data);
+    const double n = static_cast<double>(data.size());
+    for (std::complex<double>& v : data) {
+        v = std::conj(v) / n;
+    }
+}
+
+/// Interpolate by `factor`, a power of two, two at a time with the same windowed sinc `decimate`
+/// uses — the inverse of the path the audio took down, so a round trip with nothing removed in
+/// between leaves libKeyFinder's verdicts as they were (measured: identical on every clip).
+std::vector<double> upsample(const std::vector<double>& input, int factor) {
+    std::vector<double> working = input;
+    const std::vector<double> kernel = lowpass_kernel(81, 0.25);
+    const int taps = static_cast<int>(kernel.size());
+    const int half = taps / 2;
+    while (factor > 1) {
+        const long in_len = static_cast<long>(working.size());
+        const long out_len = in_len * 2;
+        std::vector<double> out(out_len, 0.0);
+        for (long i = 0; i < out_len; i++) {
+            // The zero-stuffed signal is non-zero only at even positions, so only every other tap
+            // lands on a sample. Doubling restores the energy the inserted zeros took away.
+            double acc = 0.0;
+            for (int k = static_cast<int>(((half - i) % 2 + 2) % 2); k < taps; k += 2) {
+                const long position = i + k - half;
+                if (position >= 0 && position < out_len) {
+                    acc += kernel[k] * working[position / 2];
+                }
+            }
+            out[i] = 2.0 * acc;
+        }
+        working.swap(out);
+        factor /= 2;
+    }
+    return working;
+}
 
 std::vector<Run> runs_of(const std::vector<int>& sequence) {
     std::vector<Run> out;
@@ -687,6 +750,151 @@ ChordEvidence analyse_chords(const std::vector<float>& samples, int channels, in
     evidence.frames = frames;
     evidence.valid = true;
     return evidence;
+}
+
+std::vector<float> harmonic_signal(const std::vector<float>& samples, int channels, int sample_rate) {
+    const size_t frame_count = channels > 0 ? samples.size() / static_cast<size_t>(channels) : 0;
+    std::vector<double> mono(frame_count, 0.0);
+    for (size_t i = 0; i < frame_count; i++) {
+        double acc = 0.0;
+        for (int c = 0; c < channels; c++) {
+            acc += samples[i * channels + c];
+        }
+        mono[i] = acc / channels;
+    }
+    auto as_float = [](const std::vector<double>& v, size_t length) {
+        std::vector<float> out(length, 0.0f);
+        for (size_t i = 0; i < length && i < v.size(); i++) {
+            out[i] = static_cast<float>(v[i]);
+        }
+        return out;
+    };
+
+    // The app always sends 44100, four times the working rate. Any rate that is not a power-of-two
+    // multiple of it is analysed unseparated rather than resampled twice — and says so, because a
+    // separation that silently switches itself off costs accuracy with nothing in the logs.
+    int factor = sample_rate > 0 && sample_rate % TARGET_RATE == 0 ? sample_rate / TARGET_RATE : 0;
+    if (factor <= 0 || (factor & (factor - 1)) != 0) {
+        std::fprintf(stderr, "separation_skipped: sample rate %d is not 11025 * 2^k\n", sample_rate);
+        return as_float(mono, frame_count);
+    }
+    StageTimer timer;
+    std::vector<double> working = mono;
+    for (int step = factor; step > 1; step /= 2) {
+        working = decimate(working, 2);
+    }
+    timer.lap("sep decimate");
+
+    const int n = SEPARATION_N_FFT;
+    const int hop = SEPARATION_HOP;
+    const int pad = n / 2;
+    const long length = static_cast<long>(working.size());
+    if (length == 0) {
+        return as_float(mono, frame_count);
+    }
+    // Zero-padded by half a window at each end, like scipy's `stft(boundary="zeros")`, so the first
+    // and last samples are covered by as many frames as the middle ones and come back intact.
+    const long frames = (length + 2 * pad - n + hop - 1) / hop + 1;
+    std::vector<double> padded(static_cast<size_t>((frames - 1) * hop + n), 0.0);
+    std::copy(working.begin(), working.end(), padded.begin() + pad);
+
+    std::vector<double> window(n);
+    for (int i = 0; i < n; i++) {
+        window[i] = 0.5 - 0.5 * std::cos(2.0 * M_PI * i / n);
+    }
+    const int bins = n / 2 + 1;
+    const int top = std::min(bins, static_cast<int>(std::ceil(SEPARATION_TOP_HZ * n / TARGET_RATE)) + 1);
+    // The frequency median at the top separated bin reads half a kernel above it.
+    const int read_top = std::min(bins, top + SEPARATION_KERNEL / 2 + 1);
+
+    std::vector<std::vector<std::complex<double>>> spectra(frames);
+    std::vector<std::vector<double>> magnitude(read_top, std::vector<double>(frames, 0.0));
+    std::vector<std::complex<double>> buffer(n);
+    for (long f = 0; f < frames; f++) {
+        const double* start = padded.data() + f * hop;
+        for (int i = 0; i < n; i++) {
+            buffer[i] = std::complex<double>(start[i] * window[i], 0.0);
+        }
+        fft_in_place(buffer);
+        spectra[f].assign(buffer.begin(), buffer.begin() + bins);
+        for (int bin = 0; bin < read_top; bin++) {
+            magnitude[bin][f] = std::abs(buffer[bin]);
+        }
+    }
+    timer.lap("sep stft");
+
+    // The soft mask, H^2 / (H^2 + P^2): H a median along time (held notes survive it, hits do not),
+    // P a median along frequency (hits survive it, held notes do not). Edges repeat the nearest
+    // value, as scipy's `mode="nearest"` does.
+    const int half = SEPARATION_KERNEL / 2;
+    std::vector<std::vector<double>> harmonic(top, std::vector<double>(frames, 0.0));
+    double window_values[SEPARATION_KERNEL];
+    SlidingMedianOf<SEPARATION_KERNEL> running;
+    auto clamped = [](const std::vector<double>& row, long index, long limit) {
+        return row[std::min(std::max(index, 0L), limit - 1)];
+    };
+    for (int bin = 0; bin < top; bin++) {
+        const std::vector<double>& row = magnitude[bin];
+        for (int k = 0; k < SEPARATION_KERNEL; k++) {
+            window_values[k] = clamped(row, k - half, frames);
+        }
+        running.reset(window_values, SEPARATION_KERNEL);
+        harmonic[bin][0] = running.median();
+        for (long f = 1; f < frames; f++) {
+            harmonic[bin][f] = running.slide(clamped(row, f - 1 - half, frames), clamped(row, f + half, frames));
+        }
+    }
+    std::vector<double> column(read_top);
+    for (long f = 0; f < frames; f++) {
+        for (int bin = 0; bin < read_top; bin++) {
+            column[bin] = magnitude[bin][f];
+        }
+        for (int k = 0; k < SEPARATION_KERNEL; k++) {
+            window_values[k] = clamped(column, k - half, read_top);
+        }
+        running.reset(window_values, SEPARATION_KERNEL);
+        for (int bin = 0; bin < top; bin++) {
+            const double percussive =
+                bin == 0 ? running.median()
+                         : running.slide(clamped(column, bin - 1 - half, read_top),
+                                         clamped(column, bin + half, read_top));
+            const double h = harmonic[bin][f];
+            spectra[f][bin] *= (h * h) / (h * h + percussive * percussive + EPS);
+        }
+        for (int bin = top; bin < bins; bin++) {
+            spectra[f][bin] = 0.0;
+        }
+    }
+    timer.lap("sep medians");
+
+    // Inverse STFT: overlap-add of the windowed inverse transforms, divided by the summed squared
+    // window, which is scipy's `istft` and reconstructs the input exactly when nothing was masked.
+    std::vector<double> out(padded.size(), 0.0);
+    std::vector<double> norm(padded.size(), 0.0);
+    for (long f = 0; f < frames; f++) {
+        for (int bin = 0; bin < bins; bin++) {
+            buffer[bin] = spectra[f][bin];
+        }
+        for (int bin = bins; bin < n; bin++) {
+            buffer[bin] = std::conj(spectra[f][n - bin]);
+        }
+        inverse_fft_in_place(buffer);
+        double* target = out.data() + f * hop;
+        double* weight = norm.data() + f * hop;
+        for (int i = 0; i < n; i++) {
+            target[i] += buffer[i].real() * window[i];
+            weight[i] += window[i] * window[i];
+        }
+    }
+    std::vector<double> separated(static_cast<size_t>(length), 0.0);
+    for (long i = 0; i < length; i++) {
+        const double w = norm[i + pad];
+        separated[i] = w > 1e-10 ? out[i + pad] / w : 0.0;
+    }
+    timer.lap("sep istft");
+    std::vector<float> result = as_float(upsample(separated, factor), frame_count);
+    timer.lap("sep upsample");
+    return result;
 }
 
 }  // namespace gsv

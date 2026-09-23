@@ -72,6 +72,15 @@ struct ChordEvidence {
 ChordEvidence analyse_chords(const std::vector<float>& samples, int channels, int sample_rate,
                              bool want_diagnostics = false);
 
+/// The same audio as mono with its percussive part masked out, at `sample_rate` — what libKeyFinder
+/// reads instead of the mix. A kick, a snare and a hi-hat are broadband, so every hit adds energy
+/// to all twelve pitch classes of every octave it touches: a floor under the chromagram that the
+/// tone profile has to see past. Removing it, with the profile refitted to separated audio, is worth
+/// 1.5 points of note-set and 4.2 of tonic at twelve seconds of music (see the constants above
+/// `harmonic_signal` in chord_frontend.cpp). The chord evidence is still read from the original
+/// audio: its weights were fitted there, and it runs its own separation.
+std::vector<float> harmonic_signal(const std::vector<float>& samples, int channels, int sample_rate);
+
 }  // namespace gsv
 
 #endif  // GSV_CHORD_FRONTEND_H
