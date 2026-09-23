@@ -324,6 +324,11 @@ when wrong).
 
 ## The analyzer stops listening at ~41 seconds
 
+**Withdrawn — see "The ceiling that was not there" at the end of this document. The measurement
+below does not reproduce against the binary this tree builds, and the cap it justified was
+costing 2.9 points of note-set and 4.6 of tonic.** It is kept as written because the section
+after it reasons from it.
+
 Found while chasing an anomaly in `bassSegments`, and reproducible with `--hop-energy`:
 libKeyFinder fills at most **44 hops, about 41 seconds**, however much audio it is given.
 10s→11 hops, 20s→22, 40s→44, 45s→44, 60s→44. Confirmed with music rather than silence — splice
@@ -335,6 +340,12 @@ latency curve: accuracy flattening after 45 seconds is not the music saturating,
 refusing more. Nobody knows whether more audio would help, because it cannot be given any.
 
 ## Accuracy against how much it has heard — on real audio
+
+**Superseded — see "The ceiling that was not there". Re-measured out of fold on 396 clips, this
+curve is far too flat at the short end (20s reads 39.3% note-set, not 68.3%) and it does not stop
+climbing at 45s.** The 2026-09-19 table below was measured in fold on 60 clips with profiles that
+had been fitted on them, which flatters a short span most: the profile has already memorised the
+song, so it needs less of it.
 
 The synthetic curve said everything past 20 seconds was free. Real audio disagrees:
 
@@ -950,3 +961,560 @@ still shipped broken twice — once unreachable, once leaking. Neither failure w
 accuracy numbers, in 88 Rust tests, or in 258 frontend tests, because all of them assert on the
 engine's verdict and both bugs were in what the *readout* did with it. The `why:` field of
 `neck.follow` was the only thing that showed either one.
+
+# The ceiling that was not there (2026-09-21, later)
+
+Prompted, like the section above, by one recording rather than a test: a full pass of "You've Got
+a Friend in Me" (E♭ major), which the engine gets right — 27 of 27 live cycles, from the first one
+at 20 seconds. Nothing to debug. The finding is in a number that was printed alongside the right
+answer and should not have been possible.
+
+## `hops: 137`
+
+The whole-song run reported **137 hops for 127 seconds** of audio. This document says libKeyFinder
+fills at most 44 hops, about 41 seconds, however much it is given, and `MAX_ANALYSIS_SPAN_SECONDS`
+was set to 44 because of it — with a comment saying the constant must not grow.
+
+Re-measured across eleven lengths with `--hop-energy`, the flag the original claim was made with:
+
+| audio | 10s | 20s | 30s | 40s | 44s | 45s | 50s | 60s | 80s | 100s | 127s |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| hops | 11 | 22 | 33 | 44 | 48 | **49** | 54 | **65** | 87 | 108 | 137 |
+
+Linear, 1.08 hops per second, no knee. The rows up to 40s match the original exactly; every row
+past it diverges. Hops 44–50 of the 127-second run carry full energy (~150k), the same magnitude
+as hops 0–5.
+
+The document's own decisive test now goes the other way too. Splicing 30 seconds of E♭ major onto
+30 seconds of the same recording shifted to G major returned **G minor** — a blend of the two —
+where the original test reported the first song's verdict:
+
+```
+first 30s alone    D# major   hops=33
+second 30s alone   G  major   hops=33
+spliced            G  minor   hops=65
+```
+
+`git log -S finalChromagram` shows the chromagram path has not been touched since the commit that
+recorded the claim, and `libkeyfinder.so.2` predates it. So this is a correction to a measurement,
+not a regression in the library — and the conclusion drawn from it ("nobody knows whether more
+audio would help, because it cannot be given any") is what actually cost something.
+
+## What the audio was worth
+
+`scripts/key-research/exp_span.py`, out of fold. The profile and the tonic stage are refitted
+inside every fold **at the span being tested**, so the long arm is not sitting closer to its own
+fitting condition than the short one — which is exactly the trap the first attempt at this fell
+into. 396 clips / 337 songs, 6-fold split by song, 8 random partitions:
+
+| trailing audio | note-set | tonic |
+|---|---|---|
+| last 20s | 39.3% ± 0.4 | 28.7% ± 0.7 |
+| last 30s | 60.9% ± 0.8 | 48.6% ± 1.3 |
+| **last 44s — what shipped** | **69.3% ± 0.7** | **58.2% ± 1.0** |
+| last 52s | 71.0% ± 0.8 | 61.7% ± 0.7 |
+| **full ~58s** | **72.2% ± 0.7** | **62.8% ± 0.8** |
+
+**+2.9 note-set and +4.6 tonic**, four and five standard deviations clear of the spread.
+
+Measured the other way as a cross-check — the shipped binary and the shipped re-ranker end to end,
+over 666 clips from all four captures — the same move reads +5.9 and +6.1, paired **+48/−9** and
+**+56/−15**. That arm is in-sample, and the gap between the two numbers is the size of the
+flattery. **+2.9 / +4.6 is the number to quote.**
+
+The truncation is a slice of the cached per-hop chromagram rather than a re-analysis of a shorter
+wav, so it was checked against the real thing: cache and CLI agree on 25/25 clips at 44s
+(`exp_span.py --verify`).
+
+## Nothing was captured to make this work
+
+`ROLLING_BUFFER_SECONDS` is 60 and the engine already calls `latest_samples(60)`. The cap was
+discarding a quarter of audio the app had already recorded, on every cycle, for as long as it was
+open. The fix is one constant.
+
+Latency is not what 44 was buying either: the CLI takes 0.25s on a 44-second buffer and 0.34s on a
+60-second one, against an `ANALYZE_EVERY_MS` of 3000.
+
+## Why 60 and not more
+
+Two limits on the evidence, not a tuning. The corpus is 58-second captures, so the table above
+cannot speak past ~58 — and the one probe that can says stop. Of the songs captured twice, 59 have
+both a 0:45 and a 2:00 take; concatenating their chromagrams gives ~116 seconds of evidence about
+one key:
+
+| | note-set | tonic |
+|---|---|---|
+| one capture, last 44s | 77.3% ± 1.6 | 63.8% ± 2.7 |
+| one capture, full ~58s | **78.0% ± 1.6** | 64.2% ± 2.6 |
+| both captures, ~116s | 75.2% ± 3.6 | 66.3% ± 3.3 |
+
+Flat to worse on note-set inside a spread twice as wide, at n=59. That is not contiguous audio and
+it does not settle the question; it is enough to say that raising the cap beyond what the app
+already holds is unmeasured. **Doing it needs a corpus of longer captures first.**
+
+## What it looks like on the song that started it
+
+Illustration, n=1, not a measurement. The song is read correctly at both spans — but at 44 seconds
+the top-two gap drops under `RELATIVE_PAIR_COIN_FLIP_GAP` on 3 of 24 relative-pair cycles, so the
+readout hedges a root it has right. At 60 seconds the minimum gap rises from 0.0010 to 0.0022 and
+it never hedges. More audio buys separation as well as accuracy, which is what the calibration
+table in `key_detection.rs` would predict.
+
+## What is still wrong, and was not changed
+
+`REQUIRED_AUDIO_SECONDS` is 20, and the comment above it says twenty is "where the accuracy curve
+flattens, not a guess". The curve above says 20 seconds is **39.3% note-set** — the engine's worst
+measured operating point, and the moment the app starts deciding whether to assert a key.
+`MIN_READY_STREAK` of 4 pushes the first assertion out to roughly 32–36 seconds in practice, which
+is better, but the constant is justified by a number this measurement retires.
+
+Left alone deliberately: raising it trades time-to-first-answer for accuracy, `docs/KEY_LATENCY.md`
+records that trade being made on purpose, and nothing here measures what the new balance should
+be. It should be measured next, against this curve rather than the withdrawn one.
+
+# The gate nobody could measure (2026-09-22)
+
+Same capture as the section above, one screen further on. "You've Got a Friend in Me" is read
+**correctly** — E♭ major, every cycle from 55 seconds — and the readout says *"hedged, 35%"* for the
+rest of the song. The engine was right and never allowed to say so.
+
+Three attempts at that, two of them wrong, and the reason they were wrong is the finding.
+
+## Two things measured and rejected
+
+**The warm-up vote.** `decision_history` is written under `fresh_analysis` alone, so a reading the
+engine has labelled `warming_up` votes like any other. Gating it on `enough_audio` instead:
+
+```text
+                                      locks   median lock   locked right  right but mute
+every fresh cycle votes (shipped)       58%          32s            75%             18%
+the vote waits for the buffer gate      57%          36s            76%             19%
+```
+
+Four seconds slower for nothing. The reasoning was wrong about the capture too: only the first of
+the three A♯ readings was below the gate, and by the time the block mattered the 16-cycle horizon
+reached back only to *after* the gate opened.
+
+**The vote horizon.** `temporal_stability` is the share of `decision_history` agreeing with the
+current answer, so a correction should have to wait out the horizon. Swept 16 → 1, both corpora,
+**identical at every value** — including the degenerate 1, where the quantity can only be 0.0 or
+1.0. A knob that scores the same at 1 as at 16 is not connected to the outcome.
+
+That null result is what finally pointed at the right place.
+
+## The gate had never been reachable
+
+`live_gate` — thirteen conditions deciding whether the readout may stop hedging — sat inline in the
+engine's async loop. Every harness in the repository stopped at `decide_from_windows`, one step
+earlier. **No test had ever touched the decision the player actually feels**, which is the same
+lesson this document recorded a session ago and did not act on.
+
+It is now a pure function over `LiveGateInputs`, and `decide_cycles` mirrors the loop state around
+it: the contradiction machine, the cooldown, the repeat streak, the window vote. With that, asking
+what refuses is one run:
+
+```text
+273 real clips, shipped:   asserts 53%   median 48s   right when it asserts 78%   right but mute 21%
+
+  profile_disagreement      52  (19%)   <- the largest single blocker
+  relative_pair_ambiguity   21   (8%)
+  unstable_across_windows   17   (6%)
+  major_minor_conflict      10   (4%)
+  stable_tonics              9   (3%)
+  multiple_tonics            5   (2%)
+  repeated_key               1   (0%)
+```
+
+## What `profile_disagreement` was actually measuring
+
+Nothing it claimed to. The metric asks whether the **independent tone profiles disagree about one
+stretch of audio** — a NumPy-backend idea, where krumhansl and temperley each score the same window.
+
+libKeyFinder has one profile, and `key_detection.rs` reports every pass as `window_start_ms: 0` with
+`window_end_ms` set to however much buffer it read. `window_disagreement_metrics` keyed `by_window`
+on the **start alone**, so while the buffer was still growing every cycle fell into one bucket — and
+the engine changing its mind *over time* was scored as two profiles contradicting each other *at one
+instant*. Four passes over a growing buffer with one change of answer produce a ratio of **1.0**
+against a threshold of 0.38: not a near miss, a pegged meter.
+
+Keying on `(window_start_ms, window_end_ms)` keeps the NumPy meaning exactly — its two profiles
+still share a window — and separates passes that read different amounts of audio, which are
+different observations rather than a contradiction. `a_changed_mind_over_time_is_not_two_profiles_disagreeing`
+pins both halves.
+
+## What fixing it did
+
+```text
+                asserts   median   right when it asserts   right but mute
+  before            53%      48s                     78%              21%
+  after             64%      48s                     74%              15%
+```
+
+`profile_disagreement` disappears from the blocker list entirely. Per 100 clips: **+6 that now get
+a correct confident answer, +5 that now get a wrong one**, and **6 fewer** where the engine holds
+the right answer and never says so. Verdict accuracy is untouched at 71.4% / 65.9% — this changes
+certainty, never which key is chosen.
+
+**That trade is close to one-for-one and should be stated as such.** The bug fix is right on its own
+terms regardless: a metric cannot go on being read as evidence of something it is structurally
+unable to observe.
+
+## The caution it was providing by accident
+
+The old misfire did carry a real signal — *the engine changed its mind somewhere in the retained
+evidence* — under a wrong name. The honest version of that is `PRIMARY_KEY_REPEAT_MIN`, and it is
+worth exactly what the trade above is worth:
+
+| repeat_min | asserts | median | right when it asserts | right but mute |
+|---|---|---|---|---|
+| **7 (ships)** | **64%** | **48s** | 74% | **15%** |
+| 9 | 56% | 56s | **78%** | 19% |
+| 11+ | 0% | — | — | 63% |
+
+Nine buys back the accuracy the fix spent and costs eight seconds. Eleven and up collapse to zero,
+which is an artefact of a 58-second clip rather than a result — the streak plus `MIN_READY_STREAK`
+no longer fits in the audio available, and judging it needs longer captures.
+
+Shipping 7, unchanged: it is the same speed as before the fix with more correct answers reaching
+the player, and the neck draws the key either way — what moves is the confidence label. Anyone who
+would rather pay eight seconds for four points of assert-accuracy should move it to 9, and the
+number above is what that costs.
+
+# The readout was quoting a twelve-second guess (2026-09-22, later)
+
+The same capture again, a third session on it, and this time the fault is not in a gate. The
+player's complaint was simply that E♭ took too long to arrive. It did: **fifty-nine seconds** after
+pressing play, on a song that is 127 seconds long.
+
+The two sections above both assumed the analyzer spent those seconds undecided. It did not.
+
+## What libKeyFinder actually said
+
+Run the shipped CLI over the same capture at the spans the engine actually hands it — a buffer
+growing one four-second hop per cycle:
+
+```text
+  12s   A# major   strength 0.693   <- the highest strength of the whole run
+  16s   D# major            0.601
+  20s   D# major            0.622
+  24s   D# major            0.628
+  ...   D# major       0.62..0.66   every pass to 60s, never anything else
+```
+
+**The analyzer had the right answer at sixteen seconds and never changed its mind.** Every second
+after that was the consensus layer overruling it with a reading from twelve seconds of audio.
+
+## One bucket, and the wrong tenant in it
+
+`window_winners_from_results` groups results by `window_start_ms` and keeps the highest
+`strength`-derived score in each bucket. That grouping is right for the NumPy backend, which scores
+one window with several independent tone profiles: those really are competing descriptions of one
+stretch of audio, and fit is the right way to choose between them.
+
+libKeyFinder is not that. `key_detection.rs` reports every pass as `window_start_ms: 0` with
+`window_end_ms` set to however much buffer it read, so until the buffer saturates at
+`MAX_ANALYSIS_SPAN_SECONDS` **every cycle falls into the same bucket** — and "highest strength
+wins" quietly means *the pass that read the least audio can hold the readout*, for as long as it
+stays inside `AnalysisEvidence::recent`'s 36-second horizon.
+
+That is what happened. The 12-second A♯ pass outscored every E♭ pass after it, held the answer from
+14 seconds of buffer to 55, and then lost — not because new audio disagreed with it, but because it
+aged out of the recency horizon. The switch the logs show at 55 seconds is the sound of a stale
+window being dropped.
+
+This is the same defect the section above fixed in `window_disagreement_metrics`, one function
+further down, and it was missed because that fix was aimed at a *metric*. The same wrong grouping
+was also picking the winner.
+
+Strength is a correlation fit, not a measure of how much evidence a pass had, and a short buffer
+sitting on one chord fits a profile beautifully. The span curve in "Why 60 and not more" prices the
+real relationship out of fold: 20s of audio scores 39.3% note-set, 44s scores 69.3%, 60s scores
+72.2%. Among nested spans the longest is simply the best reading available; the shorter ones are
+its own history, not its rivals.
+
+```
+-  if candidate.score > entry.score {
++  let supersedes = candidate.window_end_ms > entry.window_end_ms
++      || (candidate.window_end_ms == entry.window_end_ms && candidate.score > entry.score);
++  if supersedes {
+```
+
+Equal spans still fall through to strength, so the NumPy backend's profile contest is untouched.
+`profiles_scoring_the_same_window_are_still_settled_by_strength` pins that half;
+`the_pass_that_heard_more_audio_wins_the_window` pins the other.
+
+## What it does to the capture that prompted it
+
+Replayed through `key_engine_time_to_answer_curve` on the capture itself, which is n=1 and an
+illustration rather than a measurement — but it is the exact failure the player reported:
+
+| heard | before | after |
+|---|---|---|
+| 12s | A♯ | A♯ |
+| 16s | A♯ | **E♭** |
+| 20s–44s | A♯, and *settled* | E♭, settled |
+| 48s | E♭ | E♭ |
+| 60s | E♭ | E♭ |
+
+Note the middle rows. Before the fix the consensus was not merely slow, it was **willing**: at the
+shipped buffer gate and streak `lock_point` locks at 32 seconds with the tonic wrong — the replay
+asserts B♭ confidently. Live, `live_gate` refused it for other reasons, which is the only reason
+this shipped as a delay rather than as a wrong answer stated with certainty.
+
+Through the live gate, same capture, `EndpointLoopback`:
+
+```text
+  before   never asserts in 127 seconds   (the song ends on "hedged, 35%")
+  after    asserts E♭ major at 56s        right
+```
+
+## What is left of the 56 seconds, and why it was not touched
+
+The remaining wait is not this defect. From the first correct reading at 16s the gate needs
+`PRIMARY_KEY_REPEAT_MIN` (7) identical primaries and then `MIN_READY_STREAK` (4) cycles it allows —
+eleven cycles, 44 seconds, and the arithmetic lands exactly on the measured 56s. The single stale
+A♯ vote in `decision_history` is no longer what binds, which is consistent with the horizon sweep
+in the section above finding nothing.
+
+Those two streaks stack: both are "the same answer N times running", counted twice in different
+places, and nothing has ever measured them jointly. That sweep is the next piece of work here. It
+is not a bug fix and should not be made as one.
+
+## What it cost, on 273 real clips
+
+Same harness and same corpus as the section above, so the rows are comparable:
+
+```text
+                        asserts   median   right when it asserts   right but mute
+  before                    64%      48s                     74%              15%
+  after                     58%      48s                     78%              21%
+```
+
+Per 100 clips that is **−2.2 correct confident answers and −3.8 wrong ones**, with 6 more clips
+where the engine holds the right key and will not say so. Speed to the *assertion* is unchanged at
+48 seconds; what moved is how many clips get there.
+
+**That is a real cost and is not what the fix was for.** What it was for is the key on the neck,
+which this harness does not score at all — the fretboard is redrawn every cycle whether the readout
+hedges or not, so for a player the reading at 16 seconds matters more than the label at 48.
+
+Where the doubt went:
+
+```text
+                            before   after
+  unstable_across_windows       24       4     <- the windows stopped contradicting each other
+  stable_tonics                 14      36     <- and decision_history stopped being uniform
+  relative_pair_ambiguity       44      44
+  major_minor_conflict          10      10
+  repeated_key                   2       8
+```
+
+The doubt did not appear; it moved, and it is the *same* doubt seen honestly. The old winner froze
+the consensus on one early reading, so `decision_history` was uniform by construction and
+`stable_tonics` almost never fired. Now the history holds what the analyzer actually said over the
+minute, and its 16-cycle window — needing 14/16 to pass `stable_tonics` and 15/16 to pass
+`endpoint_conservative_ok` — is what the clips fail on.
+
+The obvious suspicion — that this also withdraws the horizon null result above, because "swept
+16 → 1, identical at every value" had been measured on a consensus that could not vary — was worth
+re-testing and is answered below. It does not.
+
+## The number the gate harness cannot see: what is on the neck
+
+The fretboard is redrawn from `primary_key` every cycle, hedged or not, so the reading the player
+actually solos over is the winner's key — not the assertion. During the growing-buffer phase there
+is exactly one winner under either policy, which makes the two arms replayable from a single set of
+analyzer runs: `scripts/key-research` conventions, 273 real clips, both policies scored off the
+same CLI verdicts (`the_pass_that_heard_more_audio_wins_the_window` is the unit-level version of
+the same claim, and the replay reproduces the Rust harness exactly on the capture above).
+
+| heard | note-set before | note-set after | tonic before | tonic after |
+|---|---|---|---|---|
+| 12s | 64.8% | 64.8% | 55.3% | 55.3% |
+| 16s | 65.6% | 66.7% | 56.4% | 57.5% |
+| 24s | 65.2% | 65.9% | 57.1% | 59.3% |
+| 32s | 65.2% | **70.7%** | 57.9% | **63.4%** |
+| 40s | 65.2% | 70.7% | 58.2% | 64.5% |
+| **44s** | 65.2% | **71.8%** | 58.2% | **65.9%** |
+| 48s | 66.7% | 71.8% | 60.1% | 65.9% |
+| 56s | 69.2% | 71.4% | 62.6% | 65.2% |
+
+**The "before" column is flat.** 64.8% at twelve seconds, 65.2% at forty-four: three quarters of a
+minute of additional audio bought the neck nothing, because the winner had been decided at twelve
+seconds and every pass after it was discarded. The slow climb from 48s on is not learning either —
+it is stale passes finally aging out of `AnalysisEvidence::recent`'s horizon.
+
+The "after" column reaches **71.8% / 65.9% at forty-four seconds**, which is the whole-clip
+scoreboard figure (71.4% / 65.9%) to within a clip. The live engine now converges on the accuracy
+its own analyzer has, instead of plateauing six points under it forever.
+
+**+6.6 note-set and +7.7 tonic at 44 seconds**, on the quantity the player plays over. Set against
+the 6 points of assert rate in the section above, this is not a close trade — and the 12s row
+being identical in both arms is the control: with one pass in the buffer the policies cannot
+differ, and they do not.
+
+## The horizon is still inert, and now that means something
+
+Re-swept on the fixed consensus, 273 real clips, at the shipped `PRIMARY_KEY_REPEAT_MIN`:
+
+| horizon | asserts | median | right when it asserts | right but mute |
+|---|---|---|---|---|
+| **16 (ships)** | **58%** | **48s** | **78%** | **21%** |
+| 12 | 58% | 48s | 78% | 21% |
+| 9 | 58% | 48s | 78% | 21% |
+| 6 | 60% | 48s | 76% | 20% |
+| 4 | 60% | 48s | 76% | 20% |
+| 2 | 60% | 48s | 76% | 20% |
+
+Identical from 16 down to 9; below that, two points of assert rate for two points of accuracy, and
+the median never moves. Both capture modes agree to the clip.
+
+The prediction in the section above was wrong and is left standing as written. The reasoning was
+sound — a knob over a quantity that cannot vary must read as inert, the quantity now varies,
+therefore the knob should come alive — and the measurement says it does not. `stable_tonics` blocks
+36 clips and **narrowing the window it reads does not unblock them**, which means those clips are
+not "one stale vote away"; they alternate tonics at every width. What binds after that is
+`MIN_READY_STREAK`: a shorter horizon lets individual cycles through the gate without producing
+four in a row.
+
+So the six points of assert rate are not recoverable here, and `HISTORY_HORIZON` stays at 16 for
+the second time — but for a different reason than last time. It is not that the knob is
+disconnected from a frozen consensus; it is that the width of the memory is not what those clips
+fail on. The next thing to price is the two streaks stacking, which is where the evidence now
+points and which nothing has measured jointly.
+
+# A third of every measurement was silence (2026-09-22, later still)
+
+Found by a number that a working classifier cannot produce. An experiment asked whether the tone
+profile, fitted on whole clips, reads a short buffer worse than one fitted at that length — and the
+"16-second buffer" arm scored **13.0% note-set**, which is not a bad score, it is the score of a
+constant answer. Nothing was wrong with the experiment. The sixteen seconds contained no music.
+
+## The corpus
+
+`build-real-corpus.py` starts `parecord` on a private null sink, sleeps for `--duration`, and
+stops. The recorder is honest; the playback is not — it stops well before the sixty seconds are up
+and the recorder goes on writing an empty monitor. Measured over all four captures by
+`scripts/key-research/trim_corpus.py`:
+
+| capture | clips | file | music | cut |
+|---|---|---|---|---|
+| t45 | 64 | 58.3s | 41.0s | 17.3s |
+| t120 | 64 | 58.1s | 39.5s | 18.6s |
+| ext | 277 | 58.0s | 41.2s | 17.0s |
+| ext120 | 277 | 58.0s | 40.0s | 18.1s |
+
+**Every clip in the corpus is about 70% music and 30% digital silence, at the end.** The p10 is
+38 seconds of music, so this is not a few bad captures; it is every one of them.
+
+Nothing about the live app has this shape: its buffer is sixty seconds of a playing song. So this
+is a fault in the instrument, not in the engine — which is worse in one way, because every number
+in this document came off that instrument.
+
+## What it does not touch
+
+Two checks first, because the alarming reading of this is "every fitted constant is wrong".
+
+* **The classifier replication still holds**: `verify_classifier.py` on the trimmed corpus prints
+  **396/396 identical**. The trust anchor is unaffected.
+* **The profile fit is unaffected too.** `aggregate_chromagram` divides by a `mean` computed over
+  all hops while summing only the loud ones, so a clip that is 30% silence hands `log1p` an input
+  inflated by about 1.4x — and where a compression sits on its curve is worth two points
+  elsewhere in this document. Measured rather than assumed (`exp_trim_skew.py`, 396 clips, 6
+  partitions, every arm scored on the trimmed clips):
+
+| | note-set | tonic |
+|---|---|---|
+| profile fitted on the captures as recorded | 74.0% ± 0.6 | 65.1% ± 0.7 |
+| profile fitted on the music only | 74.0% ± 0.5 | 65.2% ± 0.8 |
+| fitted and scored as recorded (every published number) | 74.0% ± 0.5 | 65.5% ± 0.6 |
+
+Identical to the clip. The silent hops contribute `log1p(0)` to every band, and what is left is a
+rescaling that cosine similarity ignores. **The shipped profiles do not need refitting.**
+
+## What it does touch: anything counted in seconds
+
+`exp_span.py` truncates from the end of a clip, so "the last 20 seconds" was three seconds of
+music behind seventeen of silence. That is the entire reason the published span curve read as a
+cliff, and the cliff was the evidence for the strongest claim this document makes about latency:
+that twenty seconds is "the engine's worst measured operating point".
+
+Re-measured on the trimmed corpus, same method — profile and tonic stage refitted inside every
+fold at the span being tested, 396 clips, 6-fold by song, 6 partitions:
+
+| music heard | note-set | tonic | *published as* |
+|---|---|---|---|
+| 8s | 55.1% ± 0.5 | 44.4% ± 0.5 | — |
+| 12s | 60.5% ± 0.4 | 47.1% ± 1.0 | — |
+| 16s | 62.2% ± 0.3 | 49.9% ± 1.0 | — |
+| **20s** | **66.1% ± 0.4** | **54.3% ± 0.7** | **39.3% / 28.7%** |
+| 24s | 68.2% ± 0.6 | 56.1% ± 0.7 | — |
+| 30s | 70.0% ± 0.5 | 58.9% ± 0.5 | 60.9% / 48.6% |
+| full clip (~41s of music) | 73.8% ± 0.7 | 64.4% ± 1.2 | 72.2% / 62.8% |
+
+**Twenty seconds of music is 66.1% note-set, not 39.3%.** The engine is at three quarters of its
+final accuracy after *eight* seconds and at ninety percent of it after twenty. The retraction
+matters because that curve is quoted above as the reason `REQUIRED_AUDIO_SECONDS = 20` is
+indefensible; it is not indefensible, it is roughly where the curve has covered nine tenths of its
+range. There is still no knee — the line climbs from 8s to 41s without one — so the constant is a
+choice about how long to wait, not a discovery.
+
+The long arm moves too, in the direction that matters for the cap: the trimmed clips hold only ~41
+seconds of music, and accuracy is **still climbing** there (+3.8 note-set from 30s to 41s). The
+app's buffer is sixty. So `MAX_ANALYSIS_SPAN_SECONDS = 60` is, if anything, conservative — and
+answering that properly still needs captures that contain sixty seconds of music.
+
+## The chord features were the real suspect, and they are clear too
+
+The tone profile can be argued out of trouble by scale invariance. The chord front end cannot: its
+features are shares of a clip's *duration* — `time_on_tonic`, `time_diatonic`, `changes_into_tonic`
+— so a denominator that is 30% silence deflates them, and the weights that ship were fitted on
+those numbers and applied live to a buffer with none in it. A train/serve skew, on the one model
+in the engine whose whole job is to break ties.
+
+`exp_chords_trim.py`, same folds and the same trimmed chromagram in every arm, the only difference
+being which chord cache the eighteen features came from:
+
+| | note-set | tonic |
+|---|---|---|
+| profile alone, no tie-break | 74.0% ± 0.6 | 65.1% ± 0.7 |
+| \+ tie-break, chord features from the captures (what ships) | **74.5% ± 0.2** | **66.8% ± 0.8** |
+| \+ tie-break, chord features from the music only | 74.1% ± 0.4 | 66.1% ± 0.7 |
+
+**The skew costs nothing, and removing it is if anything slightly worse** — inside a standard
+deviation either way, so the honest reading is that it does not matter. No refit is needed here
+either.
+
+What the table does say, incidentally, is that measured under live-like conditions the chord
+tie-break is worth about **+0.1 note-set and +1.0 tonic**, below even the +0.7/+1.7 the corpus
+doubling cut it to. It keeps earning its place on tonic and has never earned one on note-set.
+
+## How to work with it
+
+`trim_corpus.py` writes a `-trim` copy of each capture; `GSV_CORPUS_SUFFIX=-trim` points the whole
+harness at it, cache names included, so the two cannot be confused on disk. The captures
+themselves are left alone — they are hours of downloads and the trimming is cheap to redo.
+
+**Re-capturing is the real fix** and it is worth doing: 45% more music per clip, and a corpus that
+can finally answer whether the buffer should hold more than sixty seconds.
+
+## And the profile does not want a short-buffer twin
+
+With the span curve honest, the obvious follow-on is that the app spends its first forty seconds
+applying a profile fitted on whole clips to a buffer nothing like one. `exp_span_profile.py` asks
+whether that costs anything: three arms per buffer length — fitted on whole clips, fitted at the
+length being read, and fitted on every length at once — all out of fold.
+
+| buffer | fit on whole clips | fit at the same span | fit on every span |
+|---|---|---|---|
+| 16s | **62.1% / 52.6%** | 52.0% / 40.6% | 62.1% / 53.0% |
+| 24s | **68.2% / 57.8%** | 66.6% / 57.3% | 67.9% / 57.8% |
+| 32s | **71.3% / 62.5%** | 71.0% / 62.6% | 71.0% / 62.5% |
+| 44s | 73.5% / 64.8% | 73.6% / 64.7% | 73.2% / 64.3% |
+| full | **73.9% / 65.0%** | 73.9% / 65.0% | 73.4% / 64.5% |
+
+**The whole-clip fit wins at every length, and by ten points at sixteen seconds.** Matching the
+fitting condition to the serving condition is the intuition, and it is wrong here for a reason
+worth keeping: a profile is an average over the audio it was given, so fitting it on short clips
+does not teach it about short clips, it just gives it less to average. One pair, fitted on as much
+audio as exists, reads every buffer length better than a specialist does.

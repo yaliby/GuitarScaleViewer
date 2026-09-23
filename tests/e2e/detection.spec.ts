@@ -169,6 +169,40 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
+test("one weaker reading of other notes does not redraw the neck, and a second one in a row does", async ({
+  page,
+}) => {
+  /* What `neckHold` promises the player, through the real hooks: a single reading of different
+     notes that the engine rates *less* likely than what is on the neck leaves the neck — and the
+     card — where they are. The analyzer naming the new notes twice running moves both. */
+  await page.goto("/");
+  await page.getByRole("button", { name: "Live Jam", exact: true }).click();
+  const emit = (over: Record<string, unknown>) =>
+    page.evaluate((next) => {
+      const host = window as any;
+      host.testDetection = { ...host.testDetection, ...next };
+      host.testEmit("detected-key-update", host.testDetection);
+    }, over);
+
+  await emit({
+    evidenceId: 2,
+    ambiguous: false,
+    state: "likely_key",
+    reason: null,
+    noteSetEvidence: { confidence: 0.86, noteSetRun: 3, keyRun: 3 },
+  });
+  await expect(page.getByTestId("jam-key")).toHaveText("D");
+
+  const fMajor = { primaryKey: "F", primaryScale: "major", displayName: "F major", ambiguous: true, state: "ambiguous" };
+  await emit({ ...fMajor, evidenceId: 3, reason: "note_set_unconfirmed:p=0.52", noteSetEvidence: { confidence: 0.52, noteSetRun: 0, keyRun: 0 } });
+  await expect(page.locator(".lab-meter-head")).toContainText("D major");
+  await expect(page.getByTestId("jam-key")).toHaveText("D");
+
+  await emit({ ...fMajor, evidenceId: 4, reason: "note_set_unconfirmed:p=0.55", noteSetEvidence: { confidence: 0.55, noteSetRun: 1, keyRun: 1 } });
+  await expect(page.getByTestId("jam-key")).toHaveText("F");
+  await expect(page.locator(".lab-meter-head")).toContainText("F major");
+});
+
 test("an unsure reading still reaches the neck, labelled unsure", async ({ page }) => {
   // The fixture detection is flagged ambiguous with readyToApply false. The old pipeline held
   // that back behind a button; a player with both hands on a guitar never pressed it. It is
@@ -179,6 +213,45 @@ test("an unsure reading still reaches the neck, labelled unsure", async ({ page 
     page.getByRole("button", { name: "Try suggestion", exact: true }),
   ).toHaveCount(0);
   await expect(page.getByLabel("Auto follow stable keys")).toHaveCount(0);
+});
+
+test("the Apply gate holds a reading under it, and takes it when the slider comes down", async ({
+  page,
+}) => {
+  /* The gate a player sets on the deck is the whole answer to "how sure do you have to be".
+     The fixture reading is hedged, which the pipeline prices at 35 (CERTAINTY_PCT.hedged), so a
+     gate at 70 has to stop it — and stop it visibly, in the rectangles it is set against. */
+  await page.goto("/");
+  await page.getByRole("button", { name: "Live Jam", exact: true }).click();
+  await expect(page.getByTestId("jam-key")).toHaveText("D");
+
+  const gate = page.getByRole("slider", { name: "Apply confidence gate" });
+  await gate.fill("70");
+  await expect(page.locator(".lab-gate-note")).toContainText("10 of 14 bars");
+  await expect(page.locator(".lab-gate-note")).toContainText("this reading is short");
+  /* Five lit by the reading, five more outlined because the gate is asking for them. */
+  await expect(page.locator(".lab-meter [data-owed]")).toHaveCount(5);
+  await page.screenshot({
+    path: "docs/review-evidence/apply-gate-desktop.png",
+    fullPage: true,
+  });
+
+  await page.evaluate(() => {
+    const host = window as any;
+    host.testDetection = {
+      ...host.testDetection,
+      primaryKey: "G",
+      displayName: "G major",
+      evidenceId: 4,
+    };
+    host.testEmit("detected-key-update", host.testDetection);
+  });
+  await expect(page.locator(".lab-meter-head")).toContainText("G major");
+  await expect(page.getByTestId("jam-key")).toHaveText("D");
+
+  await gate.fill("35");
+  await expect(page.getByTestId("jam-key")).toHaveText("G");
+  await expect(page.locator(".lab-gate-note")).toContainText("this reading is through");
 });
 
 test("verified flat keys apply correctly and a held neck survives the next library track", async ({

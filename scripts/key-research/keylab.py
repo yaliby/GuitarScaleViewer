@@ -28,15 +28,24 @@ from typing import Callable, Iterable, Sequence
 import numpy as np
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-CLI = os.path.join(REPO, "src-tauri/sidecars/libkeyfinder_cli/build/gsv-libkeyfinder-cli")
+# `GSV_CLI` points the harness at another build of the analyzer — a candidate being measured
+# before it replaces the shipped one, which is the only binary the live app ever runs.
+CLI = os.environ.get("GSV_CLI") or os.path.join(REPO, "src-tauri/sidecars/libkeyfinder_cli/build/gsv-libkeyfinder-cli")
 CLI_ENV = dict(os.environ, LD_LIBRARY_PATH=os.path.dirname(CLI))
-CACHE = os.environ.get("GSV_CHROMA_CACHE", "/tmp/gsv-chroma-cache.npz")
+
+# Which copy of the corpus to read. `trim_corpus.py` writes a `-trim` copy of each capture with
+# the recorder's trailing silence cut off — the median clip is a 58-second file holding 41 seconds
+# of music — and everything measured in seconds of audio means something different depending on
+# which copy it ran against. The suffix is carried into the cache name so the two cannot be
+# confused for each other on disk.
+CORPUS_SUFFIX = os.environ.get("GSV_CORPUS_SUFFIX", "")
+CACHE = os.environ.get("GSV_CHROMA_CACHE", f"/tmp/gsv-chroma-cache{CORPUS_SUFFIX}.npz")
 
 # The three captures that make up the corpus. Each is a directory of wavs plus a manifest.
 CORPUS_DIRS = [
-    ("t45", "/tmp/gsv-real-corpus"),
-    ("t120", "/tmp/gsv-corpus-t120"),
-    ("ext", "/tmp/gsv-corpus-ext"),
+    ("t45", f"/tmp/gsv-real-corpus{CORPUS_SUFFIX}"),
+    ("t120", f"/tmp/gsv-corpus-t120{CORPUS_SUFFIX}"),
+    ("ext", f"/tmp/gsv-corpus-ext{CORPUS_SUFFIX}"),
 ]
 
 NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
