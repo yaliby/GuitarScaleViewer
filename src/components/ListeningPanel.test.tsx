@@ -37,6 +37,7 @@ describe("ListeningPanel reports the pipeline's decision", () => {
     notesSettled: false,
     tonicSettled: true,
     relativeAlternative: null,
+    noteSetP: null,
     trackIdentity: "numb",
     why: "engine_only",
     ...over,
@@ -51,6 +52,7 @@ describe("ListeningPanel reports the pipeline's decision", () => {
         fused={fusedKey}
         applyDetected={true}
         onToggleApply={vi.fn()}
+        applyThreshold={0}
         onRetry={vi.fn()}
         root="G"
         scale="major"
@@ -64,6 +66,7 @@ describe("ListeningPanel reports the pipeline's decision", () => {
         notesSettled: true,
         tonicSettled: false,
         relativeAlternative: "E minor",
+        noteSetP: null,
       }),
     );
     expect(screen.getByTestId("explore-key-alt").textContent).toContain("E minor");

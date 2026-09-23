@@ -51,7 +51,12 @@ import {
   type Favorite,
   type PracticeSession,
 } from "./practice/session";
-import { fuseKey, shouldRevise, type FusedKey } from "./services/keyFusion";
+import {
+  clearsApplyGate,
+  fuseKey,
+  shouldRevise,
+  type FusedKey,
+} from "./services/keyFusion";
 import {
   SCALE_TYPES_ORDERED,
   SCALE_TYPE_LABELS,
@@ -162,6 +167,8 @@ export default function App() {
   /* The key the pipeline put on the neck, kept so the revision margin has something to beat. */
   const [neckKey, setNeckKey] = useState<FusedKey | null>(null);
   const prevApplyRef = useRef(applyDetected);
+  /* A "follow the song again" the gate has not let through yet. See the effect that reads it. */
+  const applyPendingRef = useRef(false);
   const [selectedChord, setSelectedChord] = useState<number | null>(null);
   const [voicingIndex, setVoicingIndex] = useState(0);
   const [playbackMode, setPlaybackMode] = useState<PlaybackMode>("scale");
@@ -376,18 +383,33 @@ export default function App() {
       }),
     [cloud.cloudHit, cloud.trackIdentity, detectedKey, neckKey],
   );
-  /* The neck follows the song unless the player has switched Apply off. Nothing to arm, nothing
-     to press. Switching Apply back on reapplies the current fused key: a leftover or hand-edited
-     board must not keep showing G while the pipeline has already settled on A minor. */
+  /* The neck follows the song unless the player has switched Apply off, or set its gate above
+     what the pipeline can currently claim. Nothing to arm, nothing to press. Switching Apply back
+     on reapplies the current fused key: a leftover or hand-edited board must not keep showing G
+     while the pipeline has already settled on A minor. The gate is held to even then — Live Jam
+     sets it on the same session, and a gate that only one screen obeys is not a gate — so the
+     re-enable waits in `applyPendingRef` until a reading clears the gate rather than being spent
+     against one that cannot pass. */
   useEffect(() => {
-    const justEnabled = !prevApplyRef.current && applyDetected;
+    if (!prevApplyRef.current && applyDetected) {
+      applyPendingRef.current = true;
+    }
     prevApplyRef.current = applyDetected;
-    if (view === "jam" || !applyDetected) {
+    if (!applyDetected) {
+      applyPendingRef.current = false;
+      return;
+    }
+    if (view === "jam") {
       return;
     }
     if (!fused.root || !fused.scale) {
       return;
     }
+    if (!clearsApplyGate(fused, session.applyThreshold)) {
+      return;
+    }
+    const justEnabled = applyPendingRef.current;
+    applyPendingRef.current = false;
     if (!justEnabled && !shouldRevise(neckKey, fused)) {
       return;
     }
@@ -399,7 +421,16 @@ export default function App() {
     if (session.root !== root || session.scaleType !== fused.scale) {
       updateSession({ root, scaleType: fused.scale });
     }
-  }, [applyDetected, fused, neckKey, session.root, session.scaleType, updateSession, view]);
+  }, [
+    applyDetected,
+    fused,
+    neckKey,
+    session.applyThreshold,
+    session.root,
+    session.scaleType,
+    updateSession,
+    view,
+  ]);
 
   const audition = useCallback(
     (midi: readonly number[]) => {
@@ -908,6 +939,7 @@ export default function App() {
       fused={fused}
       applyDetected={applyDetected}
       onToggleApply={() => setApplyDetected((value) => !value)}
+      applyThreshold={session.applyThreshold}
       onRetry={() => void resetDetection()}
       root={session.root}
       scale={session.scaleType}
@@ -1101,6 +1133,7 @@ export default function App() {
                 scaleType={session.scaleType}
                 tuningId={session.tuningId}
                 capo={session.capo}
+                applyThreshold={session.applyThreshold}
                 onChange={updateSession}
                 menuOpen={sidebarOpen}
                 onToggleMenu={() => setSidebarOpen((open) => !open)}

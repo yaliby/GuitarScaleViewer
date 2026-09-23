@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CERTAINTY_PCT,
   REVISION_MARGIN_PCT,
+  clearsApplyGate,
   compareKeys,
   fuseKey,
   relativeHedge,
@@ -82,6 +83,7 @@ describe('fuseKey', () => {
         notesSettled: true,
         tonicSettled: false,
         relativeAlternative: 'E minor',
+        noteSetP: null,
         why: 'engine_relative_pair_unresolved',
       });
     });
@@ -109,6 +111,7 @@ describe('fuseKey', () => {
         notesSettled: false,
         tonicSettled: false,
         relativeAlternative: null,
+        noteSetP: null,
       });
     });
 
@@ -128,6 +131,7 @@ describe('fuseKey', () => {
         notesSettled: true,
         tonicSettled: false,
         relativeAlternative: 'G major',
+        noteSetP: null,
         trackIdentity: null,
         why: 'engine_relative_pair_unresolved',
       };
@@ -140,6 +144,7 @@ describe('fuseKey', () => {
           notesSettled: true,
           tonicSettled: false,
           relativeAlternative: 'G major',
+          noteSetP: null,
           why: 'relative_flip_resisted',
         });
       });
@@ -216,12 +221,115 @@ describe('fuseKey', () => {
       });
     });
 
+    /**
+     * With calibrated evidence the neck weighs one reading against what it already shows: by
+     * repetition for the other end of the same notes, by probability for different notes. See
+     * `neckHold` for the 666-clip replay behind both.
+     */
+    describe('one reading against the neck, when the engine sends its evidence', () => {
+      const evidence = (confidence: number, noteSetRun: number, keyRun: number) => ({
+        noteSetEvidence: { confidence, noteSetRun, keyRun },
+      });
+      const neck = (over: Partial<FusedKey>): FusedKey => ({
+        root: 'A',
+        scale: 'major',
+        displayName: 'A major',
+        source: 'detected',
+        certainty: 'lone',
+        confidencePct: 80,
+        notesSettled: false,
+        tonicSettled: true,
+        relativeAlternative: null,
+        trackIdentity: null,
+        noteSetP: 0.8,
+        why: 'engine_only',
+        ...over,
+      });
+      const Fsharp = { primaryKey: 'F#', primaryScale: 'minor', displayName: 'F# minor' };
+      const D = { primaryKey: 'D', primaryScale: 'major', displayName: 'D major' };
+
+      it('holds the root against the other end of its notes read once', () => {
+        const fused = fuse({ detected: engine({ ...Fsharp, ...evidence(0.9, 4, 0) }), held: neck({}) });
+        expect(fused).toMatchObject({
+          root: 'A',
+          scale: 'major',
+          certainty: 'tonic_open',
+          relativeAlternative: 'F# minor',
+          noteSetP: 0.8,
+          why: 'relative_flip_resisted',
+        });
+        expect(shouldRevise(neck({}), fused)).toBe(false);
+      });
+
+      it('moves the root once the other end has been read twice running', () => {
+        const held = neck({});
+        const fused = fuse({ detected: engine({ ...Fsharp, ...evidence(0.7, 4, 1) }), held });
+        expect(fused).toMatchObject({ root: 'F#', scale: 'minor', noteSetP: 0.7 });
+        expect(shouldRevise(held, fused)).toBe(true);
+      });
+
+      it('keeps the diagram against one reading of different notes that is less likely right', () => {
+        const held = neck({});
+        const fused = fuse({ detected: engine({ ...D, ambiguous: true, ...evidence(0.6, 0, 0) }), held });
+        // The card names what the neck shows rather than a key the neck is not drawing.
+        expect(fused).toMatchObject({ root: 'A', scale: 'major', certainty: 'lone', why: 'weaker_reading_resisted' });
+        expect(shouldRevise(held, fused)).toBe(false);
+      });
+
+      it('lets different notes in when they are at least as likely right', () => {
+        const held = neck({});
+        const fused = fuse({ detected: engine({ ...D, ...evidence(0.85, 0, 0) }), held });
+        expect(fused).toMatchObject({ root: 'D', scale: 'major', noteSetP: 0.85 });
+        expect(shouldRevise(held, fused)).toBe(true);
+      });
+
+      /**
+       * The case the old margin got wrong: the second reading of new notes is hedged, and a hedged
+       * 35% could never displace a lone 80% however long the analyzer went on naming it.
+       */
+      it('lets different notes in once they have been read twice running, however unsure', () => {
+        const held = neck({});
+        const fused = fuse({ detected: engine({ ...D, ambiguous: true, ...evidence(0.5, 1, 1) }), held });
+        expect(fused).toMatchObject({ root: 'D', certainty: 'hedged', noteSetP: 0.5 });
+        expect(shouldRevise(held, fused)).toBe(true);
+      });
+
+      it('never holds a new song back with the last one\'s notes', () => {
+        const held = neck({ trackIdentity: 'song-1' });
+        const fused = fuse({
+          detected: engine({ ...D, ambiguous: true, ...evidence(0.3, 0, 0) }),
+          held,
+          trackIdentity: 'song-2',
+        });
+        expect(fused).toMatchObject({ root: 'D', trackIdentity: 'song-2' });
+        expect(shouldRevise(held, fused)).toBe(true);
+      });
+
+      it('hands a neck with no evidence the first calibrated reading of its own key', () => {
+        const held = neck({ root: 'D', scale: 'major', displayName: 'D major', noteSetP: null });
+        const fused = fuse({ detected: engine({ ...D, ...evidence(0.8, 2, 2) }), held });
+        expect(fused).toMatchObject({ root: 'D', noteSetP: 0.8 });
+        expect(shouldRevise(held, fused)).toBe(true);
+        // Once it has one, an agreeing reading does not keep replacing it.
+        const again = fuse({ detected: engine({ ...D, ...evidence(0.7, 3, 3) }), held: fused });
+        expect(shouldRevise(fused, again)).toBe(false);
+      });
+
+      it('falls back to the old margin when the neck was never calibrated', () => {
+        const held = neck({ noteSetP: null });
+        const fused = fuse({ detected: engine({ ...D, ambiguous: true, ...evidence(0.9, 0, 0) }), held });
+        expect(fused).toMatchObject({ root: 'D', certainty: 'hedged' });
+        expect(shouldRevise(held, fused)).toBe(false);
+      });
+    });
+
     it('never claims an open tonic when the engine is not hedging at all', () => {
       expect(relativeHedge({ ...torn, ambiguous: false })).toBeNull();
       expect(fuse({ detected: { ...torn, ambiguous: false } })).toMatchObject({
         certainty: 'lone',
         tonicSettled: true,
         relativeAlternative: null,
+        noteSetP: null,
       });
     });
 
@@ -238,6 +346,7 @@ describe('fuseKey', () => {
         certainty: 'verified',
         tonicSettled: true,
         relativeAlternative: null,
+        noteSetP: null,
       });
     });
   });
@@ -265,6 +374,7 @@ describe('fuseKey', () => {
       notesSettled: true,
       tonicSettled: true,
       relativeAlternative: null,
+      noteSetP: null,
       trackIdentity: 'track-1',
       why: 'engine_only',
     };
@@ -293,6 +403,7 @@ describe('shouldRevise', () => {
     notesSettled: true,
     tonicSettled: true,
     relativeAlternative: null,
+    noteSetP: null,
     trackIdentity: 'track-1',
     why: 'test',
     ...over,
@@ -353,6 +464,48 @@ describe('shouldRevise', () => {
   });
 });
 
+describe('clearsApplyGate', () => {
+  const at = (confidencePct: number): FusedKey => ({
+    root: 'D',
+    scale: 'minor',
+    displayName: 'D minor',
+    source: 'detected',
+    certainty: 'lone',
+    confidencePct,
+    notesSettled: true,
+    tonicSettled: true,
+    relativeAlternative: null,
+    noteSetP: null,
+    trackIdentity: 'track-1',
+    why: 'test',
+  });
+
+  it('passes everything at the gate it ships with, so a scale still costs zero touches', () => {
+    for (const pct of [0, CERTAINTY_PCT.hedged, CERTAINTY_PCT.tonicOpen, CERTAINTY_PCT.verified]) {
+      expect(clearsApplyGate(at(pct), 0)).toBe(true);
+    }
+  });
+
+  it('holds a reading back only while it is under the gate, and takes it on the nose', () => {
+    expect(clearsApplyGate(at(CERTAINTY_PCT.hedged), 70)).toBe(false);
+    expect(clearsApplyGate(at(69), 70)).toBe(false);
+    expect(clearsApplyGate(at(70), 70)).toBe(true);
+    expect(clearsApplyGate(at(CERTAINTY_PCT.loneMax), 70)).toBe(true);
+  });
+
+  it('never gates out a human transcription, whatever the slider says', () => {
+    expect(clearsApplyGate(at(CERTAINTY_PCT.verified), 100)).toBe(true);
+  });
+
+  it('treats a missing or nonsense gate as open rather than as a wall', () => {
+    expect(clearsApplyGate(at(CERTAINTY_PCT.hedged), Number.NaN)).toBe(true);
+    expect(clearsApplyGate(at(CERTAINTY_PCT.hedged), -40)).toBe(true);
+    // Above the top of the scale the gate clamps to 100, which only verified can reach.
+    expect(clearsApplyGate(at(CERTAINTY_PCT.loneMax), 400)).toBe(false);
+    expect(clearsApplyGate(at(CERTAINTY_PCT.verified), 400)).toBe(true);
+  });
+});
+
 describe('engine sequence', () => {
   it('lets the engine take the neck once it fills its buffer', () => {
     const first = fuse({ detected: silent, trackIdentity: 'stairway' });
@@ -371,5 +524,76 @@ describe('engine sequence', () => {
       why: 'engine_only',
     });
     expect(shouldRevise(first, later)).toBe(true);
+  });
+});
+
+/**
+ * From a real capture of "You've Got a Friend in Me" (E♭ major). The engine had the seven notes
+ * exactly right on every cycle and the readout still said "A# major", then "D# major" — because
+ * `key_engine.rs` indexes a sharp-only table and nothing between it and the neck respelled the
+ * result. `buildScaleNotes` drew those names literally, so the fretboard carried four double
+ * sharps and then three.
+ */
+describe('the engine names a pitch class, not a key', () => {
+  const neck = (key: string, mode: 'major' | 'minor') =>
+    buildScaleNotes(key, mode)
+      .map((n) => n.label)
+      .join(' ');
+
+  it('spells the flat major keys the way a chart does', () => {
+    for (const [heard, expected] of [
+      ['D#', 'Eb'],
+      ['A#', 'Bb'],
+      ['G#', 'Ab'],
+      ['C#', 'Db'],
+    ] as const) {
+      expect(
+        fuse({ detected: engine({ primaryKey: heard, primaryScale: 'major', displayName: `${heard} major` }) }),
+      ).toMatchObject({ root: expected, scale: 'major', displayName: `${expected} major` });
+    }
+  });
+
+  /** Not "always flats": the spelling with the fewest accidentals depends on the mode. */
+  it('keeps the sharp spelling where that is the one with fewer accidentals', () => {
+    for (const [heard, expected] of [
+      ['G#', 'G#'],
+      ['C#', 'C#'],
+      ['F#', 'F#'],
+    ] as const) {
+      expect(
+        fuse({ detected: engine({ primaryKey: heard, primaryScale: 'minor', displayName: `${heard} minor` }) }),
+      ).toMatchObject({ root: expected, scale: 'minor' });
+    }
+    expect(fuse({ detected: engine({ primaryKey: 'A#', primaryScale: 'minor' }) })).toMatchObject({ root: 'Bb' });
+  });
+
+  it('never puts a double accidental on the neck', () => {
+    for (let pitchClass = 0; pitchClass < 12; pitchClass += 1) {
+      for (const mode of ['major', 'minor'] as const) {
+        const heard = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'][pitchClass] as string;
+        const fused = fuse({ detected: engine({ primaryKey: heard, primaryScale: mode }) });
+        expect(fused.root).not.toBeNull();
+        expect(neck(fused.root as string, mode)).not.toContain('##');
+        expect(neck(fused.root as string, mode)).not.toContain('bb');
+      }
+    }
+  });
+
+  it('respells the alternative it reads out beside the root', () => {
+    const hedging = engine({
+      primaryKey: 'D#',
+      primaryScale: 'major',
+      displayName: 'D# major',
+      ambiguous: true,
+      alternatives: [{ key: 'C', scale: 'minor', displayName: 'C minor' }],
+    });
+    expect(relativeHedge(hedging)).toMatchObject({ key: 'C', mode: 'minor' });
+    expect(fuse({ detected: hedging })).toMatchObject({ root: 'Eb', scale: 'major', certainty: 'tonic_open' });
+  });
+
+  it('leaves the spelling a human transcription chose alone', () => {
+    expect(
+      fuse({ verified: { key: 'D#', mode: 'minor', displayName: 'D# minor' }, detected: silent }),
+    ).toMatchObject({ root: 'D#', scale: 'minor', source: 'verified' });
   });
 });

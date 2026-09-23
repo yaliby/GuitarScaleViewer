@@ -16,6 +16,8 @@ type Props = {
   scaleType: ScaleType;
   tuningId: string;
   capo: number;
+  /** 0–100: how sure the pipeline must be before Apply moves the neck. Lives in the session. */
+  applyThreshold: number;
   onChange: (patch: Partial<PracticeSession>) => void;
   /** The shell's navigation drawer, opened from this screen's own hamburger. */
   menuOpen: boolean;
@@ -33,6 +35,7 @@ export default function LiveJamScreen({
   scaleType,
   tuningId,
   capo,
+  applyThreshold,
   onChange,
   menuOpen,
   onToggleMenu,
@@ -115,6 +118,8 @@ export default function LiveJamScreen({
         onTuningChange={(next) => onChange({ tuningId: next })}
         capo={capo}
         onCapoChange={(next) => onChange({ capo: next })}
+        applyThreshold={applyThreshold}
+        onApplyThresholdChange={(next) => onChange({ applyThreshold: next })}
         onResetToBrainKey={resetToBrainKey}
         onApplyDetectedKey={applyDetectedKey}
         onFlipRelative={flipRelative}

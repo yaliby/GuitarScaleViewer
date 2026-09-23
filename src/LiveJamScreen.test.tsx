@@ -26,6 +26,7 @@ function Harness() {
       scaleType={session.scaleType}
       tuningId={session.tuningId}
       capo={session.capo}
+      applyThreshold={session.applyThreshold}
       onChange={(patch) => setSession((current) => ({ ...current, ...patch }))}
     />
   );

@@ -203,27 +203,65 @@ export function GearInput({
   );
 }
 
+/** How many rectangles a meter is milled into. Exported so a caption can quote the count. */
+export const METER_SEGMENTS = 14;
+
+/** `--gear-accent`, spelled out: an outline needs an alpha the CSS variable cannot carry. */
+const ACCENT_HEX = '#f0a52a';
+
+/** Keep in step with the `gap-[2px]` on the meter below — the gate marker is placed off it. */
+const SEGMENT_GAP_PX = 2;
+
+/**
+ * How many of a meter's rectangles a 0–1 reading lights. The Apply gate quotes this, so the
+ * number a caption gives is the number of bars actually drawn, not a second rounding of its own.
+ */
+export function litSegments(value: number, segments: number = METER_SEGMENTS): number {
+  const clamped = Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
+  return Math.round(clamped * segments);
+}
+
+/** Where the boundary after `count` bars falls: the middle of the gap that follows them. */
+function gateOffset(count: number, segments: number): string {
+  if (count >= segments) {
+    return '100%';
+  }
+  const bars = `(100% - ${(segments - 1) * SEGMENT_GAP_PX}px)`;
+  return `calc(${bars} * ${count / segments} + ${SEGMENT_GAP_PX * count - SEGMENT_GAP_PX / 2}px)`;
+}
+
 /**
  * A segmented bar meter, read like a VU strip. Segments light left-to-right and shift from the
  * live tone into the accent as the reading approaches full, so a glance gives a level without a number.
+ *
+ * `gate` puts a second reading on the same strip: the level something has been asked to reach
+ * before it may act. Bars below it that are not lit are outlined rather than left dark, so the
+ * gate can be counted in rectangles while the control that sets it is being dragged.
  */
 export function SignalMeter({
   value,
-  segments = 14,
+  segments = METER_SEGMENTS,
   className = '',
   label,
+  gate = null,
+  gateLive = false,
 }: {
   /** 0–1. Values outside the range are clamped. */
   value: number;
   segments?: number;
   className?: string;
   label?: string;
+  /** 0–1, or null for a strip with no gate on it. */
+  gate?: number | null;
+  /** The gate is being set right now, so draw it at full strength. */
+  gateLive?: boolean;
 }) {
   const clamped = Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
-  const litCount = Math.round(clamped * segments);
+  const litCount = litSegments(clamped, segments);
+  const gateCount = gate == null ? 0 : litSegments(gate, segments);
   return (
     <div
-      className={`flex h-[7px] min-w-0 gap-[2px] ${className}`}
+      className={`relative flex h-[7px] min-w-0 gap-[2px] ${className}`}
       role="meter"
       aria-valuenow={Math.round(clamped * 100)}
       aria-valuemin={0}
@@ -232,19 +270,38 @@ export function SignalMeter({
     >
       {Array.from({ length: segments }, (_, i) => {
         const lit = i < litCount;
+        /* Unlit, but the gate wants it lit: the bars a player is counting off on the slider. */
+        const owed = !lit && i < gateCount;
         const ratio = i / Math.max(1, segments - 1);
         const color = ratio > 0.78 ? 'var(--gear-accent)' : 'var(--led-live)';
         return (
           <span
             key={i}
+            data-lit={lit || undefined}
+            data-owed={owed || undefined}
             className="flex-1 rounded-[1px] transition-[background,box-shadow] duration-150"
             style={{
               background: lit ? color : '#1b1b20',
-              boxShadow: lit ? `0 0 5px ${color}99` : 'inset 0 1px 1px rgba(0,0,0,0.8)',
+              boxShadow: lit
+                ? `0 0 5px ${color}99`
+                : owed
+                  ? `inset 0 0 0 1px ${ACCENT_HEX}${gateLive ? 'cc' : '59'}`
+                  : 'inset 0 1px 1px rgba(0,0,0,0.8)',
             }}
           />
         );
       })}
+      {gateCount > 0 ? (
+        <span
+          className="pointer-events-none absolute -top-1 -bottom-1 w-px -translate-x-1/2 transition-[left,opacity] duration-150"
+          style={{
+            left: gateOffset(gateCount, segments),
+            background: ACCENT_HEX,
+            opacity: gateLive ? 1 : 0.5,
+          }}
+          aria-hidden="true"
+        />
+      ) : null}
     </div>
   );
 }

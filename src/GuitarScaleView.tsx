@@ -10,7 +10,7 @@ import { useMediaSession } from './hooks/useMediaSession';
 import { controlMediaPlayback, seekMedia } from './hooks/mediaTransport';
 import { useDetectedKey } from './hooks/useDetectedKey';
 import { useCloudKeyResolution } from './hooks/useCloudKeyResolution';
-import { fuseKey, shouldRevise, type FusedKey } from './services/keyFusion';
+import { clearsApplyGate, fuseKey, shouldRevise, type FusedKey } from './services/keyFusion';
 import { trace } from './services/debugLog';
 import { Fretboard } from './fretboard/Fretboard';
 import type { FretboardViewMode } from './fretboard/geometry';
@@ -38,6 +38,9 @@ type Props = {
   onTuningChange: (value: string) => void;
   capo: number;
   onCapoChange: (value: number) => void;
+  /** 0–100: how sure the pipeline must be before Apply moves the neck. Session-wide. */
+  applyThreshold: number;
+  onApplyThresholdChange: (thresholdPct: number) => void;
   /** Restore root + scale from the brain / engine defaults (see scaleDataProvider). */
   onResetToBrainKey: () => void;
   onApplyDetectedKey: (root: string, scale: 'major' | 'minor') => void;
@@ -66,6 +69,8 @@ export default function GuitarScaleView({
   onTuningChange,
   capo: capoFret,
   onCapoChange,
+  applyThreshold,
+  onApplyThresholdChange,
   onResetToBrainKey,
   onApplyDetectedKey,
   onFlipRelative,
@@ -93,7 +98,10 @@ export default function GuitarScaleView({
      than derived, because the revision policy compares the next reading against it. */
   const [neckKey, setNeckKey] = useState<FusedKey | null>(null);
   const lastAutoDecisionRef = useRef<string>('');
+  const lastGateHoldRef = useRef<string>('');
   const prevApplyRef = useRef(applyDetected);
+  /* A "follow the song again" that the gate has not let through yet. See the effect below. */
+  const applyPendingRef = useRef(false);
 
   const mediaSession = useMediaSession();
   const { detectedKey, detectedKeyAb } = useDetectedKey();
@@ -210,24 +218,62 @@ export default function GuitarScaleView({
   };
 
   /**
-   * The neck follows the song. Apply is already on and there is no threshold to clear: the best
-   * currently available answer is always the one drawn, and a better one replaces it as soon as
-   * it clears the revision margin (see services/keyFusion).
+   * The neck follows the song. Apply is on and the gate ships open, so the best currently
+   * available answer is the one drawn, and a better one replaces it as soon as it clears the
+   * revision margin (see services/keyFusion).
    *
    * Switching Apply back on is the exception to the margin: "follow the song again" means put
    * the pipeline's current answer on the board even if a leftover key (or a hand edit) is still
    * sitting there. Without that, the deck can read A minor while the neck stays on G — the
    * Stairway case.
+   *
+   * It is *not* an exception to the gate. A player who set the gate to 70 asked for one thing —
+   * nothing under 70 on the neck — and a toggle they pressed for an unrelated reason must not
+   * quietly walk a 35% reading past it. Under the gate the neck simply keeps what it has and
+   * the deck says why.
+   *
+   * So the re-enable is owed rather than spent: it waits in `applyPendingRef` until a reading
+   * clears the gate, and is honoured then. Dropping it at the gate would put the Stairway case
+   * straight back — Apply comes back on under a gate, the reading climbs through a minute later
+   * with nothing to beat on the revision margin, and the neck sits on a stale key for the rest
+   * of the song while the deck reads the right one.
    */
   useEffect(() => {
-    const justEnabled = !prevApplyRef.current && applyDetected;
+    if (!prevApplyRef.current && applyDetected) {
+      applyPendingRef.current = true;
+    }
     prevApplyRef.current = applyDetected;
     if (!applyDetected) {
+      applyPendingRef.current = false;
       return;
     }
     if (!fused.root || !fused.scale) {
       return;
     }
+    if (!clearsApplyGate(fused, applyThreshold)) {
+      const held = `${fused.root}:${fused.scale}:${fused.confidencePct}:${applyThreshold}`;
+      if (lastGateHoldRef.current !== held) {
+        lastGateHoldRef.current = held;
+        trace(
+          'apply',
+          'apply.gate',
+          `Held under the Apply gate: ${fused.displayName} is ${fused.confidencePct}%, the gate is ${applyThreshold}%`,
+          {
+            key: fused.root,
+            scale: fused.scale,
+            certainty: fused.certainty,
+            confidence: fused.confidencePct,
+            gate: applyThreshold,
+            why: 'under_apply_gate',
+          },
+          'skip',
+        );
+      }
+      return;
+    }
+    lastGateHoldRef.current = '';
+    const justEnabled = applyPendingRef.current;
+    applyPendingRef.current = false;
     if (!justEnabled && !shouldRevise(neckKey, fused)) {
       return;
     }
@@ -245,6 +291,7 @@ export default function GuitarScaleView({
           scale: fused.scale,
           certainty: fused.certainty,
           confidence: fused.confidencePct,
+          noteSetP: fused.noteSetP,
           notesSettled: fused.notesSettled,
           from: neckKey?.displayName ?? null,
           why: justEnabled ? 'apply_reenabled' : fused.why,
@@ -254,7 +301,7 @@ export default function GuitarScaleView({
     }
     setNeckKey(fused);
     onApplyDetectedKey(fused.root, fused.scale);
-  }, [applyDetected, fused, neckKey, onApplyDetectedKey]);
+  }, [applyDetected, applyThreshold, fused, neckKey, onApplyDetectedKey]);
 
   useEffect(() => {
     if (heldPlaybackStatus == null) {
@@ -341,6 +388,8 @@ export default function GuitarScaleView({
           relativeAlternative={fused.relativeAlternative}
           applyDetected={applyDetected}
           onToggleApply={toggleApplyDetected}
+          applyThreshold={applyThreshold}
+          onApplyThresholdChange={onApplyThresholdChange}
           cuePositionMs={cuePositionMs}
         />
 
@@ -486,6 +535,7 @@ export default function GuitarScaleView({
         activeDisplayName={activeDisplayName}
         fused={fused}
         applyDetected={applyDetected}
+        applyThreshold={applyThreshold}
         devMockEnabled={devMockEnabled}
         onDevMockEnabledChange={setDevMockEnabled}
         devMockTitle={devMockTitle}

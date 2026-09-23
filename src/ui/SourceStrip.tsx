@@ -1,7 +1,10 @@
+import { useState } from 'react';
 import { Headphones } from 'lucide-react';
 import type { DetectedKeyState } from '../hooks/useDetectedKey';
 import type { MediaSessionUiState } from '../hooks/useMediaSession';
 import {
+  applyGateLabel,
+  applyGateValueLabel,
   clockLabel,
   detectionLed,
   detectionStateLabel,
@@ -11,7 +14,7 @@ import {
   resolutionStateLabel,
 } from './statusLabels';
 import { certaintyLabel, type KeyCertainty } from './statusLabels';
-import { GearToggle, Led, SignalMeter } from './gear';
+import { GearToggle, Led, litSegments, METER_SEGMENTS, SignalMeter } from './gear';
 
 export type SourceStripProps = {
   mediaSession: MediaSessionUiState;
@@ -30,17 +33,30 @@ export type SourceStripProps = {
   /** Is the neck allowed to take the pipeline's key? On by default; off freezes what is drawn. */
   applyDetected: boolean;
   onToggleApply: () => void;
+  /** 0–100: how sure the pipeline has to be before Apply acts. 0 takes every reading. */
+  applyThreshold: number;
+  onApplyThresholdChange: (thresholdPct: number) => void;
   /** Live vinyl cue; when set, the transport clock follows the platter instead of the OS poll. */
   cuePositionMs?: number | null;
 };
 
 /**
+ * Five points a notch. Not a bar's width (100/14 ≈ 7.1), because the numbers worth landing on are
+ * the pipeline's own rungs — 35 hedged, 70 notes-sure-root-open, 85 a lone engine reading at its
+ * ceiling, 100 a human transcription (see `CERTAINTY_PCT`) — and every one of those is a multiple
+ * of five. Two neighbouring notches can round to the same bar count; that is what fourteen
+ * rectangles can say, and the percentage beside them says the rest.
+ */
+const GATE_STEP_PCT = 5;
+
+/**
  * What the machine is hearing — the Jam listening deck with the Lab's own instrumentation: two
  * pipeline lamps, a segmented certainty meter, and the Apply latch.
  *
- * Apply ships engaged: the neck follows the song without anything being pressed, and the deck
- * reports how sure the pipeline is rather than asking the player to decide whether to believe
- * it. Switching Apply off is the only way to stop the song moving the neck.
+ * Apply ships engaged and its gate ships open: the neck follows the song without anything being
+ * pressed, and the deck reports how sure the pipeline is rather than asking the player to decide
+ * whether to believe it. Raising the gate is how a player who *does* want to decide says so in
+ * one number; switching Apply off stops the song moving the neck at all.
  */
 export function SourceStrip({
   mediaSession,
@@ -54,8 +70,13 @@ export function SourceStrip({
   relativeAlternative,
   applyDetected,
   onToggleApply,
+  applyThreshold,
+  onApplyThresholdChange,
   cuePositionMs,
 }: SourceStripProps) {
+  /* True while the gate is being set, so the bars it is asking for can be counted off the strip
+     as the slider moves — the whole reason the gate is drawn on the meter and not in a field. */
+  const [gateLive, setGateLive] = useState(false);
   const unavailable = mediaSession.playbackStatus === 'media_session_unavailable';
   const playing = mediaSession.playbackStatus === 'playing';
   const trackLine = unavailable
@@ -129,7 +150,12 @@ export function SourceStrip({
           <strong>{keyName ?? 'Listening…'}</strong>
           <span className="tele">{certaintyLabel(certainty)}</span>
         </div>
-        <SignalMeter value={meterValue} label="Key certainty" />
+        <SignalMeter
+          value={meterValue}
+          gate={applyThreshold > 0 ? applyThreshold / 100 : null}
+          gateLive={gateLive}
+          label="Key certainty"
+        />
         {/* The distinction that matters to somebody holding a guitar: a key and its relative
             draw the same diagram, so settled notes mean the neck is right even while the two
             legs are still arguing about which note is home. Measured on the corpus, that is the
@@ -142,6 +168,38 @@ export function SourceStrip({
               : relativeAlternative
                 ? `Scale tones confirmed — could be ${relativeAlternative}`
                 : 'Scale tones confirmed — root still open'}
+        </p>
+      </div>
+
+      {/* The gate. It sits under the meter it is set against: the slider names a percentage, the
+          strip above answers in rectangles, and the two are the same reading. */}
+      <div className={`lab-gate ${gateLive ? 'is-live' : ''}`}>
+        <label className="lab-gate-row">
+          <span className="legend">Apply at</span>
+          <input
+            className="gear-fader"
+            type="range"
+            min={0}
+            max={100}
+            step={GATE_STEP_PCT}
+            value={applyThreshold}
+            onChange={(event) => onApplyThresholdChange(Number(event.target.value))}
+            onPointerDown={() => setGateLive(true)}
+            onPointerUp={() => setGateLive(false)}
+            onPointerCancel={() => setGateLive(false)}
+            onFocus={() => setGateLive(true)}
+            onBlur={() => setGateLive(false)}
+            aria-label="Apply confidence gate"
+            aria-valuetext={
+              applyThreshold <= 0
+                ? 'Any reading'
+                : `${applyThreshold}%, ${litSegments(applyThreshold / 100)} of ${METER_SEGMENTS} bars`
+            }
+          />
+          <span className="tele lab-gate-value">{applyGateValueLabel(applyThreshold)}</span>
+        </label>
+        <p className="lab-gate-note">
+          {applyGateLabel({ thresholdPct: applyThreshold, confidencePct, applyDetected })}
         </p>
       </div>
 

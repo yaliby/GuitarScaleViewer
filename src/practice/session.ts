@@ -23,6 +23,14 @@ export type PracticeSession = {
   metronome: boolean;
   progression: number[];
   volume: number;
+  /**
+   * The Apply gate, 0–100: how sure the pipeline has to be before it may move the neck.
+   *
+   * Ships at 0, which is the behaviour that was here before the slider existed — every reading
+   * is taken, so a player still gets a scale without touching anything. Raising it trades that
+   * for a neck that only moves on readings the player has decided are worth the move.
+   */
+  applyThreshold: number;
 };
 export const DEFAULT_SESSION: PracticeSession = {
   root: "A",
@@ -40,6 +48,7 @@ export const DEFAULT_SESSION: PracticeSession = {
   metronome: true,
   progression: [0, 5, 2, 6],
   volume: 0.55,
+  applyThreshold: 0,
 };
 const member = <T extends string>(
   value: unknown,
@@ -107,6 +116,7 @@ export function parseSession(input: unknown): PracticeSession {
           .slice(0, 16)
       : [...DEFAULT_SESSION.progression],
     volume: number(v.volume, 0.55, 0, 1),
+    applyThreshold: Math.round(number(v.applyThreshold, 0, 0, 100)),
   };
 }
 

@@ -27,6 +27,12 @@ type Props = {
   /** Is the neck allowed to take the pipeline's key? On by default; off freezes what is drawn. */
   applyDetected: boolean;
   onToggleApply: () => void;
+  /**
+   * The Apply gate, 0–100. Set on the Live Jam deck, where the certainty meter it is read
+   * against lives — but it is one session setting, so it holds this screen back too and this
+   * screen has to be able to say so. Otherwise Explore just silently stops following the song.
+   */
+  applyThreshold: number;
   onRetry: () => void;
   root: string;
   scale: string;
@@ -38,6 +44,7 @@ export function ListeningPanel({
   fused,
   applyDetected,
   onToggleApply,
+  applyThreshold,
   onRetry,
   root,
   scale,
@@ -47,6 +54,7 @@ export function ListeningPanel({
   const name = fused.displayName ?? cloud.cloudHit?.displayName ?? detected.displayName;
   // The one case worth its own wording: the notes are right and only the root is open.
   const tonicOpen = !fused.tonicSettled && !!fused.relativeAlternative;
+  const underGate = applyDetected && fused.confidencePct < applyThreshold;
   const status = !desktop
     ? "Desktop listening"
     : media.playbackStatus === "paused"
@@ -91,7 +99,9 @@ export function ListeningPanel({
               : name
                 ? !applyDetected
                   ? "Apply is off, so the neck is staying where it is. Switch Apply on to take this key."
-                  : tonicOpen
+                  : underGate
+                    ? `This reading is ${fused.confidencePct}% sure and the Apply gate is set to ${applyThreshold}%, so the neck is staying where it is. Lower the gate on the Live Jam deck to take it.`
+                    : tonicOpen
                     ? `The scale tones are settled — this reads equally as ${musicalLabel(fused.relativeAlternative!)}, which draws the same notes.`
                     : "The neck is already following this. Nothing to press."
                 : "Start music in your player. You can always choose a key yourself."}

@@ -44,6 +44,8 @@ export type DevDrawerProps = {
   fused: FusedKey;
   /** Is the Apply latch engaged? Off means the neck is frozen wherever it stands. */
   applyDetected: boolean;
+  /** The gate under it, 0–100: readings below this are analysed and then not taken. */
+  applyThreshold: number;
   devMockEnabled: boolean;
   onDevMockEnabledChange: (value: boolean) => void;
   devMockTitle: string;
@@ -251,6 +253,7 @@ export function DevDrawer({
   activeDisplayName,
   fused,
   applyDetected,
+  applyThreshold,
   devMockEnabled,
   onDevMockEnabledChange,
   devMockTitle,
@@ -397,9 +400,9 @@ export function DevDrawer({
               </Section>
 
               <Section title="Key on the neck">
-                {/* There is no threshold and no latch to show here any more: the pipeline
-                    always commits to its best answer. Verified transcription outranks the
-                    engine; otherwise the engine is what you hear. */}
+                {/* The pipeline itself still has no threshold: it always commits to its best
+                    answer, verified transcription outranking the engine. The gate below is the
+                    player's own, and the only thing between that answer and the neck. */}
                 <Row label="Key" value={fused.displayName ?? '<none>'} />
                 <Row label="Certainty" value={`${certaintyLabel(fused.certainty)} · ${fused.confidencePct}%`} />
                 <Row label="Scale tones" value={fused.notesSettled ? 'corroborated' : 'one estimator only'} />
@@ -412,11 +415,22 @@ export function DevDrawer({
                   }
                 />
                 <Row label="Decided by" value={fused.why} />
+                <Row
+                  label="Apply gate"
+                  value={applyThreshold <= 0 ? 'open' : `${applyThreshold}%`}
+                  tone={applyDetected && fused.confidencePct < applyThreshold ? 'fault' : undefined}
+                />
                 {applyDetected ? null : (
                   <p className="mt-2 text-[11px] leading-relaxed text-led-hold/85">
                     Apply is off: the song is still being analysed, but the neck is being held where it is.
                   </p>
                 )}
+                {applyDetected && fused.confidencePct < applyThreshold ? (
+                  <p className="mt-2 text-[11px] leading-relaxed text-led-hold/85">
+                    This reading is under the gate: it was analysed and then not taken. The neck keeps what it
+                    has until a reading reaches {applyThreshold}%.
+                  </p>
+                ) : null}
               </Section>
 
               {import.meta.env.DEV ? (

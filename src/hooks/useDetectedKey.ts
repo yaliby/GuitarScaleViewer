@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { trace } from '../services/debugLog';
+import type { NoteSetEvidence } from '../services/keyFusion';
 
 export type CaptureMode = 'process_loopback' | 'endpoint_loopback' | 'unavailable';
 export type DetectionState =
@@ -28,6 +29,8 @@ export type DetectedKeyState = {
   primaryScale: string | null;
   displayName: string | null;
   confidence: number;
+  /** The engine's calibrated evidence about this key; absent from backends that cannot supply it. */
+  noteSetEvidence?: NoteSetEvidence | null;
   stability: number;
   alternatives: KeyAlternative[];
   source: string;
@@ -115,6 +118,9 @@ export function useDetectedKey() {
           captureMode: next.captureMode,
           targetApp: next.targetApp,
           confidence: next.confidence,
+          noteSetP: next.noteSetEvidence?.confidence ?? null,
+          noteSetRun: next.noteSetEvidence?.noteSetRun ?? null,
+          keyRun: next.noteSetEvidence?.keyRun ?? null,
           stability: next.stability,
           windowCount: next.windowCount,
           bufferSeconds: next.bufferSeconds,

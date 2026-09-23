@@ -1,8 +1,43 @@
 import type { DetectedKeyAbState } from '../hooks/useDetectedKey';
 import type { KeyCertainty } from '../services/keyFusion';
-import type { LedTone } from './gear';
+import { litSegments, METER_SEGMENTS, type LedTone } from './gear';
 
 export type { KeyCertainty };
+
+/** The gate setting itself, for the readout beside the slider. */
+export function applyGateValueLabel(thresholdPct: number): string {
+  return thresholdPct <= 0 ? 'Any' : `${Math.round(thresholdPct)}%`;
+}
+
+/**
+ * The Apply gate read back in the unit the panel actually shows: rectangles.
+ *
+ * A percentage is an abstraction; the meter above the slider is not. Quoting the bar count means
+ * the player sets the gate by looking at the strip they already read the key's certainty off,
+ * and `litSegments` is shared with the meter so the number here is the number drawn there.
+ */
+export function applyGateLabel({
+  thresholdPct,
+  confidencePct,
+  applyDetected,
+  segments = METER_SEGMENTS,
+}: {
+  thresholdPct: number;
+  confidencePct: number;
+  applyDetected: boolean;
+  segments?: number;
+}): string {
+  if (thresholdPct <= 0) {
+    return 'Open — the neck takes whatever is heard';
+  }
+  const bars = `${litSegments(thresholdPct / 100, segments)} of ${segments} bars`;
+  if (!applyDetected) {
+    return `${bars} — Apply is off, so nothing is being taken`;
+  }
+  return confidencePct >= thresholdPct
+    ? `${bars} — this reading is through`
+    : `${bars} — holding: this reading is short`;
+}
 
 /**
  * How the deck words the pipeline's own certainty.

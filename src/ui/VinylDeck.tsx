@@ -321,6 +321,36 @@ export function VinylDeck({
         onPointerCancel={endScrub}
         onKeyDown={onKeyDown}
       >
+        <div className="lab-tonearm" aria-hidden="true">
+          <svg viewBox="0 0 180 210" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <linearGradient id="tonearm-metal" x1="92" y1="32" x2="40" y2="168" gradientUnits="userSpaceOnUse">
+                <stop stopColor="#f6dfaa" />
+                <stop offset=".3" stopColor="#a87b3e" />
+                <stop offset=".72" stopColor="#5a3e20" />
+                <stop offset="1" stopColor="#24180d" />
+              </linearGradient>
+              <linearGradient id="tonearm-head" x1="34" y1="171" x2="65" y2="199" gradientUnits="userSpaceOnUse">
+                <stop stopColor="#5b4630" />
+                <stop offset="1" stopColor="#100d09" />
+              </linearGradient>
+              <filter id="tonearm-shadow" x="0" y="0" width="180" height="210" filterUnits="userSpaceOnUse">
+                <feDropShadow dx="-3" dy="6" stdDeviation="4" floodOpacity=".5" />
+              </filter>
+            </defs>
+            <g filter="url(#tonearm-shadow)">
+              <circle cx="137" cy="36" r="28" fill="#18120c" stroke="#8c6735" strokeWidth="2" />
+              <circle cx="137" cy="36" r="19" fill="url(#tonearm-metal)" />
+              <circle cx="137" cy="36" r="7" fill="#17110c" stroke="#e2bd76" strokeWidth="2" />
+              <path d="M130 47C121 77 104 93 90 119L55 177" stroke="#160f0a" strokeWidth="15" strokeLinecap="round" />
+              <path d="M130 47C121 77 104 93 90 119L55 177" stroke="url(#tonearm-metal)" strokeWidth="10" strokeLinecap="round" />
+              <path d="M126 54C116 78 103 94 92 117" stroke="#fff0c9" strokeOpacity=".45" strokeWidth="1.5" strokeLinecap="round" />
+              <path d="M53 169L75 178L63 201L39 192L53 169Z" fill="url(#tonearm-head)" stroke="#c49a5a" strokeWidth="1.5" />
+              <path d="M45 191L52 194L47 205" stroke="#f4d48b" strokeWidth="2" strokeLinecap="round" />
+              <path d="M76 181L91 187" stroke="#b58442" strokeWidth="3" strokeLinecap="round" />
+            </g>
+          </svg>
+        </div>
         <div className="lab-vinyl-platter" ref={platterRef}>
           <div className="lab-vinyl">
             <div className="lab-vinyl-label">
