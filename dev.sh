@@ -36,6 +36,19 @@ lkf="${KEY_ANALYZER_LIBKEYFINDER_CLI:-$root/src-tauri/sidecars/libkeyfinder_cli/
 
 analyzer_ok=0
 
+# Bring the CLI up to date with its source before probing it. An edit to main.cpp or the chord
+# front end does nothing until the binary is rebuilt, and nothing downstream can tell: on
+# 2026-09-23 the source, the docs and every fitted constant described the separated front end
+# while the app went on running a binary built six hours before it. The build is incremental, so
+# when nothing changed this costs a make that finds nothing to do.
+lkf_build_dir="$root/src-tauri/sidecars/libkeyfinder_cli/build"
+if [[ "$backend" == "libkeyfinder" && -z "${KEY_ANALYZER_LIBKEYFINDER_CLI:-}" \
+      && -f "$lkf_build_dir/CMakeCache.txt" ]] && command -v cmake >/dev/null 2>&1; then
+  if ! cmake --build "$lkf_build_dir" --parallel >/dev/null; then
+    echo "dev.sh: rebuilding the libkeyfinder CLI failed; probing whatever binary is there." >&2
+  fi
+fi
+
 # Probe the backend that will actually be used. Probing Python while Rust runs libkeyfinder
 # is how this gate used to refuse to start on a machine whose default backend worked fine.
 if [[ "$backend" == "libkeyfinder" ]]; then
