@@ -1,5 +1,8 @@
 use crate::audio_capture::AudioCaptureManager;
-use crate::audio_models::{CaptureMode, DetectedKeyPayload, KeyCandidate, WindowAnalysisResult};
+use crate::audio_models::{
+    CaptureMode, DetectedKeyPayload, KeyCandidate, NoteSetEvidence, WindowAnalysisResult,
+};
+use crate::key_confidence;
 use crate::key_detection::{AnalysisOutput, KeyDetector, LibKeyFinderDetector, SidecarKeyDetector};
 use crate::media_session::{self, MediaSessionPayload};
 use serde::Serialize;
@@ -22,28 +25,115 @@ use tauri::{AppHandle, Emitter, Manager};
 pub const REQUIRED_AUDIO_SECONDS: f32 = 20.0;
 pub const ANALYSIS_WINDOW_SECONDS: usize = 12;
 pub const ANALYSIS_HOP_SECONDS: usize = 4;
-/// The most audio handed to the analyzer in one pass. Also the point at which the buffer starts
-/// sliding, which is what makes consecutive passes describe different audio.
-pub const MAX_ANALYSIS_SPAN_SECONDS: usize = 44;
-const ANALYZE_EVERY_MS: u64 = 3_000;
+/// The most audio handed to the analyzer in one pass, and so the point at which the buffer stops
+/// growing and starts sliding.
+///
+/// It is *not* what makes consecutive passes count as different audio, despite what the note here
+/// used to say. `AnalysisEvidence::accept` compares `window_end_ms`, which `key_detection` sets to
+/// the span's end on the absolute sample grid, so it advances one hop per cycle from the first
+/// cycle onward whether the buffer is growing or sliding. Moving this constant does not move the
+/// streak.
+///
+/// This was 44, and 44 was not a measurement of what helps — it was the largest span believed to
+/// reach the analyzer at all. `docs/KEY_ACCURACY_BASELINE.md` recorded that libKeyFinder "fills at
+/// most 44 hops, about 41 seconds, however much audio it is given", and concluded that nobody
+/// could know whether more audio would help because none could be given. The constant carried a
+/// note saying it must not grow.
+///
+/// That ceiling does not exist in the binary this tree builds. Hop count is linear in duration
+/// with no knee — 10s->11, 20s->22, 40s->44, 44s->48, 45s->49, 60s->65, 127s->137 — and the
+/// document's own decisive test now goes the other way: splicing 30 seconds of one key onto 30 of
+/// another returns a blend rather than the first key's verdict. The chromagram path has not been
+/// touched since the commit that recorded the claim, so this is a correction to the measurement
+/// and not a regression in the library.
+///
+/// With the question open again, `scripts/key-research/exp_span.py` answers it out of fold —
+/// profile and tonic stage refitted inside each fold *at the span being tested*, so neither arm
+/// is closer to its own fitting condition than the other. 396 clips, 6-fold by song, 8 partitions:
+///
+/// ```text
+///   last 20s   note-set 39.3% +/-0.4   tonic 28.7% +/-0.7
+///   last 30s            60.9% +/-0.8         48.6% +/-1.3
+///   last 44s            69.3% +/-0.7         58.2% +/-1.0   <- what shipped
+///   last 52s            71.0% +/-0.8         61.7% +/-0.7
+///   full ~58s           72.2% +/-0.7         62.8% +/-0.8
+/// ```
+///
+/// End to end through the shipped binary and re-ranker the same move reads +5.9 note-set and
+/// +6.1 tonic, paired +48/-9 and +56/-15 over 666 clips; the cross-validated +2.9 and +4.6 above
+/// is the honest figure, because that run's profiles had seen these songs.
+///
+/// Sixty rather than more, for two reasons that are both limits on the evidence rather than
+/// tuning. `ROLLING_BUFFER_SECONDS` and the `latest_samples(60)` call already hold exactly this
+/// much, so nothing new is captured — a quarter of what the engine already had was being thrown
+/// away. And past ~58 seconds there is no measurement supporting a gain: concatenating the two
+/// captures of the 59 songs recorded twice gives ~116 seconds of one key and scores 75.2% +/-3.6
+/// note-set against 78.0% +/-1.6 for one capture, which is flat-to-worse inside a wide spread.
+/// Raising this further needs a corpus of longer captures first.
+///
+/// Latency is not what the old value was buying: the CLI takes 0.25s on 44 seconds of audio and
+/// 0.34s on 60, against a four-second hop.
+pub const MAX_ANALYSIS_SPAN_SECONDS: usize = 60;
+/// The longest the engine loop sleeps, and so how quickly play, pause and a track change are
+/// noticed — each of which is on the path to the first reading, because the ring only starts
+/// filling once playback has been seen and a track change clears it.
+///
+/// This was a fixed three-second period, and it cost twice. A fresh analysis needs a new hop of
+/// audio, so every hop was picked up anywhere from 0 to 3 seconds after it was complete; and a
+/// press of play was noticed 0 to 3 seconds after it happened, which delayed the start of the ring
+/// by the same. The loop now sleeps until the next hop is due (`next_analysis_due_in`) and never
+/// longer than this. A media-session poll is a few D-Bus round trips; twice a second is nothing.
+const LOOP_POLL_MS: u64 = 500;
+/// The capture pump delivers packets of 4096 frames at 48 kHz, about 85ms each. Waking this long
+/// after a hop is due means the packet that completes it has arrived.
+const CAPTURE_PACKET_SLACK_MS: u64 = 120;
+/// The unit `CAPTURE_STABLE_MIN_CYCLES` and `SESSION_STABLE_MIN_CYCLES` were written in: iterations
+/// of a loop that ran every three seconds. They are measured as time now, so polling faster does
+/// not quietly shrink nine seconds of required stability to one and a half.
+const STABLE_CYCLE_MS: u64 = 3_000;
 const MIN_CONFIDENCE_READY: f32 = 0.84;
 const MIN_STABILITY_READY: f32 = 0.82;
 const MIN_CONFIDENCE_LIKELY: f32 = 0.78;
 const MIN_STABILITY_LIKELY: f32 = 0.76;
 const STALE_CAPTURE_TIMEOUT_MS: u64 = 7_000;
-/// How many consecutive agreeing analyses the readout waits for before it stops hedging.
+/// How many cycles the whole gate has to keep allowing before the readout stops hedging.
 ///
-/// Four, not six, and the two seconds' difference is the only part of it that was ever measured
-/// as a benefit. On the stationary corpus every value from 2 to 6 locks the same clips with the
-/// same accuracy; on the non-stationary one — songs with a middle section in another key — no
-/// value ever asserts the key the song left, because the resistance comes from analyzing 44
-/// seconds at once and not from counting repeats. What six did buy was silence: a song with a
-/// middle eight never settled at all inside its first minute. See `docs/KEY_LATENCY.md`.
-pub const MIN_READY_STREAK: usize = 4;
+/// Two, and the value is only meaningful alongside [`PRIMARY_KEY_REPEAT_MIN`]: the two are the
+/// same requirement counted in two places, and `what_the_two_streaks_cost_together` is the first
+/// measurement of them together. On 273 real clips they are almost perfectly redundant — every
+/// (repeat, streak) pair that costs the same number of cycles scores the same to the clip — so
+/// what the player waits for is the *total*, and six cycles is where its value stops:
+///
+/// ```text
+///   cycles   asserts   right notes   wrong notes   median   precision
+///       10       58%           46%           11%      48s         79%   <- 7 + 4, was shipped
+///        6       66%           52%           14%      32s         79%   <- 4 + 3, ships
+///        4       69%           52%           16%      24s         75%
+///        1       73%           54%           19%      20s         74%
+/// ```
+///
+/// The last four cycles of the old wait bought **no precision at all** — 79% either way. They
+/// bought sixteen seconds of silence and six clips per hundred that never got a confident answer.
+/// Below six the trade inverts: precision falls with every cycle removed.
+///
+/// Three rather than two, with the sixth cycle taken from the repeat instead. The real corpus
+/// cannot tell those two splits apart — every six-cycle setting scores the same to the clip — but
+/// the synthetic one can: this constant also gates `lock_point` there, where a streak of 2 locks
+/// two more clips and **asserts two wrong roots**, and a streak of 3 locks the same clips as 4,
+/// four seconds sooner, still with none. See `docs/KEY_LATENCY.md`.
+pub const MIN_READY_STREAK: usize = 3;
 const KEY_SWITCH_HYSTERESIS_CONF_MARGIN: f32 = 0.08;
-const CAPTURE_STABLE_MIN_CYCLES: usize = 3;
-const SESSION_STABLE_MIN_CYCLES: usize = 3;
-const PRIMARY_KEY_REPEAT_MIN: usize = 7;
+pub const CAPTURE_STABLE_MIN_CYCLES: usize = 3;
+pub const SESSION_STABLE_MIN_CYCLES: usize = 3;
+/// How many times running the analyzer has to name the same key before the gate believes it.
+///
+/// Four rather than seven, as the other half of the six-cycle total in [`MIN_READY_STREAK`]. The
+/// real corpus cannot tell the splits of six apart — (4,3) and (5,2) score identically to the clip
+/// — so the split is settled by the synthetic corpus, which only reads the other constant. Nine
+/// here buys back four points of assert-accuracy for eight seconds, and that trade was declined
+/// once already; the joint sweep says the same four points are available for free by moving from
+/// ten cycles to six.
+pub const PRIMARY_KEY_REPEAT_MIN: usize = 4;
 const DISRUPTION_COOLDOWN_MS: u64 = 9_000;
 const ANALYZER_UNAVAILABLE_LOG_THROTTLE_MS: u64 = 12_000;
 const LAST_GOOD_HOLD_MS: u64 = 25_000;
@@ -52,8 +142,8 @@ pub const AGGREGATION_RECENT_WINDOW_COUNT: usize = 9;
 const MAX_TONIC_ENTROPY: f32 = 0.76;
 const MIN_DOMINANCE_SHARE: f32 = 0.84;
 const MIN_PRIMARY_MARGIN: f32 = 0.34;
-const CONTRADICTION_COOLDOWN_MS: u64 = 15_000;
-const CONTRADICTION_CLEAR_CLEAN_CYCLES: usize = 4;
+pub const CONTRADICTION_COOLDOWN_MS: u64 = 15_000;
+pub const CONTRADICTION_CLEAR_CLEAN_CYCLES: usize = 4;
 const COMPETING_TONIC_MIN_SHARE: f32 = 0.15;
 
 static LATEST_DETECTED_KEY: OnceLock<Arc<Mutex<DetectedKeyPayload>>> = OnceLock::new();
@@ -121,13 +211,125 @@ impl AnalysisEvidence {
     }
 }
 
+/// The capture as it stood when the player paused a known track.
+///
+/// Pausing stops the capture, which the loop used to read as a capture change on the way down and
+/// again on the way back up — and a capture change throws away every reading, because the audio
+/// that follows may belong to something else. A resume of the same track into the same capture is
+/// not that: the song carries on, and so does the evidence about its key.
+///
+/// Found on a live run of "You've Got a Friend in Me": paused at twenty seconds, resumed half a
+/// minute later, and the engine started again from an empty buffer — whose first twelve seconds,
+/// that far into the song, sit on G7 to C minor and read as the relative for another twenty. The
+/// span cache says the continuous buffer reaches E♭ four seconds after the resume.
+struct PausedCapture {
+    mode: CaptureMode,
+    target: Option<String>,
+    track: String,
+    /// What was on screen before the pause, shown again after the resume until the next hop has
+    /// been read — otherwise those seconds re-send the pause's own payload.
+    payload: Option<DetectedKeyPayload>,
+}
+
+/// What a change in the capture's mode or target means for the evidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CaptureTransition {
+    /// The player paused a known track: the capture stopped, the evidence stays.
+    Pausing,
+    /// The same track resumed into the capture it paused from: carry on.
+    Resuming,
+    /// Anything else. The audio may now be something different; start over.
+    Changed,
+}
+
+fn capture_transition(
+    paused: Option<&PausedCapture>,
+    mode: CaptureMode,
+    target: Option<&str>,
+    track: Option<&str>,
+    paused_now: bool,
+) -> CaptureTransition {
+    let Some(paused) = paused else {
+        return CaptureTransition::Changed;
+    };
+    if paused_now && mode == CaptureMode::Unavailable {
+        CaptureTransition::Pausing
+    } else if !paused_now
+        && mode == paused.mode
+        && target == paused.target.as_deref()
+        && track == Some(paused.track.as_str())
+    {
+        CaptureTransition::Resuming
+    } else {
+        CaptureTransition::Changed
+    }
+}
+
 fn should_run_local_capture(has_session: bool, playing: bool, _cloud_hit: bool) -> bool {
     has_session && playing
 }
 
-fn aligned_analysis_samples(mut samples: Vec<f32>, endpoint: u64, rate: u32) -> (Vec<f32>, u64, u64) {
+/// How much audio the first analysis needs, which depends on what is doing the analysing.
+///
+/// The python sidecar scores fixed `ANALYSIS_WINDOW_SECONDS` windows and has nothing to say about
+/// a shorter buffer. libkeyfinder reads whatever it is handed, and its early readings are what
+/// `key_confidence` was fitted on — so it starts one hop in.
+fn first_analysis_seconds(backend: &str) -> usize {
+    if backend == "libkeyfinder" {
+        FIRST_ANALYSIS_SECONDS
+    } else {
+        ANALYSIS_WINDOW_SECONDS
+    }
+}
+
+/// Whether the payload's confidence is `key_confidence`'s calibrated probability: the newest
+/// reading carried the evidence and named the key the consensus settled on.
+pub fn evidence_is_calibrated(results: &[WindowAnalysisResult], payload: &DetectedKeyPayload) -> bool {
+    key_confidence::calibration_inputs(results).is_some_and(|(_, key, scale)| {
+        payload.primary_key.as_deref() == Some(key.as_str())
+            && payload.primary_scale.as_deref() == Some(scale.as_str())
+    })
+}
+
+/// How long a stability requirement written in loop cycles lasts in wall time.
+fn stable_window(cycles: usize) -> Duration {
+    Duration::from_millis(cycles as u64 * STABLE_CYCLE_MS)
+}
+
+/// How long until the ring holds audio the engine has not analysed yet.
+///
+/// The first analysis is due once the ring holds `first_seconds` counted from its grid origin, and every later one a hop past the last endpoint analysed. The loop sleeps exactly this
+/// long (never more than `LOOP_POLL_MS`) so that a hop is read the moment it is complete instead of
+/// whenever a fixed period happens to come round.
+fn next_analysis_due_in(
+    accepted: u64,
+    origin: u64,
+    last_analyzed_endpoint: u64,
+    first_seconds: usize,
+    rate: u32,
+) -> Duration {
+    if rate == 0 {
+        return Duration::from_millis(LOOP_POLL_MS);
+    }
+    let rate = rate as u64;
+    let first = origin + first_seconds as u64 * rate;
+    let due = first.max(last_analyzed_endpoint + ANALYSIS_HOP_SECONDS as u64 * rate);
+    let missing = due.saturating_sub(accepted);
+    Duration::from_millis(missing * 1000 / rate + CAPTURE_PACKET_SLACK_MS)
+}
+
+/// The buffer the analyzer is handed: a whole number of hops, ending on the hop grid.
+///
+/// The grid is counted from `origin`, where the ring last started filling
+/// (`AudioCaptureManager::grid_origin`), and not from the lifetime sample count. `endpoint` stays
+/// lifetime so evidence keeps one monotonic timeline across resets — but a grid anchored to it sits
+/// at an arbitrary phase relative to a song that began after a reset, so the first analysis of every
+/// song but the first waited for the next lifetime boundary past twelve seconds of audio: 12 to 16
+/// seconds in, 14 on average, for nothing.
+fn aligned_analysis_samples(mut samples: Vec<f32>, endpoint: u64, origin: u64, rate: u32) -> (Vec<f32>, u64, u64) {
     let hop = ANALYSIS_HOP_SECONDS as u64 * rate as u64;
-    let aligned = endpoint / hop * hop;
+    let origin = origin.min(endpoint);
+    let aligned = origin + (endpoint - origin) / hop * hop;
     let tail = (endpoint-aligned) as usize;
     samples.truncate(samples.len().saturating_sub(tail));
     // Keep an integral number of hops, ending on the absolute sample grid.
@@ -560,7 +762,7 @@ fn family_mixture_detected(tonic_counts: &BTreeMap<String, usize>) -> bool {
     (fifth_family >= 2) || (relatives >= 1 && (fifth_family >= 1 || neighbors >= 1))
 }
 
-fn window_vote_quality(window_tonic_votes: &BTreeMap<String, usize>) -> (f32, usize) {
+pub fn window_vote_quality(window_tonic_votes: &BTreeMap<String, usize>) -> (f32, usize) {
     let total: usize = window_tonic_votes.values().sum();
     if total == 0 {
         return (0.0, 0);
@@ -591,19 +793,167 @@ fn tonic_entropy_from_history(history: &VecDeque<String>) -> (f32, BTreeMap<Stri
 }
 
 #[derive(Debug, Clone)]
-struct ContradictionMetrics {
-    tonic_entropy: f32,
-    dominant_share: f32,
-    tonic_counts: BTreeMap<String, usize>,
-    competing_tonics: usize,
-    distinct_tonics: usize,
-    rapid_switches: usize,
-    major_minor_conflict: bool,
-    family_mixture: bool,
-    contradiction_burst: bool,
+pub struct ContradictionMetrics {
+    pub tonic_entropy: f32,
+    pub dominant_share: f32,
+    pub tonic_counts: BTreeMap<String, usize>,
+    pub competing_tonics: usize,
+    pub distinct_tonics: usize,
+    pub rapid_switches: usize,
+    pub major_minor_conflict: bool,
+    pub family_mixture: bool,
+    pub contradiction_burst: bool,
 }
 
-fn contradiction_metrics_from_history(history: &VecDeque<String>) -> ContradictionMetrics {
+/// The window-vote half of the gate's inputs, derived the way the engine loop derives them.
+///
+/// One call rather than five public pieces, deliberately: reproducing this by hand is exactly what
+/// a harness would get subtly wrong, and "the harness mirrors the loop, almost" is how a gate ends
+/// up measured and still broken.
+#[derive(Debug, Clone)]
+pub struct WindowEvidence {
+    pub window_keys: Vec<String>,
+    pub window_dominance: f32,
+    pub window_distinct_tonics: usize,
+    pub contradiction_burst: bool,
+}
+
+pub fn window_evidence(results: &[WindowAnalysisResult]) -> WindowEvidence {
+    let winners_all = window_winners_from_results(results);
+    let winners_recent = recent_window_horizon(&winners_all, AGGREGATION_RECENT_WINDOW_COUNT);
+    let window_keys: Vec<String> = winners_recent
+        .iter()
+        .map(|w| format!("{}:{}", w.key, w.scale))
+        .collect();
+    let mut tonic_votes: BTreeMap<String, usize> = BTreeMap::new();
+    for choice in &window_keys {
+        *tonic_votes.entry(tonic_from_choice(choice)).or_insert(0) += 1;
+    }
+    let (window_dominance, window_distinct_tonics) = window_vote_quality(&tonic_votes);
+    WindowEvidence {
+        contradiction_burst: contradiction_burst(&window_keys),
+        window_keys,
+        window_dominance,
+        window_distinct_tonics,
+    }
+}
+
+/// The engine's margin over its own runner-up, as the gate reads it.
+pub fn dominant_margin_of(payload: &DetectedKeyPayload) -> f32 {
+    if payload.alternatives.is_empty() {
+        payload.confidence
+    } else {
+        payload.confidence - payload.alternatives[0].confidence
+    }
+}
+
+/// Whether the doubt in this payload is specifically an unsettled relative pair.
+pub fn relative_pair_unresolved_in(payload: &DetectedKeyPayload) -> bool {
+    let (detected, _, _) = relative_pair_from_payload(payload);
+    detected
+        && payload
+            .reason
+            .as_deref()
+            .map(|r| r.starts_with("relative_pair_ambiguity"))
+            .unwrap_or(false)
+}
+
+/// Everything the live gate reads that is not in `ContradictionMetrics`.
+///
+/// This exists so the gate can be *reached*. It used to be forty lines inline in the engine's
+/// async loop, which meant no test in the repository touched the decision that determines whether
+/// a player is ever shown a confident key — and a defect lived there for a session behind numbers
+/// that all looked fine, because every harness stopped at `decide_from_windows` one step earlier.
+#[derive(Debug, Clone)]
+pub struct LiveGateInputs {
+    pub capture_mode: CaptureMode,
+    pub capture_stable: bool,
+    pub session_stable: bool,
+    pub repeated_key: bool,
+    pub recent_disruption: bool,
+    pub contradiction_active: bool,
+    pub contradiction_cooldown: bool,
+    pub recent_silence: bool,
+    pub relative_pair_unresolved: bool,
+    pub primary_key_repeat_streak: usize,
+    pub dominant_margin: f32,
+    pub window_dominance: f32,
+    pub window_distinct_tonics: usize,
+    /// The payload's confidence is `key_confidence`'s calibrated probability, which has already
+    /// weighed the evidence the repetition-based conditions below were standing in for.
+    pub evidence_calibrated: bool,
+}
+
+/// Whether the readout may assert the key, and each named condition behind that.
+///
+/// The parts are public because the reason a gate refused is the only thing that has ever caught a
+/// bug here — the `why:` field, not the accuracy numbers.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LiveGateVerdict {
+    pub allowed: bool,
+    pub stable_tonics: bool,
+    pub margin_ok: bool,
+    pub recent_windows_clean: bool,
+    pub endpoint_conservative_ok: bool,
+    pub contradiction_cooldown_block: bool,
+    pub contradiction_cooldown_override: bool,
+}
+
+/// The last word on `likely_key`: may the app stop hedging?
+pub fn live_gate(inputs: &LiveGateInputs, cm: &ContradictionMetrics) -> LiveGateVerdict {
+    let stable_tonics = cm.tonic_entropy <= MAX_TONIC_ENTROPY
+        && cm.dominant_share >= MIN_DOMINANCE_SHARE
+        && cm.competing_tonics <= 2
+        && !cm.major_minor_conflict
+        && !cm.family_mixture;
+    let margin_ok = inputs.dominant_margin >= MIN_PRIMARY_MARGIN;
+    let recent_windows_clean =
+        inputs.window_dominance >= 0.82 && inputs.window_distinct_tonics <= 2;
+    let contradiction_cooldown_override = inputs.contradiction_cooldown
+        && cm.dominant_share >= 0.90
+        && cm.tonic_entropy <= 0.55
+        && inputs.window_dominance >= 0.84
+        && inputs.primary_key_repeat_streak >= (PRIMARY_KEY_REPEAT_MIN + 2);
+    let contradiction_cooldown_block =
+        inputs.contradiction_cooldown && !contradiction_cooldown_override;
+    let endpoint_conservative_ok = if inputs.capture_mode == CaptureMode::EndpointLoopback {
+        cm.dominant_share >= 0.88 && inputs.dominant_margin >= 0.38 && inputs.window_dominance >= 0.86
+    } else {
+        true
+    };
+    // Two kinds of condition, and only one of them survives calibration. The capture being stable,
+    // the session unchanged, no silence, no burst of contradicting windows, the root not a coin
+    // flip — those are facts about the listening conditions, and a probability fitted on clean
+    // recordings knows nothing about them. The rest (the repeat streak, the history's entropy, the
+    // vote's margins) are repetition counting as evidence, and `key_confidence` measured that the
+    // scores themselves are the better evidence: twelve seconds sooner, fewer wrong diagrams.
+    let evidence_ok = inputs.evidence_calibrated
+        || (inputs.repeated_key
+            && !cm.contradiction_burst
+            && stable_tonics
+            && recent_windows_clean
+            && endpoint_conservative_ok
+            && margin_ok);
+    let denied = !inputs.capture_stable
+        || !inputs.session_stable
+        || inputs.recent_disruption
+        || inputs.contradiction_active
+        || contradiction_cooldown_block
+        || inputs.recent_silence
+        || inputs.relative_pair_unresolved
+        || !evidence_ok;
+    LiveGateVerdict {
+        allowed: !denied,
+        stable_tonics,
+        margin_ok,
+        recent_windows_clean,
+        endpoint_conservative_ok,
+        contradiction_cooldown_block,
+        contradiction_cooldown_override,
+    }
+}
+
+pub fn contradiction_metrics_from_history(history: &VecDeque<String>) -> ContradictionMetrics {
     let (entropy, tonic_counts, dominant_share) = tonic_entropy_from_history(history);
     let n = history.len().max(1) as f32;
     let competing_tonics = tonic_counts
@@ -674,7 +1024,24 @@ fn window_disagreement_metrics(results: &[WindowAnalysisResult]) -> WindowDisagr
     }
     let mut tonic_counts: BTreeMap<String, usize> = BTreeMap::new();
     let mut tonic_scales: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
-    let mut by_window: BTreeMap<u64, Vec<&WindowAnalysisResult>> = BTreeMap::new();
+    // Keyed on the window's whole span, not just where it starts.
+    //
+    // `profile_disagreement_ratio` below asks one question: for a *single stretch of audio*, do the
+    // independent tone profiles name different tonics? That is a NumPy-backend idea — it emits a
+    // krumhansl and a temperley result per window, sharing both endpoints.
+    //
+    // The libkeyfinder backend has one profile and emits one window per pass, always as
+    // `window_start_ms: 0` with `window_end_ms` set to however much buffer that pass read. While
+    // the buffer is still growing every pass therefore starts at zero, so keying on the start
+    // alone dropped every cycle into one bucket — and the engine changing its mind *over time* was
+    // scored as two profiles disagreeing *at the same time*. Measured over 273 real clips, that
+    // misfire is the largest single reason the readout never stops hedging: 19% of clips, against
+    // 8% for the relative-pair hedge and 6% for genuine instability across windows.
+    //
+    // Both endpoints preserves the NumPy meaning exactly — its two profiles still share a window —
+    // and separates passes that read different amounts of audio, which are different observations
+    // rather than a contradiction.
+    let mut by_window: BTreeMap<(u64, u64), Vec<&WindowAnalysisResult>> = BTreeMap::new();
     for w in results {
         *tonic_counts.entry(w.key.clone()).or_insert(0) += 1;
         *tonic_scales
@@ -682,7 +1049,10 @@ fn window_disagreement_metrics(results: &[WindowAnalysisResult]) -> WindowDisagr
             .or_default()
             .entry(w.scale.clone())
             .or_insert(0) += 1;
-        by_window.entry(w.window_start_ms).or_default().push(w);
+        by_window
+            .entry((w.window_start_ms, w.window_end_ms))
+            .or_default()
+            .push(w);
     }
     let total = results.len() as f32;
     let mut entropy = 0.0;
@@ -759,6 +1129,45 @@ fn result_vote_score(r: &WindowAnalysisResult) -> (f32, f32) {
     (score, rel)
 }
 
+/// One verdict per stretch of audio: which reading the consensus is allowed to vote with.
+///
+/// Grouping is on the window's *start*, because that is what identifies a stretch of audio for the
+/// NumPy backend — it scores one window with several independent tone profiles, and only one of
+/// them may vote or a single window would outvote the song. Choosing between them on correlation
+/// strength is right: they are genuinely competing descriptions of the same audio.
+///
+/// **They are not competing when the spans differ, and that is the case that ships.**
+/// `key_detection::LibKeyFinderDetector` reports every pass as `window_start_ms: 0` with
+/// `window_end_ms` set to however much buffer it read, so while the capture buffer is still
+/// growing every cycle lands in this one bucket — and "highest strength wins" then means the pass
+/// that read the *least* audio can hold the readout for as long as it stays inside
+/// `AnalysisEvidence::recent`'s 36-second horizon. Two passes that start at the same instant and
+/// read different amounts are not two opinions to choose between: the longer one contains the
+/// shorter one, so it supersedes it rather than competing with it.
+///
+/// Measured on the capture that prompted this — "You've Got a Friend in Me", E♭ major, captured
+/// through the app's own listening path. What libKeyFinder actually returns over the growing
+/// buffer, span by span:
+///
+/// ```text
+///   12s   A# major   strength 0.693   <- the highest strength of the whole run
+///   16s   D# major            0.601
+///   20s   D# major            0.622
+///   ...   D# major       0.62..0.66   every pass to 60s, never anything else
+/// ```
+///
+/// The analyzer had E♭ at sixteen seconds and never changed its mind. The readout showed B♭ — the
+/// dominant, a different note set — from its first reading at 14s of buffer until 55s, and then
+/// switched the instant the early pass aged out of the recency horizon rather than because any new
+/// audio said so. Those nine wrong cycles then filled `decision_history`, whose 16-cycle window
+/// needs 15/16 agreement for `endpoint_conservative_ok`, so the song ended still showing
+/// "hedged, 35%" — 127 seconds of playback, no confident answer, on audio that was never in doubt.
+///
+/// Strength is not a measure of how much evidence a pass had; it is a correlation fit, and a short
+/// buffer that happens to sit on one chord fits a profile beautifully. `docs/KEY_ACCURACY_BASELINE.md`
+/// prices the real relationship out of fold: 20s of audio scores 39.3% note-set, 44s scores 69.3%,
+/// 60s scores 72.2%. More audio is monotonically better evidence, so among nested spans the
+/// longest is simply the best reading available and the rest are its own history.
 fn window_winners_from_results(results: &[WindowAnalysisResult]) -> Vec<WindowWinner> {
     let mut by_window: BTreeMap<u64, WindowWinner> = BTreeMap::new();
     for r in results {
@@ -775,7 +1184,9 @@ fn window_winners_from_results(results: &[WindowAnalysisResult]) -> Vec<WindowWi
         let entry = by_window
             .entry(r.window_start_ms)
             .or_insert(candidate.clone());
-        if candidate.score > entry.score {
+        let supersedes = candidate.window_end_ms > entry.window_end_ms
+            || (candidate.window_end_ms == entry.window_end_ms && candidate.score > entry.score);
+        if supersedes {
             *entry = candidate;
         }
     }
@@ -943,7 +1354,47 @@ pub fn decide_from_windows(
         enough_audio,
         stability_history,
     );
-    apply_tonic_evidence(payload, chroma)
+    let payload = apply_tonic_evidence(payload, chroma);
+    withhold_unsettled_early_reading(payload, results)
+}
+
+/// Below this much audio a reading reaches the neck only once its notes are settled.
+///
+/// The engine now analyses from `FIRST_ANALYSIS_SECONDS`, because a clear song is often clear after
+/// eight seconds and there is no reason to make the player wait for a clock. But an early reading
+/// that has *not* earned `key_confidence::CONFIDENT_NOTE_SET_P` is wrong about the notes nearly
+/// half the time, and until now nothing at all was shown before twelve seconds. So those readings
+/// stay off the neck exactly as before, and the ones that have earned it arrive four to eight
+/// seconds sooner than anything used to. From here on every reading is shown, settled or not —
+/// `keyFusion.ts` never withholds an answer, and neither does this past the first window.
+pub const UNSETTLED_DISPLAY_MIN_SECONDS: usize = 12;
+
+/// How much audio the libkeyfinder backend analyses first. One hop: the earliest buffer the grid
+/// can produce, since the readings before the neck shows anything are evidence too — agreement
+/// with them is one of `key_confidence`'s inputs, and it was fitted on readings from four seconds.
+pub const FIRST_ANALYSIS_SECONDS: usize = ANALYSIS_HOP_SECONDS;
+
+fn withhold_unsettled_early_reading(
+    payload: DetectedKeyPayload,
+    results: &[WindowAnalysisResult],
+) -> DetectedKeyPayload {
+    let Some((inputs, _, _)) = key_confidence::calibration_inputs(results) else {
+        return payload;
+    };
+    if inputs.span_seconds >= UNSETTLED_DISPLAY_MIN_SECONDS as f32
+        || payload.confidence >= key_confidence::CONFIDENT_NOTE_SET_P
+    {
+        return payload;
+    }
+    DetectedKeyPayload {
+        enough_audio: payload.enough_audio,
+        window_count: payload.window_count,
+        ..DetectedKeyPayload::warming_up(
+            payload.capture_mode,
+            payload.target_app.clone(),
+            &format!("early_reading_unsettled:p={:.2}", payload.confidence),
+        )
+    }
 }
 
 fn aggregate_results(
@@ -959,6 +1410,7 @@ fn aggregate_results(
             primary_scale: None,
             display_name: None,
             confidence: 0.0,
+            note_set_evidence: None,
             stability: 0.0,
             alternatives: Vec::new(),
             source: "audio_analysis".to_string(),
@@ -1145,6 +1597,16 @@ fn aggregate_results(
         || disagreement.profile_disagreement_ratio > 0.38
         || disagreement.scale_conflict_ratio > 0.30
         || disagreement.family_mixture;
+    let relative_pair_reason = relative_pair_unresolved.then(|| {
+        let pair = relative_pair_label_value.unwrap_or_else(|| "unknown".into());
+        match coin_flip_gap {
+            // The analyzer could not separate the two names. `pairGap` is its own cosine margin,
+            // measured against `RELATIVE_PAIR_COIN_FLIP_GAP` — not a share of the window vote, and
+            // it is what decided this, whatever the windows happen to be doing.
+            Some(gap) => format!("relative_pair_ambiguity:pair={pair} pairGap={gap:.4}"),
+            None => format!("relative_pair_ambiguity:pair={pair} pairMargin={relative_pair_margin:.3}"),
+        }
+    });
     let state = if !enough_audio {
         "warming_up"
     } else if ambiguous {
@@ -1164,15 +1626,8 @@ fn aggregate_results(
         Some("contradiction_detected_profile_disagreement".to_string())
     } else if disagreement.family_mixture {
         Some("contradiction_detected_mixed_tonic_family".to_string())
-    } else if relative_pair_unresolved {
-        let pair = relative_pair_label_value.unwrap_or_else(|| "unknown".into());
-        Some(match coin_flip_gap {
-            // The analyzer could not separate the two names. `pairGap` is its own cosine margin,
-            // measured against `RELATIVE_PAIR_COIN_FLIP_GAP` — not a share of the window vote, and
-            // it is what decided this, whatever the windows happen to be doing.
-            Some(gap) => format!("relative_pair_ambiguity:pair={pair} pairGap={gap:.4}"),
-            None => format!("relative_pair_ambiguity:pair={pair} pairMargin={relative_pair_margin:.3}"),
-        })
+    } else if let Some(pair_reason) = relative_pair_reason.clone() {
+        Some(pair_reason)
     } else if separation < 0.20 {
         Some("top_candidate_too_close_to_alternative".to_string())
     } else if stability < 0.68 {
@@ -1183,11 +1638,41 @@ fn aggregate_results(
         None
     };
 
+    // Evidence, not repetition, decides whether the notes are settled — whenever the analyzer sent
+    // the evidence and the consensus is talking about the key the newest reading named. Everything
+    // above is then context for the log: none of it is a better predictor of a right diagram than
+    // `key_confidence`, and several of its terms (the buffer gate above all) are the clock standing
+    // in for evidence that is now measured directly. See `key_confidence` for the numbers.
+    //
+    // The root is a separate question with its own calibrated gate, so a relative-pair coin flip
+    // still keeps the readout hedged — the neck shows `tonic_open`, notes settled and root open.
+    let note_set_evidence = key_confidence::calibration_inputs(results)
+        .filter(|(_, key, scale)| *key == top_key && *scale == top_scale)
+        .map(|(inputs, _, _)| NoteSetEvidence {
+            confidence: key_confidence::note_set_probability(&inputs),
+            note_set_run: inputs.run as u32,
+            key_run: key_confidence::key_run(results) as u32,
+        });
+    let (confidence, ambiguous, state, reason) = match note_set_evidence.map(|e| e.confidence) {
+        Some(p) => {
+            let notes_settled = p >= key_confidence::CONFIDENT_NOTE_SET_P;
+            let settled = notes_settled && !relative_pair_unresolved;
+            let reason = if !notes_settled {
+                Some(format!("note_set_unconfirmed:p={p:.2}"))
+            } else {
+                relative_pair_reason
+            };
+            (p, !settled, if settled { "likely_key" } else { "ambiguous" }, reason)
+        }
+        None => (confidence, ambiguous, state, reason),
+    };
+
     apply_capture_degrade(DetectedKeyPayload {
         primary_key: Some(top_key),
         primary_scale: Some(top_scale),
         display_name: Some(top_display),
         confidence,
+        note_set_evidence,
         stability,
         alternatives,
         source: "audio_analysis".to_string(),
@@ -1205,7 +1690,7 @@ fn aggregate_results(
     })
 }
 
-fn with_switch_hysteresis(
+pub fn with_switch_hysteresis(
     mut next: DetectedKeyPayload,
     last_payload: Option<&DetectedKeyPayload>,
 ) -> DetectedKeyPayload {
@@ -1239,7 +1724,7 @@ fn with_switch_hysteresis(
     next
 }
 
-fn apply_ready_streak_gate(
+pub fn apply_ready_streak_gate(
     mut payload: DetectedKeyPayload,
     streak: usize,
     backend_used: &str,
@@ -1287,7 +1772,7 @@ fn apply_ready_streak_gate(
 // The gate weighs every independent signal the engine tracks; bundling them into a
 // struct would only move the same list one level out.
 #[allow(clippy::too_many_arguments)]
-fn enforce_apply_gate(
+pub fn enforce_apply_gate(
     mut payload: DetectedKeyPayload,
     backend_used: &str,
     capture_stable: bool,
@@ -1635,8 +2120,8 @@ fn hard_reset_engine_state(
     decision_history: &mut VecDeque<String>,
     likely_streak: &mut usize,
     last_buffer_bucket: &mut i32,
-    capture_stable_streak: &mut usize,
-    session_stable_streak: &mut usize,
+    capture_stable_since: &mut Option<Instant>,
+    session_stable_since: &mut Option<Instant>,
     recent_disruption_until: &mut Instant,
     primary_key_repeat_streak: &mut usize,
     last_primary_key_choice: &mut Option<String>,
@@ -1662,8 +2147,8 @@ fn hard_reset_engine_state(
     decision_history.clear();
     *likely_streak = 0;
     *last_buffer_bucket = -1;
-    *capture_stable_streak = 0;
-    *session_stable_streak = 0;
+    *capture_stable_since = None;
+    *session_stable_since = None;
     *recent_disruption_until = Instant::now();
     *primary_key_repeat_streak = 0;
     *last_primary_key_choice = None;
@@ -1724,6 +2209,9 @@ pub fn spawn_key_engine(app: AppHandle) {
             let mut last_ab_payload: Option<AbComparePayload> = None;
             let mut capture = AudioCaptureManager::new();
             let mut last_payload: Option<DetectedKeyPayload> = None;
+            // Whether `last_payload`'s confidence came from `key_confidence`. Carried across loop
+            // passes because the gate re-reads the last payload on passes with no new audio.
+            let mut payload_calibrated = false;
             let mut evidence = AnalysisEvidence::default();
             let mut cloud_seeded_track: Option<String> = None;
             let mut last_track_identity: Option<String> = None;
@@ -1738,8 +2226,8 @@ pub fn spawn_key_engine(app: AppHandle) {
             let mut last_buffer_bucket: i32 = -1;
             let mut last_capture_mode: Option<CaptureMode> = None;
             let mut last_capture_target: Option<String> = None;
-            let mut capture_stable_streak: usize = 0;
-            let mut session_stable_streak: usize = 0;
+            let mut capture_stable_since: Option<Instant> = None;
+            let mut session_stable_since: Option<Instant> = None;
             let mut recent_disruption_until = Instant::now();
             let mut last_primary_key_choice: Option<String> = None;
             let mut primary_key_repeat_streak: usize = 0;
@@ -1757,6 +2245,8 @@ pub fn spawn_key_engine(app: AppHandle) {
             let mut has_valid_analysis = false;
             let mut last_good_payload: Option<DetectedKeyPayload> = None;
             let mut last_good_valid_until: Option<Instant> = None;
+            let mut paused_capture: Option<PausedCapture> = None;
+            let mut resumed_payload: Option<DetectedKeyPayload> = None;
 
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -1769,13 +2259,15 @@ pub fn spawn_key_engine(app: AppHandle) {
                     reset_cursor = reset_now;
                     evidence.reset();
                     cloud_seeded_track = None;
+                    paused_capture = None;
+                    resumed_payload = None;
                     hard_reset_engine_state(
                         &mut capture,
                         &mut decision_history,
                         &mut likely_streak,
                         &mut last_buffer_bucket,
-                        &mut capture_stable_streak,
-                        &mut session_stable_streak,
+                        &mut capture_stable_since,
+                        &mut session_stable_since,
                         &mut recent_disruption_until,
                         &mut primary_key_repeat_streak,
                         &mut last_primary_key_choice,
@@ -1837,13 +2329,15 @@ pub fn spawn_key_engine(app: AppHandle) {
                         log::info!("key_engine: media session disappeared status={}", playback_status);
                         evidence.reset();
                     cloud_seeded_track = None;
+                    paused_capture = None;
+                    resumed_payload = None;
                     hard_reset_engine_state(
                             &mut capture,
                             &mut decision_history,
                             &mut likely_streak,
                             &mut last_buffer_bucket,
-                            &mut capture_stable_streak,
-                            &mut session_stable_streak,
+                            &mut capture_stable_since,
+                            &mut session_stable_since,
                             &mut recent_disruption_until,
                             &mut primary_key_repeat_streak,
                             &mut last_primary_key_choice,
@@ -1896,13 +2390,15 @@ pub fn spawn_key_engine(app: AppHandle) {
                     );
                     evidence.reset();
                     cloud_seeded_track = None;
+                    paused_capture = None;
+                    resumed_payload = None;
                     hard_reset_engine_state(
                         &mut capture,
                         &mut decision_history,
                         &mut likely_streak,
                         &mut last_buffer_bucket,
-                        &mut capture_stable_streak,
-                        &mut session_stable_streak,
+                        &mut capture_stable_since,
+                        &mut session_stable_since,
                         &mut recent_disruption_until,
                         &mut primary_key_repeat_streak,
                         &mut last_primary_key_choice,
@@ -1929,7 +2425,7 @@ pub fn spawn_key_engine(app: AppHandle) {
                     last_track_identity = current_track_identity.clone();
                 }
                 if has_session && !track_changed {
-                    session_stable_streak = session_stable_streak.saturating_add(1);
+                    session_stable_since.get_or_insert_with(Instant::now);
                 }
 
                 if !has_session {
@@ -1943,7 +2439,28 @@ pub fn spawn_key_engine(app: AppHandle) {
                         analyzer_running = false;
                         log::info!("key_engine: analyzer stopped reason=playback_paused_or_stopped");
                     }
-                    capture.stop_capture("playback_paused_or_stopped");
+                    // Keep what was heard only when the track is known, so a resume can be checked
+                    // against it; without an identity nothing says the same song is coming back.
+                    match current_track_identity.as_ref() {
+                        Some(track) => {
+                            // Not on the cycle the track changed: the capture state still
+                            // belongs to the previous song.
+                            if paused_capture.is_none() && !track_changed {
+                                if let Some(mode) =
+                                    last_capture_mode.filter(|m| *m != CaptureMode::Unavailable)
+                                {
+                                    paused_capture = Some(PausedCapture {
+                                        mode,
+                                        target: last_capture_target.clone(),
+                                        track: track.clone(),
+                                        payload: last_payload.clone(),
+                                    });
+                                }
+                            }
+                            capture.pause_capture("playback_paused_or_stopped");
+                        }
+                        None => capture.stop_capture("playback_paused_or_stopped"),
+                    }
                 } else if should_run_local_capture(has_session, is_playing, cloud_hit) {
                     capture.ensure_capture_running_for_target(media.source_app.clone());
                     capture.poll_capture_samples();
@@ -2003,7 +2520,36 @@ pub fn spawn_key_engine(app: AppHandle) {
                         }
                     );
                 }
-                if capture_changed {
+                let transition = if capture_changed {
+                    capture_transition(
+                        paused_capture.as_ref(),
+                        snapshot.capture_mode,
+                        snapshot.target_app.as_deref(),
+                        current_track_identity.as_deref(),
+                        is_paused_or_stopped,
+                    )
+                } else {
+                    CaptureTransition::Changed
+                };
+                if capture_changed && transition != CaptureTransition::Changed {
+                    if transition == CaptureTransition::Resuming {
+                        resumed_payload = paused_capture.take().and_then(|p| p.payload);
+                    }
+                    log::info!(
+                        "key_engine: capture {:?}/{:?} -> {:?}/{:?} is a {} of the same track; keeping {} readings over {:.1}s of audio",
+                        last_capture_mode,
+                        last_capture_target,
+                        snapshot.capture_mode,
+                        snapshot.target_app,
+                        if transition == CaptureTransition::Pausing { "pause" } else { "resume" },
+                        evidence.windows.len(),
+                        snapshot.buffer_seconds
+                    );
+                    last_capture_mode = Some(snapshot.capture_mode);
+                    last_capture_target = snapshot.target_app.clone();
+                } else if capture_changed {
+                    paused_capture = None;
+                    resumed_payload = None;
                     if last_capture_mode.is_some() {
                         log::warn!(
                             "key_engine: capture mode/target changed {:?}/{:?} -> {:?}/{:?}; requestedMode={:?} reason={:?} phase={}; invalidating confidence",
@@ -2022,7 +2568,7 @@ pub fn spawn_key_engine(app: AppHandle) {
                     }
                     last_capture_mode = Some(snapshot.capture_mode);
                     last_capture_target = snapshot.target_app.clone();
-                    capture_stable_streak = 0;
+                    capture_stable_since = snapshot.has_live_capture.then(Instant::now);
                     recent_disruption_until = if has_valid_analysis {
                         Instant::now() + Duration::from_millis(DISRUPTION_COOLDOWN_MS)
                     } else {
@@ -2037,11 +2583,15 @@ pub fn spawn_key_engine(app: AppHandle) {
                     contradiction_clean_streak = 0;
                     contradiction_cooldown_until = Instant::now();
                 } else if snapshot.has_live_capture {
-                    capture_stable_streak = capture_stable_streak.saturating_add(1);
+                    capture_stable_since.get_or_insert_with(Instant::now);
                 }
 
                 let (samples, sample_start_ms, aligned_endpoint) = aligned_analysis_samples(
-                    capture.latest_samples(60), capture.accepted_samples(), capture.sample_rate_hz());
+                    capture.latest_samples(60),
+                    capture.accepted_samples(),
+                    capture.grid_origin(),
+                    capture.sample_rate_hz(),
+                );
                 let mut fresh_analysis = false;
                 let mut payload = if !has_session {
                     likely_streak = 0;
@@ -2117,10 +2667,13 @@ pub fn spawn_key_engine(app: AppHandle) {
                             held.target_app = snapshot.target_app.clone().or(media.source_app.clone());
                             held.reason = Some("paused_holding_last_good_detection".to_string());
                             held.state = "paused_hold".to_string();
-                            log::info!(
-                                "key_engine: preserving last good detection during pause for grace window ({}ms)",
-                                LAST_GOOD_HOLD_MS
-                            );
+                            // On entering the hold, not on every loop pass through it.
+                            if last_payload.as_ref().map(|p| p.state.as_str()) != Some("paused_hold") {
+                                log::info!(
+                                    "key_engine: preserving last good detection during pause for grace window ({}ms)",
+                                    LAST_GOOD_HOLD_MS
+                                );
+                            }
                             held
                         } else {
                             apply_capture_degrade(DetectedKeyPayload::warming_up(
@@ -2143,7 +2696,9 @@ pub fn spawn_key_engine(app: AppHandle) {
                         snapshot.target_app.clone().or(media.source_app.clone()),
                         "capture_not_ready",
                     ))
-                } else if samples.len() < ANALYSIS_WINDOW_SECONDS * capture.sample_rate_hz() as usize {
+                } else if samples.len()
+                    < first_analysis_seconds(&analyzer_health.backend) * capture.sample_rate_hz() as usize
+                {
                     // Avoid blaming the analyzer when we simply don't have a full analysis window yet.
                     likely_streak = 0;
                     apply_capture_degrade(DetectedKeyPayload::warming_up(
@@ -2152,8 +2707,13 @@ pub fn spawn_key_engine(app: AppHandle) {
                         "collecting_audio_for_first_window",
                     ))
                 } else if aligned_endpoint <= evidence.last_analyzed_endpoint {
-                    last_payload.clone().unwrap_or_else(|| DetectedKeyPayload::warming_up(
-                        snapshot.capture_mode, media.source_app.clone(), "waiting_for_fresh_audio"))
+                    // Straight after a resume the last payload is the pause's own; the reading from
+                    // before the pause still describes this audio until the next hop is read.
+                    resumed_payload
+                        .clone()
+                        .or_else(|| last_payload.clone())
+                        .unwrap_or_else(|| DetectedKeyPayload::warming_up(
+                            snapshot.capture_mode, media.source_app.clone(), "waiting_for_fresh_audio"))
                 } else {
                     if !analyzer_running {
                         analyzer_running = true;
@@ -2183,6 +2743,7 @@ pub fn spawn_key_engine(app: AppHandle) {
                     match analyzed {
                         Ok(mut output) => {
                             fresh_analysis = evidence.accept(&output.windows, sample_start_ms, aligned_endpoint);
+                            resumed_payload = None;
                             if fresh_analysis {
                                 output.windows = evidence.recent();
                             }
@@ -2432,6 +2993,7 @@ pub fn spawn_key_engine(app: AppHandle) {
                                 &decision_history,
                                 output.chroma.as_deref(),
                             );
+                            payload_calibrated = evidence_is_calibrated(&output.windows, &payload);
                             if backend_used == "numpy_fallback" {
                                 // Preserve the measured consensus score for Live Jam's
                                 // estimate gate. This is evidence, not calibrated accuracy.
@@ -2546,6 +3108,7 @@ pub fn spawn_key_engine(app: AppHandle) {
                         primary_scale: Some(mode),
                         display_name: Some(display_name),
                         confidence: 0.95,
+                        note_set_evidence: None,
                         stability: 1.0,
                         alternatives: Vec::new(),
                         source: "cloud_verified".to_string(),
@@ -2623,19 +3186,15 @@ pub fn spawn_key_engine(app: AppHandle) {
                     window_vote_quality(&last_window_tonic_votes);
                 let (relative_pair_detected, relative_pair, relative_pair_margin) =
                     relative_pair_from_payload(&payload);
-                let relative_pair_unresolved = relative_pair_detected
-                    && payload
-                        .reason
-                        .as_deref()
-                        .map(|r| r.starts_with("relative_pair_ambiguity"))
-                        .unwrap_or(false);
-                let dominant_margin = if payload.alternatives.is_empty() {
-                    payload.confidence
-                } else {
-                    payload.confidence - payload.alternatives[0].confidence
-                };
-                let capture_stable = capture_stable_streak >= CAPTURE_STABLE_MIN_CYCLES;
-                let session_stable = session_stable_streak >= SESSION_STABLE_MIN_CYCLES;
+                // Through the same helpers the replay harness uses, so the two cannot drift.
+                let relative_pair_unresolved = relative_pair_unresolved_in(&payload);
+                let dominant_margin = dominant_margin_of(&payload);
+                let capture_stable_s = capture_stable_since.map_or(0.0, |t| t.elapsed().as_secs_f32());
+                let session_stable_s = session_stable_since.map_or(0.0, |t| t.elapsed().as_secs_f32());
+                let capture_stable = capture_stable_since
+                    .is_some_and(|t| t.elapsed() >= stable_window(CAPTURE_STABLE_MIN_CYCLES));
+                let session_stable = session_stable_since
+                    .is_some_and(|t| t.elapsed() >= stable_window(SESSION_STABLE_MIN_CYCLES));
                 let repeated_key = primary_key_repeat_streak >= PRIMARY_KEY_REPEAT_MIN;
                 let recent_silence = snapshot.recent_silence;
                 let hold_active = last_good_valid_until
@@ -2650,10 +3209,12 @@ pub fn spawn_key_engine(app: AppHandle) {
                             held.reason = Some("recent_silence_holding_last_good_detection".to_string());
                             held.state = "paused_hold".to_string();
                             payload = held;
-                            log::info!(
-                                "key_engine: preserving last good detection during recent silence for grace window ({}ms)",
-                                LAST_GOOD_HOLD_MS
-                            );
+                            if last_payload.as_ref().map(|p| p.state.as_str()) != Some("paused_hold") {
+                                log::info!(
+                                    "key_engine: preserving last good detection during recent silence for grace window ({}ms)",
+                                    LAST_GOOD_HOLD_MS
+                                );
+                            }
                         }
                     } else {
                         payload.confidence *= 0.55;
@@ -2665,40 +3226,35 @@ pub fn spawn_key_engine(app: AppHandle) {
                     }
                 }
                 if payload.state == "likely_key" && payload.source != "cloud_verified" {
-                    let stable_tonics = cm.tonic_entropy <= MAX_TONIC_ENTROPY
-                        && cm.dominant_share >= MIN_DOMINANCE_SHARE
-                        && cm.competing_tonics <= 2
-                        && !cm.major_minor_conflict
-                        && !cm.family_mixture;
-                    let margin_ok = dominant_margin >= MIN_PRIMARY_MARGIN;
-                    let recent_windows_clean =
-                        window_dominance >= 0.82 && window_distinct_tonics <= 2;
-                    let contradiction_cooldown_override = contradiction_cooldown
-                        && cm.dominant_share >= 0.90
-                        && cm.tonic_entropy <= 0.55
-                        && window_dominance >= 0.84
-                        && primary_key_repeat_streak >= (PRIMARY_KEY_REPEAT_MIN + 2);
-                    contradiction_cooldown_block =
-                        contradiction_cooldown && !contradiction_cooldown_override;
-                    let endpoint_conservative_ok = if payload.capture_mode == CaptureMode::EndpointLoopback {
-                        cm.dominant_share >= 0.88 && dominant_margin >= 0.38 && window_dominance >= 0.86
-                    } else {
-                        true
-                    };
-                    if !capture_stable
-                        || !session_stable
-                        || !repeated_key
-                        || recent_disruption
-                        || contradiction_active
-                        || contradiction_cooldown_block
-                        || recent_silence
-                        || cm.contradiction_burst
-                        || relative_pair_unresolved
-                        || !stable_tonics
-                        || !recent_windows_clean
-                        || !endpoint_conservative_ok
-                        || !margin_ok
-                    {
+                    let gate = live_gate(
+                        &LiveGateInputs {
+                            capture_mode: payload.capture_mode,
+                            capture_stable,
+                            session_stable,
+                            repeated_key,
+                            recent_disruption,
+                            contradiction_active,
+                            contradiction_cooldown,
+                            recent_silence,
+                            relative_pair_unresolved,
+                            primary_key_repeat_streak,
+                            dominant_margin,
+                            window_dominance,
+                            window_distinct_tonics,
+                            evidence_calibrated: payload_calibrated,
+                        },
+                        &cm,
+                    );
+                    let LiveGateVerdict {
+                        stable_tonics,
+                        margin_ok,
+                        recent_windows_clean,
+                        endpoint_conservative_ok,
+                        contradiction_cooldown_override,
+                        ..
+                    } = gate;
+                    contradiction_cooldown_block = gate.contradiction_cooldown_block;
+                    if !gate.allowed {
                         payload.state = "ambiguous".to_string();
                         payload.ambiguous = true;
                         payload.ready_to_apply = false;
@@ -2734,65 +3290,73 @@ pub fn spawn_key_engine(app: AppHandle) {
                             window_distinct_tonics,
                             dominant_margin
                         ));
-                        log::info!(
-                            "key_engine: likely_key denied backend={} captureMode={:?} reasons capture_streak={} session_streak={} key_repeat={} disruption={} contradictionActive={} contradictionCooldown={} contradictionCooldownOverride={} contradictionBurst={} recentSilence={} relativePairDetected={} relativePair={:?} relativePairMargin={:.3} relativePairUnresolved={} endpointConservativeOk={} entropy={:.3} dominantShare={:.3} competingTonics={} distinctTonics={} rapidSwitches={} majorMinorConflict={} familyMixture={} windowDominance={:.3} windowDistinctTonics={} margin={:.3} tonicCounts={:?} recent={:?} windowPredictions={:?} windowTonicVotes={:?}",
-                            backend_used,
-                            payload.capture_mode,
-                            capture_stable_streak,
-                            session_stable_streak,
-                            primary_key_repeat_streak,
-                            recent_disruption,
-                            contradiction_active,
-                            contradiction_cooldown_block,
-                            contradiction_cooldown_override,
-                            cm.contradiction_burst,
-                            recent_silence,
-                            relative_pair_detected,
-                            relative_pair,
-                            relative_pair_margin,
-                            relative_pair_unresolved,
-                            endpoint_conservative_ok,
-                            cm.tonic_entropy,
-                            cm.dominant_share,
-                            cm.competing_tonics,
-                            cm.distinct_tonics,
-                            cm.rapid_switches,
-                            cm.major_minor_conflict,
-                            cm.family_mixture,
-                            window_dominance,
-                            window_distinct_tonics,
-                            dominant_margin,
-                            cm.tonic_counts,
-                            decision_history,
-                            last_window_predictions,
-                            last_window_tonic_votes
-                        );
+                        // Once per analysis, not once per loop pass: the loop polls several times a
+                        // second now, and the verdict only changes when there is new audio.
+                        if fresh_analysis {
+                            log::info!(
+                                "key_engine: likely_key denied backend={} captureMode={:?} reasons captureStableS={:.1} sessionStableS={:.1} key_repeat={} disruption={} contradictionActive={} contradictionCooldown={} contradictionCooldownOverride={} contradictionBurst={} recentSilence={} relativePairDetected={} relativePair={:?} relativePairMargin={:.3} relativePairUnresolved={} endpointConservativeOk={} entropy={:.3} dominantShare={:.3} competingTonics={} distinctTonics={} rapidSwitches={} majorMinorConflict={} familyMixture={} windowDominance={:.3} windowDistinctTonics={} margin={:.3} tonicCounts={:?} recent={:?} windowPredictions={:?} windowTonicVotes={:?}",
+                                backend_used,
+                                payload.capture_mode,
+                                capture_stable_s,
+                                session_stable_s,
+                                primary_key_repeat_streak,
+                                recent_disruption,
+                                contradiction_active,
+                                contradiction_cooldown_block,
+                                contradiction_cooldown_override,
+                                cm.contradiction_burst,
+                                recent_silence,
+                                relative_pair_detected,
+                                relative_pair,
+                                relative_pair_margin,
+                                relative_pair_unresolved,
+                                endpoint_conservative_ok,
+                                cm.tonic_entropy,
+                                cm.dominant_share,
+                                cm.competing_tonics,
+                                cm.distinct_tonics,
+                                cm.rapid_switches,
+                                cm.major_minor_conflict,
+                                cm.family_mixture,
+                                window_dominance,
+                                window_distinct_tonics,
+                                dominant_margin,
+                                cm.tonic_counts,
+                                decision_history,
+                                last_window_predictions,
+                                last_window_tonic_votes
+                            );
+                        }
                     } else {
-                        log::info!(
-                            "key_engine: likely_key promoted backend={} captureMode={:?} contradictionCooldown={} contradictionCooldownOverride={} relativePairDetected={} relativePair={:?} relativePairMargin={:.3} capture_streak={} session_streak={} key_repeat={} entropy={:.3} dominantShare={:.3} competingTonics={} distinctTonics={} windowDominance={:.3} windowDistinctTonics={} recentSilence={} margin={:.3} tonicCounts={:?} recent={:?} windowPredictions={:?} windowTonicVotes={:?}",
-                            backend_used,
-                            payload.capture_mode,
-                            contradiction_cooldown_block,
-                            contradiction_cooldown_override,
-                            relative_pair_detected,
-                            relative_pair,
-                            relative_pair_margin,
-                            capture_stable_streak,
-                            session_stable_streak,
-                            primary_key_repeat_streak,
-                            cm.tonic_entropy,
-                            cm.dominant_share,
-                            cm.competing_tonics,
-                            cm.distinct_tonics,
-                            window_dominance,
-                            window_distinct_tonics,
-                            recent_silence,
-                            dominant_margin,
-                            cm.tonic_counts,
-                            decision_history,
-                            last_window_predictions,
-                            last_window_tonic_votes
-                        );
+                        // Once per analysis, not once per loop pass: the loop polls several times a
+                        // second now, and the verdict only changes when there is new audio.
+                        if fresh_analysis {
+                            log::info!(
+                                "key_engine: likely_key promoted backend={} captureMode={:?} contradictionCooldown={} contradictionCooldownOverride={} relativePairDetected={} relativePair={:?} relativePairMargin={:.3} captureStableS={:.1} sessionStableS={:.1} key_repeat={} entropy={:.3} dominantShare={:.3} competingTonics={} distinctTonics={} windowDominance={:.3} windowDistinctTonics={} recentSilence={} margin={:.3} tonicCounts={:?} recent={:?} windowPredictions={:?} windowTonicVotes={:?}",
+                                backend_used,
+                                payload.capture_mode,
+                                contradiction_cooldown_block,
+                                contradiction_cooldown_override,
+                                relative_pair_detected,
+                                relative_pair,
+                                relative_pair_margin,
+                                capture_stable_s,
+                                session_stable_s,
+                                primary_key_repeat_streak,
+                                cm.tonic_entropy,
+                                cm.dominant_share,
+                                cm.competing_tonics,
+                                cm.distinct_tonics,
+                                window_dominance,
+                                window_distinct_tonics,
+                                recent_silence,
+                                dominant_margin,
+                                cm.tonic_counts,
+                                decision_history,
+                                last_window_predictions,
+                                last_window_tonic_votes
+                            );
+                        }
                     }
                 }
                 if fresh_analysis && payload.state == "likely_key" && !payload.ambiguous {
@@ -2919,7 +3483,21 @@ pub fn spawn_key_engine(app: AppHandle) {
                     last_payload = Some(payload);
                 }
 
-                std::thread::park_timeout(Duration::from_millis(ANALYZE_EVERY_MS));
+                // Until the next hop is due while there is live audio to analyse, and never longer
+                // than the poll period, which is what notices play, pause and a new track.
+                let sleep = if is_playing && snapshot.has_live_capture {
+                    next_analysis_due_in(
+                        capture.accepted_samples(),
+                        capture.grid_origin(),
+                        evidence.last_analyzed_endpoint,
+                        first_analysis_seconds(&analyzer_health.backend),
+                        capture.sample_rate_hz(),
+                    )
+                    .min(Duration::from_millis(LOOP_POLL_MS))
+                } else {
+                    Duration::from_millis(LOOP_POLL_MS)
+                };
+                std::thread::park_timeout(sleep);
             }
             capture.stop_capture("engine_shutdown");
         })
@@ -3018,17 +3596,143 @@ mod tonic_evidence_tests {
 
     /// One libkeyfinder pass over a buffer `span_ms` long, dated the way the detector dates it.
     fn whole_buffer_pass(key: &str, scale: &str, span_ms: u64) -> WindowAnalysisResult {
+        whole_buffer_pass_at(key, scale, span_ms, 0.63)
+    }
+
+    fn whole_buffer_pass_at(
+        key: &str,
+        scale: &str,
+        span_ms: u64,
+        strength: f32,
+    ) -> WindowAnalysisResult {
         serde_json::from_value(serde_json::json!({
             "profileType": "libkeyfinder",
             "key": key,
             "scale": scale,
             "displayName": format!("{key} {scale}"),
-            "strength": 0.63,
+            "strength": strength,
             "firstToSecondRelativeStrength": 0.25,
             "windowStartMs": 0,
             "windowEndMs": span_ms,
         }))
         .unwrap()
+    }
+
+    /// A shorter pass cannot outrank the pass that contains it, however well it correlated.
+    ///
+    /// Replays the capture in `window_winners_from_results`'s note: twelve seconds of "You've Got
+    /// a Friend in Me" fit A♯ major at strength 0.693, and every pass from sixteen seconds on read
+    /// E♭ major at 0.60–0.66. Grouping on the start alone and keeping the highest strength meant
+    /// the readout showed the dominant — a different note set — from 14 seconds of buffer to 55,
+    /// while the analyzer had been right since sixteen.
+    #[test]
+    fn the_pass_that_heard_more_audio_wins_the_window() {
+        let growing = [
+            whole_buffer_pass_at("A#", "major", 12_000, 0.693),
+            whole_buffer_pass_at("D#", "major", 16_000, 0.601),
+            whole_buffer_pass_at("D#", "major", 20_000, 0.622),
+            whole_buffer_pass_at("D#", "major", 24_000, 0.628),
+        ];
+        let winners = window_winners_from_results(&growing);
+        assert_eq!(winners.len(), 1, "nested spans are one stretch of audio, not four");
+        assert_eq!(
+            (winners[0].key.as_str(), winners[0].window_end_ms),
+            ("D#", 24_000),
+            "the reading that heard twenty-four seconds supersedes the one that heard twelve"
+        );
+
+        // And the whole way through the consensus, which is what the player reads.
+        let payload = decide_from_windows(
+            &growing,
+            CaptureMode::EndpointLoopback,
+            None,
+            true,
+            &VecDeque::new(),
+            None,
+        );
+        assert_eq!(payload.primary_key.as_deref(), Some("D#"));
+    }
+
+    /// The NumPy backend's case, which the grouping exists for: several profiles, one window.
+    ///
+    /// Same start *and* same end means these really are competing descriptions of one stretch of
+    /// audio, and there strength is the right way to choose. Superseding must not reach them.
+    #[test]
+    fn profiles_scoring_the_same_window_are_still_settled_by_strength() {
+        let one_window: Vec<WindowAnalysisResult> = [("krumhansl", "A", 0.51), ("temperley", "F#", 0.74)]
+            .iter()
+            .map(|(profile, key, strength)| {
+                serde_json::from_value(serde_json::json!({
+                    "profileType": profile,
+                    "key": key,
+                    "scale": "minor",
+                    "displayName": format!("{key} minor"),
+                    "strength": strength,
+                    "firstToSecondRelativeStrength": 0.25,
+                    "windowStartMs": 8_000,
+                    "windowEndMs": 20_000,
+                }))
+                .unwrap()
+            })
+            .collect();
+        let winners = window_winners_from_results(&one_window);
+        assert_eq!(winners.len(), 1);
+        assert_eq!(
+            winners[0].key.as_str(),
+            "F#",
+            "two profiles over identical spans are a real contest, decided by fit"
+        );
+    }
+
+    /// A pass over more audio is a new observation, not a second opinion on the same audio.
+    ///
+    /// `profile_disagreement_ratio` exists for the NumPy backend, which analyses one window with
+    /// two independent tone profiles and can genuinely have them disagree. libKeyFinder has one
+    /// profile and reports every pass as starting at zero, so keying the grouping on the start
+    /// alone collapsed a whole growing buffer into a single "window" — and an engine that changed
+    /// its mind between cycles was scored as two profiles contradicting each other at one instant.
+    ///
+    /// It was the largest single reason the readout never stopped hedging on real music (19% of
+    /// 273 clips), and nothing tested it, because every test fed the consensus one cycle at a time.
+    #[test]
+    fn a_changed_mind_over_time_is_not_two_profiles_disagreeing() {
+        // What libkeyfinder produces over a growing buffer: same start, growing end, and at some
+        // point a different answer.
+        let growing = [
+            whole_buffer_pass("A#", "major", 20_000),
+            whole_buffer_pass("A#", "major", 24_000),
+            whole_buffer_pass("D#", "major", 28_000),
+            whole_buffer_pass("D#", "major", 32_000),
+        ];
+        let metrics = window_disagreement_metrics(&growing);
+        assert_eq!(
+            metrics.profile_disagreement_ratio, 0.0,
+            "four passes over four different amounts of audio are four observations"
+        );
+
+        // What the NumPy backend produces, and what the metric is actually for: one window, two
+        // profiles, two answers. That must still read as disagreement.
+        let two_profiles: Vec<WindowAnalysisResult> = ["krumhansl", "temperley"]
+            .iter()
+            .zip(["A#", "D#"])
+            .map(|(profile, key)| {
+                serde_json::from_value(serde_json::json!({
+                    "profileType": profile,
+                    "key": key,
+                    "scale": "major",
+                    "displayName": format!("{key} major"),
+                    "strength": 0.63,
+                    "firstToSecondRelativeStrength": 0.25,
+                    "windowStartMs": 0,
+                    "windowEndMs": 12_000,
+                }))
+                .unwrap()
+            })
+            .collect();
+        assert_eq!(
+            window_disagreement_metrics(&two_profiles).profile_disagreement_ratio, 1.0,
+            "one window, two profiles, two tonics — the case the metric was written for"
+        );
     }
 
     #[test]
@@ -3127,6 +3831,8 @@ mod tonic_evidence_tests {
                 candidates: None,
                 relative_pair_gap: gap,
                 tuning_cents: None,
+                note_set_margin: None,
+                top_score: None,
                 window_start_ms: i * 4_000,
                 window_end_ms: i * 4_000 + 12_000,
             })
@@ -3413,10 +4119,12 @@ mod tests {
         capture.ingest_mono_samples(rate,&vec![0.2;rate as usize*4]);
         assert_eq!(capture.available_buffer_seconds(),seconds);
         assert_eq!(capture.accepted_samples(),endpoint+rate as u64*4);
-        let (samples,start,end) = super::aligned_analysis_samples(capture.latest_samples(60),capture.accepted_samples(),rate);
+        let (samples,start,end) = super::aligned_analysis_samples(capture.latest_samples(60),capture.accepted_samples(),capture.grid_origin(),rate);
         assert_eq!(end,68*rate as u64);
-        assert_eq!(start,24_000);
-        assert_eq!(samples.len(),44*rate as usize);
+        // The whole of what the ring holds, not a 44-second slice of it: `ROLLING_BUFFER_SECONDS`
+        // and `MAX_ANALYSIS_SPAN_SECONDS` are both 60, so nothing captured is discarded.
+        assert_eq!(start,8_000);
+        assert_eq!(samples.len(),60*rate as usize);
         capture.reset();
         capture.ingest_mono_samples(rate,&vec![0.2;rate as usize*12]);
         assert_eq!(capture.accepted_samples(),80*rate as u64);
@@ -3424,11 +4132,65 @@ mod tests {
 
     #[test]
     fn partial_hops_do_not_create_new_analysis_endpoints() {
-        for seconds in [60,61,62,63] {
-            let (_,start,end)=super::aligned_analysis_samples(vec![0.2;60*100],seconds*100,100);
-            assert_eq!(end,6000);
-            assert_eq!(start,16000);
+        // Eighty seconds held, so the span cap is what decides the window rather than how much
+        // audio happens to exist. The point is that a partial hop at the end moves neither
+        // endpoint: a re-scan of the same audio must not read as new evidence.
+        for seconds in [80,81,82,83] {
+            let (_,start,end)=super::aligned_analysis_samples(vec![0.2;80*100],seconds*100,0,100);
+            assert_eq!(end,8000);
+            assert_eq!(start,20000);
         }
+    }
+
+    #[test]
+    fn a_song_that_starts_off_the_lifetime_grid_is_analysed_at_twelve_seconds() {
+        // 66 seconds of one song, then a track change: the ring is cleared at a lifetime count
+        // that is not a multiple of the hop. Twelve seconds into the new song the analyzer must
+        // be handed exactly those twelve seconds. Aligned to the lifetime count instead, the
+        // endpoint fell back to 76s — ten seconds of this song, under the first window — and the
+        // first reading waited for 80s, four seconds late.
+        let mut capture = crate::audio_capture::AudioCaptureManager::new();
+        let rate = capture.sample_rate_hz();
+        capture.ingest_mono_samples(rate, &vec![0.2; rate as usize * 66]);
+        capture.reset();
+        assert_eq!(capture.grid_origin(), 66 * rate as u64);
+        capture.ingest_mono_samples(rate, &vec![0.2; rate as usize * 12]);
+        let (samples, _, end) = super::aligned_analysis_samples(
+            capture.latest_samples(60),
+            capture.accepted_samples(),
+            capture.grid_origin(),
+            rate,
+        );
+        assert_eq!(end, 78 * rate as u64);
+        assert_eq!(samples.len(), 12 * rate as usize);
+        // One hop later the next endpoint is due, on the song's own grid.
+        capture.ingest_mono_samples(rate, &vec![0.2; rate as usize * 4]);
+        let (samples, _, end) = super::aligned_analysis_samples(
+            capture.latest_samples(60),
+            capture.accepted_samples(),
+            capture.grid_origin(),
+            rate,
+        );
+        assert_eq!(end, 82 * rate as u64);
+        assert_eq!(samples.len(), 16 * rate as usize);
+    }
+
+    #[test]
+    fn the_loop_sleeps_until_the_next_hop_is_due() {
+        let rate = 100u32;
+        let slack = std::time::Duration::from_millis(super::CAPTURE_PACKET_SLACK_MS);
+        // Nothing analysed yet, ring started at 5s, 9s of it held: the first window is 3s away.
+        assert_eq!(super::next_analysis_due_in(1400, 500, 0, 12, rate), std::time::Duration::from_secs(3) + slack);
+        // Last analysed at 17s on that grid: the next hop completes at 21s.
+        assert_eq!(super::next_analysis_due_in(1850, 500, 1700, 12, rate), std::time::Duration::from_millis(2500) + slack);
+        // Already due: wake only for the packet slack.
+        assert_eq!(super::next_analysis_due_in(2200, 500, 1700, 12, rate), slack);
+    }
+
+    #[test]
+    fn stability_requirements_keep_their_nine_seconds_at_any_poll_rate() {
+        assert_eq!(super::stable_window(super::CAPTURE_STABLE_MIN_CYCLES), std::time::Duration::from_secs(9));
+        assert_eq!(super::stable_window(super::SESSION_STABLE_MIN_CYCLES), std::time::Duration::from_secs(9));
     }
 
     #[test]
@@ -3535,6 +4297,8 @@ mod tests {
                 candidates: None,
                 relative_pair_gap: None,
                 tuning_cents: None,
+                note_set_margin: None,
+                top_score: None,
                 window_start_ms: 0,
                 window_end_ms: 12_000,
             },
@@ -3548,6 +4312,8 @@ mod tests {
                 candidates: None,
                 relative_pair_gap: None,
                 tuning_cents: None,
+                note_set_margin: None,
+                top_score: None,
                 window_start_ms: 4_000,
                 window_end_ms: 16_000,
             },
@@ -3577,6 +4343,8 @@ mod tests {
                 candidates: None,
                 relative_pair_gap: None,
                 tuning_cents: None,
+                note_set_margin: None,
+                top_score: None,
                 window_start_ms: 0,
                 window_end_ms: 12_000,
             },
@@ -3590,6 +4358,8 @@ mod tests {
                 candidates: None,
                 relative_pair_gap: None,
                 tuning_cents: None,
+                note_set_margin: None,
+                top_score: None,
                 window_start_ms: 4_000,
                 window_end_ms: 16_000,
             },
@@ -3603,6 +4373,8 @@ mod tests {
                 candidates: None,
                 relative_pair_gap: None,
                 tuning_cents: None,
+                note_set_margin: None,
+                top_score: None,
                 window_start_ms: 8_000,
                 window_end_ms: 20_000,
             },
@@ -3640,6 +4412,8 @@ mod tests {
                 candidates: None,
                 relative_pair_gap: None,
                 tuning_cents: None,
+                note_set_margin: None,
+                top_score: None,
                 window_start_ms: 0,
                 window_end_ms: 12_000,
             });
@@ -3659,6 +4433,8 @@ mod tests {
                     candidates: None,
                     relative_pair_gap: None,
                     tuning_cents: None,
+                    note_set_margin: None,
+                    top_score: None,
                     window_start_ms: start,
                     window_end_ms: end,
                 });
@@ -3696,6 +4472,8 @@ mod tests {
                     candidates: None,
                     relative_pair_gap: None,
                     tuning_cents: None,
+                    note_set_margin: None,
+                    top_score: None,
                     window_start_ms: start,
                     window_end_ms: start + 12_000,
                 });
@@ -3714,6 +4492,8 @@ mod tests {
                     candidates: None,
                     relative_pair_gap: None,
                     tuning_cents: None,
+                    note_set_margin: None,
+                    top_score: None,
                     window_start_ms: start,
                     window_end_ms: start + 12_000,
                 });
@@ -3778,6 +4558,7 @@ mod tests {
             primary_scale: Some("minor".to_string()),
             display_name: Some("A minor".to_string()),
             confidence: 0.78,
+            note_set_evidence: None,
             stability: 0.74,
             alternatives: vec![],
             source: "audio_analysis".to_string(),
@@ -3798,6 +4579,7 @@ mod tests {
             primary_scale: Some("major".to_string()),
             display_name: Some("C major".to_string()),
             confidence: 0.80,
+            note_set_evidence: None,
             stability: 0.72,
             alternatives: vec![],
             source: "audio_analysis".to_string(),
@@ -3826,6 +4608,7 @@ mod tests {
             primary_scale: Some("minor".to_string()),
             display_name: Some("E minor".to_string()),
             confidence: 0.83,
+            note_set_evidence: None,
             stability: 0.77,
             alternatives: vec![],
             source: "audio_analysis".to_string(),
@@ -3888,6 +4671,7 @@ mod tests {
             primary_scale: Some("major".to_string()),
             display_name: Some("G major".to_string()),
             confidence: 0.92,
+            note_set_evidence: None,
             stability: 0.90,
             alternatives: vec![crate::audio_models::KeyCandidate {
                 key: "D".to_string(),
@@ -3925,6 +4709,7 @@ mod tests {
             primary_scale: Some("minor".to_string()),
             display_name: Some("A minor".to_string()),
             confidence: 0.93,
+            note_set_evidence: None,
             stability: 0.92,
             alternatives: vec![],
             source: "audio_analysis:numpy_fallback".to_string(),
@@ -4038,6 +4823,7 @@ mod tests {
             primary_scale: Some("major".to_string()),
             display_name: Some("G major".to_string()),
             confidence: 0.96,
+            note_set_evidence: None,
             stability: 0.95,
             alternatives: vec![],
             source: "audio_analysis:essentia".to_string(),
@@ -4081,6 +4867,7 @@ mod tests {
             primary_scale: Some("minor".to_string()),
             display_name: Some("E minor".to_string()),
             confidence: 0.93,
+            note_set_evidence: None,
             stability: 0.91,
             alternatives: vec![],
             source: "audio_analysis:essentia".to_string(),
@@ -4174,5 +4961,62 @@ mod tests {
         let started = Instant::now();
         assert!(!super::join_engine_before_deadline(handle, Duration::from_millis(20)));
         assert!(started.elapsed() < Duration::from_millis(150));
+    }
+}
+
+#[cfg(test)]
+mod pause_tests {
+    use super::{capture_transition, CaptureTransition, PausedCapture};
+    use crate::audio_models::CaptureMode;
+
+    fn paused() -> PausedCapture {
+        PausedCapture {
+            mode: CaptureMode::EndpointLoopback,
+            target: Some("Brave".to_string()),
+            track: "randy newman - you've got a friend in me".to_string(),
+            payload: None,
+        }
+    }
+
+    #[test]
+    fn a_pause_and_the_resume_of_the_same_track_keep_the_evidence() {
+        let p = paused();
+        let track = Some(p.track.as_str());
+        assert_eq!(
+            capture_transition(Some(&p), CaptureMode::Unavailable, Some("Brave"), track, true),
+            CaptureTransition::Pausing
+        );
+        assert_eq!(
+            capture_transition(Some(&p), CaptureMode::EndpointLoopback, Some("Brave"), track, false),
+            CaptureTransition::Resuming
+        );
+    }
+
+    #[test]
+    fn anything_that_might_be_other_audio_starts_over() {
+        let p = paused();
+        let track = Some(p.track.as_str());
+        // Nothing was paused: every change is a change, exactly as before.
+        assert_eq!(
+            capture_transition(None, CaptureMode::EndpointLoopback, Some("Brave"), track, false),
+            CaptureTransition::Changed
+        );
+        // Another song, another player, no identity, or a different kind of capture.
+        assert_eq!(
+            capture_transition(Some(&p), CaptureMode::EndpointLoopback, Some("Brave"), Some("sting - shape of my heart"), false),
+            CaptureTransition::Changed
+        );
+        assert_eq!(
+            capture_transition(Some(&p), CaptureMode::EndpointLoopback, Some("Spotify"), track, false),
+            CaptureTransition::Changed
+        );
+        assert_eq!(
+            capture_transition(Some(&p), CaptureMode::EndpointLoopback, Some("Brave"), None, false),
+            CaptureTransition::Changed
+        );
+        assert_eq!(
+            capture_transition(Some(&p), CaptureMode::ProcessLoopback, Some("Brave"), track, false),
+            CaptureTransition::Changed
+        );
     }
 }
