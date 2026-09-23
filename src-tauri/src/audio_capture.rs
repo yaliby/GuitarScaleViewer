@@ -748,6 +748,14 @@ pub struct AudioCaptureManager {
     sample_rate_hz: u32,
     mono_ring: VecDeque<f32>,
     accepted_samples: u64,
+    /// `accepted_samples` at the moment the ring last started filling from empty.
+    ///
+    /// The engine analyses on a hop grid, and the grid has to be counted from here rather than from
+    /// the lifetime count. `accepted_samples` deliberately survives `reset` so evidence stays on one
+    /// monotonic timeline — but a grid anchored to it sits at an arbitrary phase relative to a song
+    /// that started after a reset, and the first analysis then waited for the next lifetime hop
+    /// boundary past twelve seconds of *this* song: anywhere from 12 to 16 seconds, 14 on average.
+    grid_origin_samples: u64,
     max_samples: usize,
     has_live_capture: bool,
     requested_mode: CaptureMode,
@@ -780,6 +788,7 @@ impl AudioCaptureManager {
             sample_rate_hz: ANALYZER_SAMPLE_RATE_HZ,
             mono_ring: VecDeque::with_capacity(max_samples),
             accepted_samples: 0,
+            grid_origin_samples: 0,
             max_samples,
             has_live_capture: false,
             requested_mode: if cfg!(windows) {
@@ -848,6 +857,42 @@ impl AudioCaptureManager {
             self.capture_mode = CaptureMode::Unavailable;
             self.mode_reason = Some(format!("capture_stopped:{reason}"));
             self.reset();
+        }
+        #[cfg(not(any(windows, target_os = "linux")))]
+        {
+            let _ = reason;
+            self.requested_mode = CaptureMode::Unavailable;
+            self.capture_mode = CaptureMode::Unavailable;
+        }
+    }
+
+    /// Stop listening while the player is paused, and keep what has already been heard.
+    ///
+    /// `stop_capture` empties the ring, which is right when the audio that follows may belong to
+    /// something else. A pause is not that: the same song resumes, and the audio before the pause
+    /// is evidence about its key like any other. Throwing it away made every pause cost the player
+    /// the whole ramp again — twelve seconds before anything is on the neck, and the accuracy of a
+    /// twelve-second buffer after that. The caller decides when the track is known to be the same;
+    /// a resume against the same target restarts the worker with `preserve_buffer` and the ring
+    /// carries on filling where it stopped.
+    pub fn pause_capture(&mut self, reason: &str) {
+        #[cfg(any(windows, target_os = "linux"))]
+        {
+            if self.worker.is_some() || self.receiver.is_some() {
+                log::info!(
+                    "audio_capture: pausing capture reason={} mode={:?} target={:?} keeping={:.1}s",
+                    reason,
+                    self.capture_mode,
+                    self.target_app,
+                    self.available_buffer_seconds()
+                );
+            }
+            self.stop_worker();
+            self.requested_mode = CaptureMode::Unavailable;
+            self.capture_mode = CaptureMode::Unavailable;
+            self.mode_reason = Some(format!("capture_stopped:{reason}"));
+            self.has_live_capture = false;
+            self.recent_silence_until = None;
         }
         #[cfg(not(any(windows, target_os = "linux")))]
         {
@@ -1170,6 +1215,7 @@ impl AudioCaptureManager {
 
     pub fn reset(&mut self) {
         self.mono_ring.clear();
+        self.grid_origin_samples = self.accepted_samples;
         self.has_live_capture = false;
         self.last_ingest = Instant::now();
         self.recent_silence_until = None;
@@ -1182,6 +1228,12 @@ impl AudioCaptureManager {
     /// Lifetime sample endpoint: does not wrap with the ring or reset on restart.
     pub fn accepted_samples(&self) -> u64 {
         self.accepted_samples
+    }
+
+    /// Where the analysis hop grid starts: the lifetime sample count when the ring last began
+    /// filling from empty. See `grid_origin_samples`.
+    pub fn grid_origin(&self) -> u64 {
+        self.grid_origin_samples
     }
 
     pub fn available_buffer_seconds(&self) -> f32 {
@@ -1233,6 +1285,7 @@ impl AudioCaptureManager {
             self.sample_rate_hz = ANALYZER_SAMPLE_RATE_HZ;
             self.max_samples = self.sample_rate_hz as usize * ROLLING_BUFFER_SECONDS;
             self.mono_ring.clear();
+            self.grid_origin_samples = self.accepted_samples;
         }
 
         self.accepted_samples = self.accepted_samples.saturating_add(normalized.len() as u64);
@@ -1250,6 +1303,39 @@ impl AudioCaptureManager {
     pub fn mark_stale_if_inactive(&mut self, timeout: Duration) {
         if self.last_ingest.elapsed() > timeout {
             self.has_live_capture = false;
+        }
+    }
+}
+
+#[cfg(test)]
+mod pause_tests {
+    use super::*;
+
+    fn seconds_of_audio(capture: &mut AudioCaptureManager, seconds: usize) {
+        let samples = vec![0.1f32; ANALYZER_SAMPLE_RATE_HZ as usize * seconds];
+        capture.ingest_mono_samples(ANALYZER_SAMPLE_RATE_HZ, &samples);
+    }
+
+    #[test]
+    fn a_pause_keeps_what_was_heard_and_a_stop_does_not() {
+        let mut paused = AudioCaptureManager::new();
+        seconds_of_audio(&mut paused, 20);
+        let origin = paused.grid_origin();
+        paused.pause_capture("playback_paused_or_stopped");
+        assert_eq!(paused.available_buffer_seconds(), 20.0);
+        assert_eq!(paused.grid_origin(), origin, "the hop grid must carry on where it stopped");
+        assert_eq!(paused.snapshot().capture_mode, CaptureMode::Unavailable);
+        assert!(!paused.snapshot().has_live_capture, "nothing is analysed while paused");
+        // Resuming appends to the same ring and keeps counting on the same lifetime timeline.
+        seconds_of_audio(&mut paused, 4);
+        assert_eq!(paused.available_buffer_seconds(), 24.0);
+        assert_eq!(paused.accepted_samples(), ANALYZER_SAMPLE_RATE_HZ as u64 * 24);
+
+        let mut stopped = AudioCaptureManager::new();
+        seconds_of_audio(&mut stopped, 20);
+        stopped.stop_capture("no_active_session");
+        if cfg!(any(windows, target_os = "linux")) {
+            assert_eq!(stopped.available_buffer_seconds(), 0.0);
         }
     }
 }
