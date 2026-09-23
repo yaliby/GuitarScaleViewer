@@ -2,6 +2,7 @@ mod audio_capture;
 /// Public for the same reason as `key_engine`: the accuracy harness replays a growing capture
 /// buffer through the real decision path, which means it has to hold the real window type.
 pub mod audio_models;
+pub mod key_confidence;
 /// Public so the harness analyzes audio with the *shipped* detector. A second implementation of
 /// "call the CLI and read its JSON" is a second thing to keep in step, and the one it would
 /// diverge from is the one that ships.
