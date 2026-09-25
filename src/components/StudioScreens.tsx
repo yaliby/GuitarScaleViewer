@@ -18,7 +18,7 @@ import type { ScaleNote } from "../scaleSpell";
 import { musicalLabel } from "./Fretboard";
 import "./studio-screens.css";
 
-export type StudioView = "explore" | "practice" | "progressions" | "jam";
+export type StudioView = "explore" | "practice" | "progressions" | "jam" | "playalong";
 type Props = {
   view: StudioView;
   context: ReactNode;
@@ -26,6 +26,7 @@ type Props = {
   chords: ReactNode;
   listening: ReactNode;
   jam: ReactNode;
+  playalong: ReactNode;
   session: PracticeSession;
   notes: ScaleNote[];
   playing: string | null;
@@ -127,6 +128,9 @@ export function StudioScreens(p: Props) {
    */
   if (view === "jam") {
     return <div className="workspace screen screen-jam">{p.jam}</div>;
+  }
+  if (view === "playalong") {
+    return <div className="workspace screen screen-playalong">{p.playalong}</div>;
   }
   return (
     <AnimatePresence mode="wait" initial={false}>

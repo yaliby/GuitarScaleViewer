@@ -153,7 +153,10 @@ fn overlay_playback_action(
     payload
 }
 
-fn overlay_seek_position(mut payload: MediaSessionPayload, position_ms: u64) -> MediaSessionPayload {
+fn overlay_seek_position(
+    mut payload: MediaSessionPayload,
+    position_ms: u64,
+) -> MediaSessionPayload {
     payload.position_ms = Some(clamp_seek_ms(position_ms as i64, payload.duration_ms));
     payload
 }
@@ -297,9 +300,7 @@ fn select_current_session(sessions: &[SessionCandidate]) -> Option<&SessionCandi
         return None;
     }
 
-    let usable = |s: &&SessionCandidate| {
-        !is_playerctld(&s.bus_name) && !is_internal_harness(s)
-    };
+    let usable = |s: &&SessionCandidate| !is_playerctld(&s.bus_name) && !is_internal_harness(s);
     sessions
         .iter()
         .filter(usable)
@@ -480,7 +481,12 @@ mod win {
             .map_err(|e| format!("media control: {e}"))?
             .await
             .map_err(|e| format!("media control: {e}"))?;
-        if !accepted && matches!(parsed, super::PlaybackAction::Pause | super::PlaybackAction::Play) {
+        if !accepted
+            && matches!(
+                parsed,
+                super::PlaybackAction::Pause | super::PlaybackAction::Play
+            )
+        {
             accepted = session
                 .TryTogglePlayPauseAsync()
                 .map_err(|e| format!("media control: {e}"))?
@@ -490,20 +496,24 @@ mod win {
         if !accepted {
             return Err("the player declined the playback request".to_string());
         }
-        Ok(super::overlay_playback_action(fetch_payload().await, parsed))
+        Ok(super::overlay_playback_action(
+            fetch_payload().await,
+            parsed,
+        ))
     }
 
     pub async fn seek_to(position_ms: u64) -> Result<MediaSessionPayload, String> {
         let session = current_session().await?;
-        let duration_ms = session
-            .GetTimelineProperties()
-            .ok()
-            .and_then(|t| match (t.StartTime(), t.EndTime()) {
-                (Ok(start), Ok(end)) if end.Duration > start.Duration => {
-                    Some(((end.Duration - start.Duration) as u64) / 10_000)
-                }
-                _ => None,
-            });
+        let duration_ms =
+            session
+                .GetTimelineProperties()
+                .ok()
+                .and_then(|t| match (t.StartTime(), t.EndTime()) {
+                    (Ok(start), Ok(end)) if end.Duration > start.Duration => {
+                        Some(((end.Duration - start.Duration) as u64) / 10_000)
+                    }
+                    _ => None,
+                });
         let clamped = super::clamp_seek_ms(position_ms as i64, duration_ms);
         let accepted = session
             .TryChangePlaybackPositionAsync(super::ms_to_win_ticks(clamped))
@@ -732,7 +742,9 @@ mod linux {
             .and_then(duration_ms_from_mpris_length_us)
     }
 
-    fn metadata_track_id(map: &HashMap<String, OwnedValue>) -> Option<zbus::zvariant::OwnedObjectPath> {
+    fn metadata_track_id(
+        map: &HashMap<String, OwnedValue>,
+    ) -> Option<zbus::zvariant::OwnedObjectPath> {
         let value = map.get("mpris:trackid")?;
         zbus::zvariant::OwnedObjectPath::try_from(value.clone())
             .ok()
@@ -793,7 +805,10 @@ mod linux {
         }
     }
 
-    pub async fn control_named_player(bus_name: &str, action: super::PlaybackAction) -> Result<(), String> {
+    pub async fn control_named_player(
+        bus_name: &str,
+        action: super::PlaybackAction,
+    ) -> Result<(), String> {
         let conn = session_connection()
             .await
             .map_err(|e| format!("D-Bus session unavailable: {e}"))?;
@@ -849,7 +864,9 @@ mod linux {
                 .seek(offset)
                 .await
                 .map_err(|e| format!("MPRIS Seek failed: {e}"))?;
-            let next_us = fresh_position_us(&conn, bus_name).await.unwrap_or(current_us);
+            let next_us = fresh_position_us(&conn, bus_name)
+                .await
+                .unwrap_or(current_us);
             if !super::should_repeat_mpris_seek(current_us, next_us, target_us) {
                 break;
             }
@@ -1033,10 +1050,15 @@ mod tests {
 
     #[tokio::test]
     async fn slow_media_lookup_returns_unavailable_and_drops_pending_work() {
-        use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        };
         struct Cancelled(Arc<AtomicBool>);
         impl Drop for Cancelled {
-            fn drop(&mut self) { self.0.store(true, Ordering::Relaxed); }
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Relaxed);
+            }
         }
         let cancelled = Arc::new(AtomicBool::new(false));
         let cancellation_flag = cancelled.clone();
@@ -1058,7 +1080,11 @@ mod tests {
         expected.title = Some("Current track".into());
         expected.playback_status = "playing".into();
         expected.position_ms = Some(1234);
-        let result = media_with_deadline(std::future::ready(expected.clone()), Duration::from_millis(20)).await;
+        let result = media_with_deadline(
+            std::future::ready(expected.clone()),
+            Duration::from_millis(20),
+        )
+        .await;
         assert_eq!(result, expected);
     }
 }
@@ -1214,9 +1240,15 @@ mod tests {
 
     #[test]
     fn parse_playback_action_accepts_play_pause_toggle() {
-        assert_eq!(parse_playback_action("Pause").unwrap(), PlaybackAction::Pause);
+        assert_eq!(
+            parse_playback_action("Pause").unwrap(),
+            PlaybackAction::Pause
+        );
         assert_eq!(parse_playback_action("PLAY").unwrap(), PlaybackAction::Play);
-        assert_eq!(parse_playback_action("toggle").unwrap(), PlaybackAction::Toggle);
+        assert_eq!(
+            parse_playback_action("toggle").unwrap(),
+            PlaybackAction::Toggle
+        );
         assert!(parse_playback_action("rewind").is_err());
     }
 

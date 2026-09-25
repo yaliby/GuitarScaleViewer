@@ -14,6 +14,10 @@ class ResizeObserverStub {
   disconnect() {}
 }
 vi.stubGlobal("ResizeObserver", ResizeObserverStub);
+vi.stubGlobal(
+  "fetch",
+  vi.fn(async () => ({ ok: false, status: 404, json: async () => null })),
+);
 
 const mocks = vi.hoisted(() => ({
   media: {
@@ -212,6 +216,23 @@ describe("practice studio shell", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open navigation menu" }));
     fireEvent.click(screen.getByRole("button", { name: "Explore" }));
     expect(await screen.findByLabelText("Root note")).toHaveValue("G");
+  });
+
+  it("opens play along full-window on the shared key", async () => {
+    render(<App />);
+    fireEvent.change(screen.getByLabelText("Root note"), {
+      target: { value: "Bb" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Play Along" }));
+    const playalong = await screen.findByRole("region", {
+      name: "Play Along workspace",
+    });
+    expect(playalong).toBeInTheDocument();
+    expect(screen.queryByLabelText("Tempo")).not.toBeInTheDocument();
+    expect(screen.getByTestId("playalong-key")).toHaveTextContent("Bb");
+    expect(
+      screen.getByRole("button", { name: "Open navigation menu" }),
+    ).toBeInTheDocument();
   });
   it("updates and persists the shared musical context", async () => {
     render(<App />);

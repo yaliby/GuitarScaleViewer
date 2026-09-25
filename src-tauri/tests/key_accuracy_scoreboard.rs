@@ -62,12 +62,12 @@ use std::sync::Mutex;
 use app_lib::audio_models::CaptureMode;
 use app_lib::key_detection::{KeyDetector, LibKeyFinderDetector};
 use app_lib::key_engine::{
-    contradiction_metrics_from_history, decide_from_windows, dominant_margin_of, evidence_is_calibrated, live_gate,
-    relative_pair_unresolved_in, window_evidence, AnalysisEvidence, LiveGateInputs,
-    ANALYSIS_HOP_SECONDS, ANALYSIS_WINDOW_SECONDS, CAPTURE_STABLE_MIN_CYCLES,
-    CONTRADICTION_CLEAR_CLEAN_CYCLES, CONTRADICTION_COOLDOWN_MS, HISTORY_HORIZON,
-    MAX_ANALYSIS_SPAN_SECONDS, MIN_READY_STREAK, PRIMARY_KEY_REPEAT_MIN, REQUIRED_AUDIO_SECONDS,
-    SESSION_STABLE_MIN_CYCLES,
+    contradiction_metrics_from_history, decide_from_windows, dominant_margin_of,
+    evidence_is_calibrated, live_gate, relative_pair_unresolved_in, window_evidence,
+    AnalysisEvidence, LiveGateInputs, ANALYSIS_HOP_SECONDS, ANALYSIS_WINDOW_SECONDS,
+    CAPTURE_STABLE_MIN_CYCLES, CONTRADICTION_CLEAR_CLEAN_CYCLES, CONTRADICTION_COOLDOWN_MS,
+    HISTORY_HORIZON, MAX_ANALYSIS_SPAN_SECONDS, MIN_READY_STREAK, PRIMARY_KEY_REPEAT_MIN,
+    REQUIRED_AUDIO_SECONDS, SESSION_STABLE_MIN_CYCLES,
 };
 use app_lib::key_reranker;
 use serde::Deserialize;
@@ -726,7 +726,14 @@ fn replay(
     history_from_seconds: usize,
 ) -> Vec<Cycle> {
     let inputs = analyze_cycles(detector, samples, rate, pass, max_seconds);
-    decide_cycles(&inputs, pass, HISTORY_HORIZON, history_from_seconds, CaptureMode::ProcessLoopback, PRIMARY_KEY_REPEAT_MIN)
+    decide_cycles(
+        &inputs,
+        pass,
+        HISTORY_HORIZON,
+        history_from_seconds,
+        CaptureMode::ProcessLoopback,
+        PRIMARY_KEY_REPEAT_MIN,
+    )
 }
 
 /// One cycle's analyzer output, kept so that a sweep over consensus settings costs nothing.
@@ -857,7 +864,9 @@ fn analyse_corpus(
                 );
                 let (samples, rate) = read_mono_f32(&root.join(&clip.path));
                 let cycles = analyze_cycles(detector, &samples, rate, pass, max_seconds);
-                done.lock().expect("collect").push((index, expected, cycles));
+                done.lock()
+                    .expect("collect")
+                    .push((index, expected, cycles));
             });
         }
     });
@@ -954,7 +963,10 @@ fn decide_cycles(
             contradiction_clean_streak = 0;
         }
         if fresh {
-            match (payload.primary_key.as_deref(), payload.primary_scale.as_deref()) {
+            match (
+                payload.primary_key.as_deref(),
+                payload.primary_scale.as_deref(),
+            ) {
                 (Some(k), Some(s)) => {
                     let choice = format!("{k}:{s}");
                     if last_primary_key_choice.as_deref() == Some(choice.as_str()) {
@@ -1000,9 +1012,15 @@ fn decide_cycles(
             Some(match payload.reason.as_deref().unwrap_or("none") {
                 r if r.starts_with("relative_pair_ambiguity") => "relative_pair_ambiguity",
                 r if r.starts_with("contradiction_detected_multiple_tonics") => "multiple_tonics",
-                r if r.starts_with("contradiction_detected_major_minor_conflict") => "major_minor_conflict",
-                r if r.starts_with("contradiction_detected_profile_disagreement") => "profile_disagreement",
-                r if r.starts_with("contradiction_detected_mixed_tonic_family") => "mixed_tonic_family",
+                r if r.starts_with("contradiction_detected_major_minor_conflict") => {
+                    "major_minor_conflict"
+                }
+                r if r.starts_with("contradiction_detected_profile_disagreement") => {
+                    "profile_disagreement"
+                }
+                r if r.starts_with("contradiction_detected_mixed_tonic_family") => {
+                    "mixed_tonic_family"
+                }
                 "weak_absolute_tonal_fit" => "weak_absolute_tonal_fit",
                 "top_candidate_too_close_to_alternative" => "separation_too_close",
                 "unstable_across_windows" => "unstable_across_windows",
@@ -1117,7 +1135,12 @@ fn key_engine_time_to_answer_curve() {
     let mut replays: Vec<ClipReplay> = Vec::new();
     for clip in &clips {
         let wav = root.join(&clip.path);
-        assert!(wav.exists(), "clip {} missing at {}", clip.id, wav.display());
+        assert!(
+            wav.exists(),
+            "clip {} missing at {}",
+            clip.id,
+            wav.display()
+        );
         let expected = (
             pitch_class(&clip.expected_key)
                 .unwrap_or_else(|| panic!("clip {} has an unreadable key", clip.id)),
@@ -1127,7 +1150,12 @@ fn key_engine_time_to_answer_curve() {
         let (samples, rate) = read_mono_f32(&wav);
         let by_pass = passes
             .iter()
-            .map(|pass| (*pass, replay(&detector, &samples, rate, *pass, max_seconds, 0)))
+            .map(|pass| {
+                (
+                    *pass,
+                    replay(&detector, &samples, rate, *pass, max_seconds, 0),
+                )
+            })
             .collect();
         replays.push(ClipReplay { expected, by_pass });
     }
@@ -1191,7 +1219,16 @@ fn key_engine_time_to_answer_curve() {
         );
         // 4 and 8 are below anything the synthetic corpus could justify, but real music dwells on
         // its tonic and carries a melody, so the fast end has to be measured rather than assumed.
-        let mut buffer_gates = vec![4usize, 8, 12, 20, 24, 28, 36, REQUIRED_AUDIO_SECONDS as usize];
+        let mut buffer_gates = vec![
+            4usize,
+            8,
+            12,
+            20,
+            24,
+            28,
+            36,
+            REQUIRED_AUDIO_SECONDS as usize,
+        ];
         buffer_gates.sort_unstable();
         buffer_gates.dedup();
         for required in buffer_gates {
@@ -1229,9 +1266,11 @@ fn key_engine_time_to_answer_curve() {
 
     // A replay that never settles anywhere is a broken harness reporting a tidy zero, not a slow
     // engine. Some clip, under some setting, has to reach an answer.
-    let ever_settles = replays
-        .iter()
-        .any(|clip| clip.by_pass.iter().any(|(_, cycles)| cycles.iter().any(|c| c.settled)));
+    let ever_settles = replays.iter().any(|clip| {
+        clip.by_pass
+            .iter()
+            .any(|(_, cycles)| cycles.iter().any(|c| c.settled))
+    });
     assert!(
         ever_settles,
         "no clip settled at any buffer length under either pass — the replay is not running the \
@@ -1260,7 +1299,12 @@ fn key_engine_time_to_answer_curve() {
             Vec::new();
         for clip in &moving_clips {
             let wav = moving_root.join(&clip.path);
-            assert!(wav.exists(), "clip {} missing at {}", clip.id, wav.display());
+            assert!(
+                wav.exists(),
+                "clip {} missing at {}",
+                clip.id,
+                wav.display()
+            );
             let expected = (
                 pitch_class(&clip.expected_key)
                     .unwrap_or_else(|| panic!("clip {} has an unreadable key", clip.id)),
@@ -1480,10 +1524,16 @@ fn an_early_guess_must_not_vote_in_the_consensus() {
     let max_seconds = 60usize;
     let arms = [
         ("every fresh cycle votes (shipped)", 0usize),
-        ("the vote waits for the buffer gate", REQUIRED_AUDIO_SECONDS as usize),
+        (
+            "the vote waits for the buffer gate",
+            REQUIRED_AUDIO_SECONDS as usize,
+        ),
     ];
 
-    println!("\n=== an early guess in the vote: {} clips ({label}) ===", clips.len());
+    println!(
+        "\n=== an early guess in the vote: {} clips ({label}) ===",
+        clips.len()
+    );
     println!(
         "{:<38}{:>7}{:>14}{:>15}{:>16}",
         "", "locks", "median lock", "locked right", "right but mute"
@@ -1532,8 +1582,14 @@ fn an_early_guess_must_not_vote_in_the_consensus() {
             "{:<38}{:>6.0}%{:>13}{:>14.0}%{:>15.0}%",
             arm_label,
             100.0 * locked as f64 / n as f64,
-            median(lock_times).map(|s| format!("{s}s")).unwrap_or_else(|| "—".into()),
-            if locked > 0 { 100.0 * locked_right as f64 / locked as f64 } else { 0.0 },
+            median(lock_times)
+                .map(|s| format!("{s}s"))
+                .unwrap_or_else(|| "—".into()),
+            if locked > 0 {
+                100.0 * locked_right as f64 / locked as f64
+            } else {
+                0.0
+            },
             100.0 * right_but_never_locked as f64 / n as f64,
         );
     }
@@ -1615,7 +1671,10 @@ fn how_long_a_correction_takes_to_take_hold() {
         ));
     }
 
-    println!("\n=== how long a correction takes to take hold: {} clips ({label}) ===", analysed.len());
+    println!(
+        "\n=== how long a correction takes to take hold: {} clips ({label}) ===",
+        analysed.len()
+    );
     println!(
         "{:>9}{:>9}{:>14}{:>15}{:>17}",
         "horizon", "locks", "median lock", "locked right", "right but mute"
@@ -1624,7 +1683,14 @@ fn how_long_a_correction_takes_to_take_hold() {
         let (mut locked, mut locked_right, mut mute) = (0usize, 0usize, 0usize);
         let mut lock_times = Vec::new();
         for (expected, inputs) in &analysed {
-            let cycles = decide_cycles(inputs, Pass::WholeBuffer, horizon, 0, CaptureMode::ProcessLoopback, PRIMARY_KEY_REPEAT_MIN);
+            let cycles = decide_cycles(
+                inputs,
+                Pass::WholeBuffer,
+                horizon,
+                0,
+                CaptureMode::ProcessLoopback,
+                PRIMARY_KEY_REPEAT_MIN,
+            );
             match lock_point(&cycles, REQUIRED_AUDIO_SECONDS as usize, MIN_READY_STREAK) {
                 Some(cycle) => {
                     locked += 1;
@@ -1642,8 +1708,14 @@ fn how_long_a_correction_takes_to_take_hold() {
             "{:>9}{:>8.0}%{:>13}{:>14.0}%{:>16.0}%",
             horizon,
             100.0 * locked as f64 / n as f64,
-            median(lock_times).map(|s| format!("{s}s")).unwrap_or_else(|| "—".into()),
-            if locked > 0 { 100.0 * locked_right as f64 / locked as f64 } else { 0.0 },
+            median(lock_times)
+                .map(|s| format!("{s}s"))
+                .unwrap_or_else(|| "—".into()),
+            if locked > 0 {
+                100.0 * locked_right as f64 / locked as f64
+            } else {
+                0.0
+            },
             100.0 * mute as f64 / n as f64,
         );
     }
@@ -1677,11 +1749,21 @@ fn how_long_a_correction_takes_to_take_hold() {
         "\n-- what a shorter memory costs: {} clips that change key partway through --",
         moving.len()
     );
-    println!("{:>9}{:>14}{:>13}{:>16}", "horizon", "locked home", "locked decoy", "decoy ever shown");
+    println!(
+        "{:>9}{:>14}{:>13}{:>16}",
+        "horizon", "locked home", "locked decoy", "decoy ever shown"
+    );
     for horizon in horizons {
         let (mut home, mut decoyed, mut shown) = (0usize, 0usize, 0usize);
         for (expected, decoy, inputs) in &moving {
-            let cycles = decide_cycles(inputs, Pass::WholeBuffer, horizon, 0, CaptureMode::ProcessLoopback, PRIMARY_KEY_REPEAT_MIN);
+            let cycles = decide_cycles(
+                inputs,
+                Pass::WholeBuffer,
+                horizon,
+                0,
+                CaptureMode::ProcessLoopback,
+                PRIMARY_KEY_REPEAT_MIN,
+            );
             let open = unhedged_cycles(&cycles, REQUIRED_AUDIO_SECONDS as usize, MIN_READY_STREAK);
             if decoy.is_some() && open.iter().any(|c| c.got == *decoy) {
                 shown += 1;
@@ -1724,7 +1806,10 @@ fn what_the_live_gate_refuses() {
     let detector = LibKeyFinderDetector::from_executable(cli);
     let analysed = analyse_corpus(&detector, &root, &clips, Pass::WholeBuffer, 60);
 
-    println!("\n=== what the live gate refuses: {} clips ({label}) ===", analysed.len());
+    println!(
+        "\n=== what the live gate refuses: {} clips ({label}) ===",
+        analysed.len()
+    );
     // `PRIMARY_KEY_REPEAT_MIN` is swept because it is the honest version of a signal the engine
     // used to get by accident. Until `window_disagreement_metrics` keyed windows by their whole
     // span, a mind-change anywhere in the retained evidence read as `profile_disagreement` and
@@ -1746,7 +1831,10 @@ fn what_the_live_gate_refuses() {
         ranked.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
         println!("  what stops it at the last cycle:");
         for (reason, count) in ranked {
-            println!("    {reason:<26}{count:>4}  ({:.0}%)", 100.0 * count as f64 / n as f64);
+            println!(
+                "    {reason:<26}{count:>4}  ({:.0}%)",
+                100.0 * count as f64 / n as f64
+            );
         }
     }
 
@@ -2056,7 +2144,10 @@ fn what_the_two_streaks_cost_together() {
 
         // The whole surface at the shipped buffer gate, because the frontier below reports the
         // corners and the shape between them is what says whether a choice sits on a cliff.
-        println!("\n  every (repeat, streak) at the shipped {}s buffer gate:", shipped.0);
+        println!(
+            "\n  every (repeat, streak) at the shipped {}s buffer gate:",
+            shipped.0
+        );
         header();
         for (gate, repeat, streak, arm) in &rows {
             if *gate == shipped.0 {
@@ -2153,8 +2244,7 @@ fn what_a_second_look_at_the_recent_audio_is_worth() {
                         .map(|s| format!("{s}s"))
                         .unwrap_or_else(|| "—".into()),
                     100.0 * arm.mute_but_right as f64 / n as f64,
-                    if (repeat_min, min_streak)
-                        == (PRIMARY_KEY_REPEAT_MIN, MIN_READY_STREAK)
+                    if (repeat_min, min_streak) == (PRIMARY_KEY_REPEAT_MIN, MIN_READY_STREAK)
                         && !need_tail
                     {
                         "  <- ships"

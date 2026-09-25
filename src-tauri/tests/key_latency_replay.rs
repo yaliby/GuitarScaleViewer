@@ -124,19 +124,25 @@ fn load_cache() -> Vec<CachedClip> {
         let (Some(pc), Some(mode)) = (pitch_class(&row.key), normalize_mode(&row.mode)) else {
             continue;
         };
-        let clip = clips.entry(row.clip_id.clone()).or_insert_with(|| CachedClip {
-            clip_id: row.clip_id.clone(),
-            capture: row.capture.clone(),
-            song: row.song.clone(),
-            truth: (pc, mode),
-            music_seconds: row.music_seconds,
-            stdout_by_span: BTreeMap::new(),
-        });
+        let clip = clips
+            .entry(row.clip_id.clone())
+            .or_insert_with(|| CachedClip {
+                clip_id: row.clip_id.clone(),
+                capture: row.capture.clone(),
+                song: row.song.clone(),
+                truth: (pc, mode),
+                music_seconds: row.music_seconds,
+                stdout_by_span: BTreeMap::new(),
+            });
         if let Some(out) = row.out {
             clip.stdout_by_span.insert(row.span, out.to_string());
         }
     }
-    assert!(!clips.is_empty(), "span cache at {} is empty", path.display());
+    assert!(
+        !clips.is_empty(),
+        "span cache at {} is empty",
+        path.display()
+    );
     clips.into_values().collect()
 }
 
@@ -165,7 +171,10 @@ impl Timing {
     fn label(&self) -> String {
         format!(
             "first{}-hop{}-req{}-rep{}",
-            self.first_seconds, self.hop_seconds, self.required_audio_seconds as usize, self.repeat_min
+            self.first_seconds,
+            self.hop_seconds,
+            self.required_audio_seconds as usize,
+            self.repeat_min
         )
     }
 
@@ -228,7 +237,11 @@ impl EngineMirror {
         let endpoint = span_seconds as u64 * 44_100;
         let fresh = self.evidence.accept(&output.windows, 0, endpoint);
         // `if fresh_analysis { output.windows = evidence.recent(); }`
-        let windows = if fresh { self.evidence.recent() } else { output.windows.clone() };
+        let windows = if fresh {
+            self.evidence.recent()
+        } else {
+            output.windows.clone()
+        };
         // `winners_recent` / `last_window_tonic_votes`, via the shared helper.
         let ev = window_evidence(&windows);
         // `enough_audio = capture.enough_audio(REQUIRED_AUDIO_SECONDS)`
@@ -270,9 +283,11 @@ impl EngineMirror {
         let mut payload = with_switch_hysteresis(payload, self.last_payload.as_ref());
         payload.buffer_seconds = span_seconds as f32;
         // `primary_key_repeat_streak`
-        if let (true, Some(k), Some(s)) =
-            (fresh, payload.primary_key.as_deref(), payload.primary_scale.as_deref())
-        {
+        if let (true, Some(k), Some(s)) = (
+            fresh,
+            payload.primary_key.as_deref(),
+            payload.primary_scale.as_deref(),
+        ) {
             let choice = format!("{k}:{s}");
             if self.last_primary_key_choice.as_deref() == Some(choice.as_str()) {
                 self.primary_key_repeat_streak += 1;
@@ -467,13 +482,20 @@ fn note_set(pc: u8, mode: &str) -> [u8; 7] {
 /// The engine's own verdict per span, before any policy — what the analyzer says after hearing
 /// this much, which bounds how early any policy downstream of it can be right.
 fn analyzer_curve(clips: &[CachedClip], spans: &[usize]) {
-    println!("\n-- the analyzer alone, by seconds of audio heard ({} clips) --", clips.len());
+    println!(
+        "\n-- the analyzer alone, by seconds of audio heard ({} clips) --",
+        clips.len()
+    );
     println!("{:>6}{:>10}{:>10}{:>8}", "heard", "notes", "exact", "n");
     for &span in spans {
         let (mut notes, mut exact, mut n) = (0usize, 0usize, 0usize);
         for clip in clips {
-            let Some(stdout) = clip.stdout_by_span.get(&span) else { continue };
-            let Ok(output) = analysis_from_cli_stdout(stdout, span as u64 * 1000) else { continue };
+            let Some(stdout) = clip.stdout_by_span.get(&span) else {
+                continue;
+            };
+            let Ok(output) = analysis_from_cli_stdout(stdout, span as u64 * 1000) else {
+                continue;
+            };
             n += 1;
             let got = output
                 .windows
@@ -500,7 +522,10 @@ fn analyzer_curve(clips: &[CachedClip], spans: &[usize]) {
 #[ignore = "needs the span cache from scripts/key-research/cache_spans.py; run with --ignored --nocapture"]
 fn neck_replay_dump() {
     let clips = load_cache();
-    println!("\n=== engine replay from the span cache: {} clips ===", clips.len());
+    println!(
+        "\n=== engine replay from the span cache: {} clips ===",
+        clips.len()
+    );
     analyzer_curve(&clips, &[4, 6, 8, 10, 12, 14, 16, 20, 24, 28, 32, 36, 40]);
 
     let mut timings = vec![Timing::shipped()];
@@ -510,8 +535,13 @@ fn neck_replay_dump() {
         for arm in arms.split(',').filter(|a| !a.trim().is_empty()) {
             let mut t = Timing::shipped();
             for part in arm.trim().split('-') {
-                let (name, value) = part.split_at(part.find(|c: char| c.is_ascii_digit()).unwrap_or(part.len()));
-                let value: usize = value.parse().unwrap_or_else(|_| panic!("bad arm part {part}"));
+                let (name, value) = part.split_at(
+                    part.find(|c: char| c.is_ascii_digit())
+                        .unwrap_or(part.len()),
+                );
+                let value: usize = value
+                    .parse()
+                    .unwrap_or_else(|_| panic!("bad arm part {part}"));
                 match name {
                     "first" => t.first_seconds = value,
                     "hop" => t.hop_seconds = value,

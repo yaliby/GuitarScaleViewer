@@ -118,6 +118,19 @@ jobs:
           assert r["ready"] == expected, f"ready={r['ready']} but backends give {expected}: {r}"
           print("ready flag consistent:", r["ready"])
           PY
+      - name: ChordSync sidecar answers ping
+        working-directory: src-tauri
+        run: |
+          set -euo pipefail
+          pip install -r sidecars/chordsync/requirements.txt
+          python3 sidecars/chordsync/chordsync_sidecar.py --ping \
+            | while read -r line; do
+                python3 -c "import json,sys; json.loads(sys.argv[1])" "$line" \
+                  || { echo "non-JSON from chordsync sidecar: $line"; exit 1; }
+              done
+      - name: ChordSync follow and progression tests
+        working-directory: src-tauri/sidecars/chordsync
+        run: python3 -m unittest discover -v
 
   acl:
     name: G8 ACL consistency

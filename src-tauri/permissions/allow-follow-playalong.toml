@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-follow-playalong"
+description = "Allows ticking ChordSync's playback clock and lyric-to-chart matcher for the current track."
+commands.allow = ["follow_playalong"]

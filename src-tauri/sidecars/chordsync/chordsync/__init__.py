@@ -1,0 +1,2 @@
+"""ChordSync Companion package."""
+

@@ -78,6 +78,7 @@ manually chosen key.
 - Save named practice setups and restore your last session automatically on the same device.
 - Follow the media session and put the song's key on the neck automatically. Lock the practice key while a song continues playing.
 - **Live Jam:** the full-window neck — all 24 frets, a listening deck, the chord bank for the current key, and its own setup row — with the navigation folded into the hamburger menu. It plays the same key, tuning and capo as the rest of the workspace, so a key you land on here is the key you practice.
+- **Play Along:** synced lyrics (LRCLIB) and a Tab4U / Ultimate Guitar chord chart that follow the song. Desktop only; Whisper and the old Qt browser are not part of this screen.
 
 The interface supports smaller screens, keyboard navigation, and the operating system's reduced-motion preference. Audio starts only after interaction. Practice sounds use synthesized tones.
 
@@ -133,6 +134,8 @@ GSMTC/WASAPI path on Windows.
 |---|---|
 | `src/` | React + Vite frontend (Studio shell, fretboard, chord library, key-resolution hooks) |
 | `src/LiveJamScreen.tsx` | Live Jam: the detailed neck chassis, driven by the workspace's shared session |
+| `src/PlayAlongScreen.tsx` | Play Along: synced lyrics + scraped chord chart, same now-playing session |
+| `src-tauri/sidecars/chordsync/` | Thin adapter that imports the sibling ChordSync checkout |
 | `src/services/keyFusion.ts` | The single decision: which key goes on the neck, and how certain it is |
 | `src/data/verifiedKeys.json` | Human-entered keys, bundled so they answer with no network call |
 | `src-tauri/` | Rust backend: audio capture, OS now-playing metadata, key-detection engine |
@@ -164,6 +167,9 @@ GSMTC/WASAPI path on Windows.
 | `KEY_ANALYZER_AB` | Run two backends side by side and emit `detected-key-ab-update` | unset |
 | `ALLOW_DEGRADED_ANALYZER` | Let `dev.sh`/`dev.ps1` start without an analyzer backend | `0` |
 | `GSV_LOG_DIR` | Where the Rust side writes logs | `logs/` |
+| `CHORDSYNC_PYTHON` | Interpreter for the Play Along sidecar | sibling ChordSync `.venv`, else sidecar `.venv`, else `python3` |
+| `CHORDSYNC_ROOT` | Checkout that contains the live `chordsync/` package | sibling `../ChordSync`, else the vendored copy |
+| `CHORDSYNC_SIDECAR` | Explicit path to `chordsync_sidecar.py` | auto-discovered |
 
 ## The verified library
 
@@ -224,6 +230,7 @@ npm run typecheck && npm test && npx vite build      # frontend
 cd chordsync-api && npm run typecheck && npm test    # Worker
 cd src-tauri && cargo test && cargo clippy --all-targets -- -D warnings
 cd src-tauri && cargo test -- --ignored              # key fixture regression (needs numpy + wav fixtures)
+python3 src-tauri/sidecars/chordsync/chordsync_sidecar.py --ping
 ```
 
 `.github/workflows/ci.yml` runs all of the above plus the cross-boundary contracts

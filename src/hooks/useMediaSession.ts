@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { trace } from '../services/debugLog';
@@ -34,6 +34,11 @@ const BROWSER_FALLBACK: MediaSessionUiState = {
   durationMs: null,
 };
 
+const TAURI_EMPTY: MediaSessionUiState = {
+  ...BROWSER_FALLBACK,
+  playbackStatus: 'none',
+};
+
 function wireToUi(w: MediaSessionWire): MediaSessionUiState {
   return {
     title: w.title,
@@ -50,32 +55,128 @@ function mediaIdentity(state: MediaSessionUiState): string {
   return [state.sourceApp, state.title, state.artist, state.album, state.playbackStatus].join('|');
 }
 
-/**
- * Subscribes to Tauri `media-session-update` (no React-side polling).
- * Windows uses GSMTC; Linux uses MPRIS. Phase 2 may extend this path with
- * key lookup / audio analysis → scale UI.
- */
-export function useMediaSession(): MediaSessionUiState {
-  const [state, setState] = useState<MediaSessionUiState>(() =>
-    isTauri() ? { ...BROWSER_FALLBACK, playbackStatus: 'none' } : BROWSER_FALLBACK,
-  );
-  const lastIdentityRef = useRef<string | null>(null);
+type Subscriber = (state: MediaSessionUiState) => void;
 
-  const apply = (next: MediaSessionUiState) => {
-    const identity = mediaIdentity(next);
-    if (lastIdentityRef.current !== identity) {
-      lastIdentityRef.current = identity;
-      trace('media', 'session', `Now playing: ${[next.artist, next.title].filter(Boolean).join(' — ') || '(none)'} [${next.playbackStatus}]`, {
+let snapshot: MediaSessionUiState = { ...BROWSER_FALLBACK };
+let lastIdentity: string | null = null;
+const subscribers = new Set<Subscriber>();
+let listenGeneration = 0;
+let unlistenFn: (() => void) | undefined;
+let connecting = false;
+
+function publish(next: MediaSessionUiState): void {
+  snapshot = next;
+  const identity = mediaIdentity(next);
+  if (lastIdentity !== identity) {
+    lastIdentity = identity;
+    trace(
+      'media',
+      'session',
+      `Now playing: ${[next.artist, next.title].filter(Boolean).join(' — ') || '(none)'} [${next.playbackStatus}]`,
+      {
         title: next.title,
         artist: next.artist,
         album: next.album,
         sourceApp: next.sourceApp,
         playbackStatus: next.playbackStatus,
         durationMs: next.durationMs,
-      }, next.playbackStatus === 'media_session_unavailable' ? 'fail' : 'info');
+      },
+      next.playbackStatus === 'media_session_unavailable' ? 'fail' : 'info',
+    );
+  }
+  subscribers.forEach((fn) => fn(next));
+}
+
+function stopListening(): void {
+  listenGeneration += 1;
+  connecting = false;
+  unlistenFn?.();
+  unlistenFn = undefined;
+}
+
+function startListening(): void {
+  if (!isTauri()) {
+    publish(BROWSER_FALLBACK);
+    return;
+  }
+  if (connecting || unlistenFn) {
+    return;
+  }
+  connecting = true;
+  const generation = listenGeneration;
+  void (async () => {
+    try {
+      const initial = await invoke<MediaSessionWire>('get_current_media');
+      if (generation !== listenGeneration || subscribers.size === 0) {
+        return;
+      }
+      publish(wireToUi(initial));
+
+      const nextUnlisten = await listen<MediaSessionWire>('media-session-update', (event) => {
+        if (generation !== listenGeneration) {
+          return;
+        }
+        publish(wireToUi(event.payload));
+      });
+      if (generation !== listenGeneration || subscribers.size === 0) {
+        nextUnlisten();
+        connecting = false;
+        return;
+      }
+      unlistenFn = nextUnlisten;
+      connecting = false;
+      trace('media', 'subscribed', 'Listening for media-session-update from Rust', undefined, 'ok');
+    } catch (error) {
+      connecting = false;
+      const message = error instanceof Error ? error.message : String(error);
+      trace(
+        'media',
+        'subscribe_fail',
+        `Could not read the OS media session (${message})`,
+        {
+          why: 'invoke_or_listen_failed',
+          error: message,
+        },
+        'fail',
+      );
+      if (generation === listenGeneration && subscribers.size > 0) {
+        publish(BROWSER_FALLBACK);
+      }
     }
-    setState(next);
+  })();
+}
+
+function subscribe(listener: Subscriber): () => void {
+  subscribers.add(listener);
+  listener(snapshot);
+  if (subscribers.size === 1) {
+    if (isTauri() && snapshot.playbackStatus === 'media_session_unavailable') {
+      publish(TAURI_EMPTY);
+    }
+    startListening();
+  }
+  return () => {
+    subscribers.delete(listener);
+    if (subscribers.size === 0) {
+      stopListening();
+      snapshot = { ...BROWSER_FALLBACK };
+      lastIdentity = null;
+    }
   };
+}
+
+/**
+ * The OS now-playing session Live Jam and Play Along both read.
+ * One Rust poller (`get_current_media` + `media-session-update`); one frontend subscription.
+ */
+export function useMediaSession(): MediaSessionUiState {
+  const [state, setState] = useState<MediaSessionUiState>(() =>
+    isTauri()
+      ? snapshot.playbackStatus === 'media_session_unavailable'
+        ? TAURI_EMPTY
+        : snapshot
+      : BROWSER_FALLBACK,
+  );
 
   useEffect(() => {
     if (!isTauri()) {
@@ -85,44 +186,7 @@ export function useMediaSession(): MediaSessionUiState {
       setState(BROWSER_FALLBACK);
       return;
     }
-
-    let cancelled = false;
-    let unlisten: (() => void) | undefined;
-
-    void (async () => {
-      try {
-        const initial = await invoke<MediaSessionWire>('get_current_media');
-        if (!cancelled) {
-          apply(wireToUi(initial));
-        }
-
-        const nextUnlisten = await listen<MediaSessionWire>('media-session-update', (event) => {
-          if (!cancelled) {
-            apply(wireToUi(event.payload));
-          }
-        });
-        if (cancelled) {
-          nextUnlisten();
-          return;
-        }
-        unlisten = nextUnlisten;
-        trace('media', 'subscribed', 'Listening for media-session-update from Rust', undefined, 'ok');
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        trace('media', 'subscribe_fail', `Could not read the OS media session (${message})`, {
-          why: 'invoke_or_listen_failed',
-          error: message,
-        }, 'fail');
-        if (!cancelled) {
-          setState(BROWSER_FALLBACK);
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
+    return subscribe(setState);
   }, []);
 
   return state;

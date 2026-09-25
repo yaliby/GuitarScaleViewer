@@ -207,6 +207,30 @@ describe('native hook listener cleanup', () => {
     await waitFor(() => expect(unlisten).toHaveBeenCalledTimes(1));
   });
 
+  it('shares one media-session listener across subscribers', async () => {
+    tauriMocks.isTauri.mockReturnValue(true);
+    tauriMocks.invoke.mockResolvedValue({
+      title: 'Shared track',
+      artist: 'Shared artist',
+      album: null,
+      source_app: 'Test player',
+      playback_status: 'playing',
+      position_ms: 1000,
+      duration_ms: 120_000,
+    });
+    const unlisten = vi.fn();
+    tauriMocks.listen.mockResolvedValue(unlisten);
+    const first = renderHook(() => useMediaSession());
+    const second = renderHook(() => useMediaSession());
+    await waitFor(() => expect(tauriMocks.listen).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(first.result.current.title).toBe('Shared track'));
+    expect(second.result.current.title).toBe('Shared track');
+    first.unmount();
+    expect(unlisten).not.toHaveBeenCalled();
+    second.unmount();
+    await waitFor(() => expect(unlisten).toHaveBeenCalledTimes(1));
+  });
+
   it('unsubscribes detected-key listeners that finish registering after unmount', async () => {
     tauriMocks.isTauri.mockReturnValue(true);
     tauriMocks.invoke.mockResolvedValue(DETECTED);

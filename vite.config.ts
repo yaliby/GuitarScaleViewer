@@ -1,4 +1,7 @@
-import { defineConfig } from 'vite';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 
 /**
@@ -7,9 +10,72 @@ import react from '@vitejs/plugin-react';
  * or, worse, left Tauri pointed at whatever stale server already held the port.
  */
 const DEV_PORT = Number(process.env.GSV_DEV_PORT ?? 1420);
+const CHORDSYNC_PORT = Number(process.env.CHORDSYNC_HTTP_PORT ?? 18766);
+
+function chordsyncCheckout(root: string): string {
+  const sibling = path.resolve(root, '../ChordSync');
+  if (existsSync(path.join(sibling, 'chordsync', '__init__.py'))) {
+    return sibling;
+  }
+  return path.join(root, 'src-tauri/sidecars/chordsync');
+}
+
+function chordsyncPython(root: string): string {
+  const candidates = [
+    process.env.CHORDSYNC_PYTHON,
+    path.join(chordsyncCheckout(root), '.venv/bin/python'),
+    path.join(root, 'src-tauri/sidecars/chordsync/.venv/bin/python'),
+  ].filter((value): value is string => Boolean(value));
+  return candidates.find((candidate) => existsSync(candidate)) ?? 'python3';
+}
+
+/** Runs ChordSync's own resolver (LRCLIB + Tab4U/UG) next to Vite. */
+function chordsyncSidecar(): Plugin {
+  let child: ChildProcess | undefined;
+  return {
+    name: 'chordsync-sidecar',
+    configureServer(server) {
+      const projectRoot = server.config.root;
+      const sidecarRoot = path.join(projectRoot, 'src-tauri/sidecars/chordsync');
+      const script = path.join(sidecarRoot, 'chordsync_sidecar.py');
+      if (!existsSync(script)) {
+        server.config.logger.warn('[chordsync] sidecar script missing');
+        return;
+      }
+      const python = chordsyncPython(projectRoot);
+      const packageRoot = process.env.CHORDSYNC_ROOT || chordsyncCheckout(projectRoot);
+      child = spawn(python, [script, '--http', `127.0.0.1:${CHORDSYNC_PORT}`], {
+        cwd: sidecarRoot,
+        env: {
+          ...process.env,
+          CHORDSYNC_ROOT: packageRoot,
+          PYTHONPATH: packageRoot,
+        },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      child.stdout?.on('data', (chunk: Buffer) => {
+        server.config.logger.info(`[chordsync] ${chunk.toString().trim()}`);
+      });
+      child.stderr?.on('data', (chunk: Buffer) => {
+        server.config.logger.info(`[chordsync] ${chunk.toString().trim()}`);
+      });
+      child.on('exit', (code) => {
+        if (code) {
+          server.config.logger.warn(`[chordsync] sidecar exited ${code}`);
+        }
+        child = undefined;
+      });
+      const stop = () => {
+        child?.kill();
+        child = undefined;
+      };
+      server.httpServer?.once('close', stop);
+    },
+  };
+}
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), chordsyncSidecar()],
   clearScreen: false,
   server: {
     // Bind IPv4 explicitly: WebKitGTK often resolves localhost to 127.0.0.1,
@@ -19,6 +85,12 @@ export default defineConfig({
     strictPort: true,
     watch: {
       ignored: ['**/src-tauri/**'],
+    },
+    proxy: {
+      '/chordsync': {
+        target: `http://127.0.0.1:${CHORDSYNC_PORT}`,
+        rewrite: (url) => url.replace(/^\/chordsync/, '') || '/',
+      },
     },
   },
 });

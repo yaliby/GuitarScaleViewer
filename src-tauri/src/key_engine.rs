@@ -189,7 +189,12 @@ impl AnalysisEvidence {
 
     /// Fold a cycle's analysis into the evidence. Returns whether any of it was new — a verdict
     /// about audio already accounted for is not a second opinion, and must not count as one.
-    pub fn accept(&mut self, windows: &[WindowAnalysisResult], start_ms: u64, endpoint: u64) -> bool {
+    pub fn accept(
+        &mut self,
+        windows: &[WindowAnalysisResult],
+        start_ms: u64,
+        endpoint: u64,
+    ) -> bool {
         self.last_analyzed_endpoint = endpoint;
         let previous_end = self.last_window_end_ms;
         let mut fresh = false;
@@ -197,14 +202,18 @@ impl AnalysisEvidence {
             let mut absolute = window.clone();
             absolute.window_start_ms += start_ms;
             absolute.window_end_ms += start_ms;
-            if absolute.window_end_ms <= previous_end { continue; }
+            if absolute.window_end_ms <= previous_end {
+                continue;
+            }
             self.last_window_end_ms = self.last_window_end_ms.max(absolute.window_end_ms);
             self.windows.push(absolute);
             fresh = true;
         }
         if fresh {
             self.revision = self.revision.saturating_add(1);
-            let cutoff = self.last_window_end_ms.saturating_sub((HISTORY_HORIZON * ANALYSIS_HOP_SECONDS * 1000) as u64);
+            let cutoff = self
+                .last_window_end_ms
+                .saturating_sub((HISTORY_HORIZON * ANALYSIS_HOP_SECONDS * 1000) as u64);
             self.windows.retain(|window| window.window_end_ms > cutoff);
         }
         fresh
@@ -284,7 +293,10 @@ fn first_analysis_seconds(backend: &str) -> usize {
 
 /// Whether the payload's confidence is `key_confidence`'s calibrated probability: the newest
 /// reading carried the evidence and named the key the consensus settled on.
-pub fn evidence_is_calibrated(results: &[WindowAnalysisResult], payload: &DetectedKeyPayload) -> bool {
+pub fn evidence_is_calibrated(
+    results: &[WindowAnalysisResult],
+    payload: &DetectedKeyPayload,
+) -> bool {
     key_confidence::calibration_inputs(results).is_some_and(|(_, key, scale)| {
         payload.primary_key.as_deref() == Some(key.as_str())
             && payload.primary_scale.as_deref() == Some(scale.as_str())
@@ -326,11 +338,16 @@ fn next_analysis_due_in(
 /// at an arbitrary phase relative to a song that began after a reset, so the first analysis of every
 /// song but the first waited for the next lifetime boundary past twelve seconds of audio: 12 to 16
 /// seconds in, 14 on average, for nothing.
-fn aligned_analysis_samples(mut samples: Vec<f32>, endpoint: u64, origin: u64, rate: u32) -> (Vec<f32>, u64, u64) {
+fn aligned_analysis_samples(
+    mut samples: Vec<f32>,
+    endpoint: u64,
+    origin: u64,
+    rate: u32,
+) -> (Vec<f32>, u64, u64) {
     let hop = ANALYSIS_HOP_SECONDS as u64 * rate as u64;
     let origin = origin.min(endpoint);
     let aligned = origin + (endpoint - origin) / hop * hop;
-    let tail = (endpoint-aligned) as usize;
+    let tail = (endpoint - aligned) as usize;
     samples.truncate(samples.len().saturating_sub(tail));
     // Keep an integral number of hops, ending on the absolute sample grid.
     let available = samples.len() / hop as usize * hop as usize;
@@ -386,8 +403,10 @@ fn cloud_control_cell() -> Arc<Mutex<CloudResolutionControl>> {
 
 #[tauri::command]
 pub fn set_cloud_resolution(control: CloudResolutionControl) -> bool {
-    if control.state == "hit" && (control.key.as_deref().and_then(tonic_to_pc).is_none()
-        || !matches!(control.mode.as_deref(), Some("major" | "minor"))) {
+    if control.state == "hit"
+        && (control.key.as_deref().and_then(tonic_to_pc).is_none()
+            || !matches!(control.mode.as_deref(), Some("major" | "minor")))
+    {
         return false;
     }
     if let Ok(mut lock) = cloud_control_cell().lock() {
@@ -488,12 +507,10 @@ fn apply_capture_degrade(mut payload: DetectedKeyPayload) -> DetectedKeyPayload 
         // Endpoint loopback confidence stays as measured; the stricter
         // `endpoint_conservative_ok` gate decides eligibility instead of a
         // blanket multiplier. See `endpoint_confidence_is_measured_evidence_*`.
-        payload.reason = Some(
-            payload
-                .reason
-                .clone()
-                .unwrap_or_else(|| "system loopback fallback may include unrelated audio".to_string()),
-        );
+        payload.reason =
+            Some(payload.reason.clone().unwrap_or_else(|| {
+                "system loopback fallback may include unrelated audio".to_string()
+            }));
     }
     payload.ready_to_apply = payload.confidence >= MIN_CONFIDENCE_READY
         && payload.stability >= MIN_STABILITY_READY
@@ -610,7 +627,11 @@ fn winner_relative_pair_gap(
 ) -> Option<f32> {
     let mut gaps: Vec<f32> = results
         .iter()
-        .filter(|r| winners.iter().any(|w| w.window_start_ms == r.window_start_ms))
+        .filter(|r| {
+            winners
+                .iter()
+                .any(|w| w.window_start_ms == r.window_start_ms)
+        })
         .filter_map(|r| r.relative_pair_gap)
         .filter(|gap| gap.is_finite())
         .collect();
@@ -681,7 +702,10 @@ const PITCH_NAMES: [&str; 12] = [
 ///
 /// The seven notes are untouched: they are the same set either way, and on the corpus they are
 /// right 97.2% of the time. Only the claim about which one is home is withdrawn.
-fn apply_tonic_evidence(mut payload: DetectedKeyPayload, chroma: Option<&[f32]>) -> DetectedKeyPayload {
+fn apply_tonic_evidence(
+    mut payload: DetectedKeyPayload,
+    chroma: Option<&[f32]>,
+) -> DetectedKeyPayload {
     let (Some(chroma), Some(key), Some(scale)) = (
         chroma,
         payload.primary_key.clone(),
@@ -917,7 +941,9 @@ pub fn live_gate(inputs: &LiveGateInputs, cm: &ContradictionMetrics) -> LiveGate
     let contradiction_cooldown_block =
         inputs.contradiction_cooldown && !contradiction_cooldown_override;
     let endpoint_conservative_ok = if inputs.capture_mode == CaptureMode::EndpointLoopback {
-        cm.dominant_share >= 0.88 && inputs.dominant_margin >= 0.38 && inputs.window_dominance >= 0.86
+        cm.dominant_share >= 0.88
+            && inputs.dominant_margin >= 0.38
+            && inputs.window_dominance >= 0.86
     } else {
         true
     };
@@ -1196,25 +1222,41 @@ fn window_winners_from_results(results: &[WindowAnalysisResult]) -> Vec<WindowWi
 // Scores are correlation fits, not probabilities. Convert relative support with
 // a fixed, mode-neutral temperature, then average profiles within one window.
 // Several profiles describing the same audio never count as extra time evidence.
-fn candidate_support_for_window(results: &[WindowAnalysisResult], start_ms: u64) -> BTreeMap<(String, String), f32> {
+fn candidate_support_for_window(
+    results: &[WindowAnalysisResult],
+    start_ms: u64,
+) -> BTreeMap<(String, String), f32> {
     let mut support = BTreeMap::new();
     let mut profiles = 0;
     for result in results.iter().filter(|r| r.window_start_ms == start_ms) {
-        let Some(candidates) = result.candidates.as_ref().filter(|c| !c.is_empty()) else { continue; };
-        let valid: Vec<_> = candidates.iter().filter(|c| c.score.is_finite()
-            && (0.0..=1.0).contains(&c.score) && tonic_to_pc(&c.key).is_some()
-            && matches!(c.scale.as_str(), "major" | "minor")).collect();
-        if valid.is_empty() { continue; }
+        let Some(candidates) = result.candidates.as_ref().filter(|c| !c.is_empty()) else {
+            continue;
+        };
+        let valid: Vec<_> = candidates
+            .iter()
+            .filter(|c| {
+                c.score.is_finite()
+                    && (0.0..=1.0).contains(&c.score)
+                    && tonic_to_pc(&c.key).is_some()
+                    && matches!(c.scale.as_str(), "major" | "minor")
+            })
+            .collect();
+        if valid.is_empty() {
+            continue;
+        }
         let top = valid.iter().map(|c| c.score).fold(0.0_f32, f32::max);
-        let total: f32 = valid.iter().map(|c| ((c.score-top)/0.04).exp()).sum();
+        let total: f32 = valid.iter().map(|c| ((c.score - top) / 0.04).exp()).sum();
         for candidate in valid {
-            *support.entry((candidate.key.clone(),candidate.scale.clone())).or_insert(0.0)
-                += ((candidate.score-top)/0.04).exp() / total;
+            *support
+                .entry((candidate.key.clone(), candidate.scale.clone()))
+                .or_insert(0.0) += ((candidate.score - top) / 0.04).exp() / total;
         }
         profiles += 1;
     }
     if profiles > 0 {
-        for value in support.values_mut() { *value /= profiles as f32; }
+        for value in support.values_mut() {
+            *value /= profiles as f32;
+        }
     }
     support
 }
@@ -1443,8 +1485,10 @@ fn aggregate_results(
         let recency_weight = recency_weight * if idx + 3 >= winners.len() { 2.0 } else { 1.0 };
         let support = candidate_support_for_window(results, window.window_start_ms);
         if !support.is_empty() {
-            for ((key,scale), share) in support {
-                let entry = vote_map.entry((key.clone(),scale.clone(),format!("{key} {scale}"))).or_insert((0.0,0,0.0));
+            for ((key, scale), share) in support {
+                let entry = vote_map
+                    .entry((key.clone(), scale.clone(), format!("{key} {scale}")))
+                    .or_insert((0.0, 0, 0.0));
                 entry.0 += share * recency_weight;
                 if key == window.key && scale == window.scale {
                     entry.1 += 1;
@@ -1479,8 +1523,10 @@ fn aggregate_results(
         let first = &ranked[0];
         let second = &ranked[1];
         if is_relative_major_minor(&first.0, &first.1, &second.0, &second.1) {
-            relative_pair_label_value = Some(relative_pair_label(&first.0, &first.1, &second.0, &second.1));
-            relative_pair_margin = (first.3-second.3).abs() / (first.3+second.3).max(1e-6);
+            relative_pair_label_value = Some(relative_pair_label(
+                &first.0, &first.1, &second.0, &second.1,
+            ));
+            relative_pair_margin = (first.3 - second.3).abs() / (first.3 + second.3).max(1e-6);
             relative_pair_unresolved = relative_pair_margin <= 0.34;
         }
     }
@@ -1576,16 +1622,24 @@ fn aggregate_results(
     let disagreement_penalty = disagreement.contradiction_score;
     confidence = (confidence * (1.0 - 0.55 * disagreement_penalty)).clamp(0.0, 1.0);
     stability = (stability * (1.0 - 0.60 * disagreement_penalty)).clamp(0.0, 1.0);
-    let candidate_fits: Vec<f32> = results.iter()
-        .filter(|r| winners.iter().any(|w| w.window_start_ms == r.window_start_ms))
+    let candidate_fits: Vec<f32> = results
+        .iter()
+        .filter(|r| {
+            winners
+                .iter()
+                .any(|w| w.window_start_ms == r.window_start_ms)
+        })
         .filter_map(|r| r.candidates.as_ref())
         .filter_map(|c| c.iter().find(|c| c.key == top_key && c.scale == top_scale))
-        .map(|c| c.score).collect();
+        .map(|c| c.score)
+        .collect();
     // Relative separation alone can make even noise look decisive. Require
     // absolute tonal fit as well; this is an evidence gate, not accuracy calibration.
     let weak_fit = !candidate_fits.is_empty()
         && candidate_fits.iter().sum::<f32>() / (candidate_fits.len() as f32) < 0.65;
-    if weak_fit { confidence = confidence.min(0.69); }
+    if weak_fit {
+        confidence = confidence.min(0.69);
+    }
     let ambiguous = !enough_audio
         || weak_fit
         || confidence < 0.70
@@ -1604,7 +1658,9 @@ fn aggregate_results(
             // measured against `RELATIVE_PAIR_COIN_FLIP_GAP` — not a share of the window vote, and
             // it is what decided this, whatever the windows happen to be doing.
             Some(gap) => format!("relative_pair_ambiguity:pair={pair} pairGap={gap:.4}"),
-            None => format!("relative_pair_ambiguity:pair={pair} pairMargin={relative_pair_margin:.3}"),
+            None => {
+                format!("relative_pair_ambiguity:pair={pair} pairMargin={relative_pair_margin:.3}")
+            }
         }
     });
     let state = if !enough_audio {
@@ -1662,7 +1718,12 @@ fn aggregate_results(
             } else {
                 relative_pair_reason
             };
-            (p, !settled, if settled { "likely_key" } else { "ambiguous" }, reason)
+            (
+                p,
+                !settled,
+                if settled { "likely_key" } else { "ambiguous" },
+                reason,
+            )
         }
         None => (confidence, ambiguous, state, reason),
     };
@@ -1713,8 +1774,10 @@ pub fn with_switch_hysteresis(
     }
     // A previous near-perfect score must not permanently lock the key. High
     // stability includes repeated fresh temporal evidence and window agreement.
-    let sustained = next.enough_audio && next.window_count >= 7
-        && next.stability >= 0.90 && next.confidence >= MIN_CONFIDENCE_READY;
+    let sustained = next.enough_audio
+        && next.window_count >= 7
+        && next.stability >= 0.90
+        && next.confidence >= MIN_CONFIDENCE_READY;
     if !sustained && next.confidence < (last.confidence + KEY_SWITCH_HYSTERESIS_CONF_MARGIN) {
         next.ambiguous = true;
         next.ready_to_apply = false;
@@ -1731,7 +1794,9 @@ pub fn apply_ready_streak_gate(
     tonic_entropy: f32,
     dominant_share: f32,
 ) -> DetectedKeyPayload {
-    if payload.source == "cloud_verified" { return payload; }
+    if payload.source == "cloud_verified" {
+        return payload;
+    }
     if payload.state == "likely_key" {
         let (min_conf, min_stab) = if backend_used == "numpy_fallback" {
             (0.80, 0.82)
@@ -1787,8 +1852,10 @@ pub fn enforce_apply_gate(
     likely_streak: usize,
 ) -> DetectedKeyPayload {
     // A validated database record has no local capture/streak requirement.
-    if payload.source == "cloud_verified" && payload.primary_key.is_some()
-        && matches!(payload.primary_scale.as_deref(), Some("major" | "minor")) {
+    if payload.source == "cloud_verified"
+        && payload.primary_key.is_some()
+        && matches!(payload.primary_scale.as_deref(), Some("major" | "minor"))
+    {
         payload.ready_to_apply = !payload.ambiguous;
         payload.reason = Some("cloud_verified_key".to_string());
         return payload;
@@ -1796,8 +1863,7 @@ pub fn enforce_apply_gate(
     let endpoint_conservative_ok = if payload.capture_mode == CaptureMode::EndpointLoopback {
         // Keep the measured evidence score and apply the stricter endpoint gate
         // explicitly. A separate 0.85 multiplier made this gate unreachable.
-        payload.confidence >= 0.88
-            && payload.stability >= 0.86 && window_dominance >= 0.86
+        payload.confidence >= 0.88 && payload.stability >= 0.86 && window_dominance >= 0.86
     } else {
         true
     };
@@ -1828,8 +1894,8 @@ pub fn enforce_apply_gate(
         && !cm.contradiction_burst
         && endpoint_conservative_ok
         && stable_horizon;
-    let apply_allowed = hold_apply_allowed ||
-        (matches!(backend_used, "essentia" | "libkeyfinder") && stable_live_evidence);
+    let apply_allowed = hold_apply_allowed
+        || (matches!(backend_used, "essentia" | "libkeyfinder") && stable_live_evidence);
     // Live Jam may follow a clearly labelled estimate. Keep the stricter practice
     // auto-apply contract, while sharing all silence/ambiguity/horizon safeguards.
     if backend_used == "numpy_fallback" && stable_live_evidence {
@@ -1987,7 +2053,10 @@ fn build_current_detector() -> Box<dyn KeyDetector> {
     // PyInstaller build lands), then fall back to the cross-platform search
     // roots so dev builds and Linux/macOS installs resolve too.
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let resource_dir = ANALYZER_RESOURCE_DIR.get().cloned().unwrap_or_else(|| cwd.clone());
+    let resource_dir = ANALYZER_RESOURCE_DIR
+        .get()
+        .cloned()
+        .unwrap_or_else(|| cwd.clone());
     let analyzer_exe_name = if cfg!(windows) {
         "key_analyzer.exe"
     } else {
@@ -3512,7 +3581,9 @@ pub fn shutdown_key_engine() {
             if let Some(handle) = guard.take() {
                 handle.thread().unpark();
                 if !join_engine_before_deadline(handle, Duration::from_secs(20)) {
-                    log::warn!("key_engine: shutdown deadline exceeded; continuing application exit");
+                    log::warn!(
+                        "key_engine: shutdown deadline exceeded; continuing application exit"
+                    );
                 }
             }
         }
@@ -3634,7 +3705,11 @@ mod tonic_evidence_tests {
             whole_buffer_pass_at("D#", "major", 24_000, 0.628),
         ];
         let winners = window_winners_from_results(&growing);
-        assert_eq!(winners.len(), 1, "nested spans are one stretch of audio, not four");
+        assert_eq!(
+            winners.len(),
+            1,
+            "nested spans are one stretch of audio, not four"
+        );
         assert_eq!(
             (winners[0].key.as_str(), winners[0].window_end_ms),
             ("D#", 24_000),
@@ -3659,22 +3734,23 @@ mod tonic_evidence_tests {
     /// audio, and there strength is the right way to choose. Superseding must not reach them.
     #[test]
     fn profiles_scoring_the_same_window_are_still_settled_by_strength() {
-        let one_window: Vec<WindowAnalysisResult> = [("krumhansl", "A", 0.51), ("temperley", "F#", 0.74)]
-            .iter()
-            .map(|(profile, key, strength)| {
-                serde_json::from_value(serde_json::json!({
-                    "profileType": profile,
-                    "key": key,
-                    "scale": "minor",
-                    "displayName": format!("{key} minor"),
-                    "strength": strength,
-                    "firstToSecondRelativeStrength": 0.25,
-                    "windowStartMs": 8_000,
-                    "windowEndMs": 20_000,
-                }))
-                .unwrap()
-            })
-            .collect();
+        let one_window: Vec<WindowAnalysisResult> =
+            [("krumhansl", "A", 0.51), ("temperley", "F#", 0.74)]
+                .iter()
+                .map(|(profile, key, strength)| {
+                    serde_json::from_value(serde_json::json!({
+                        "profileType": profile,
+                        "key": key,
+                        "scale": "minor",
+                        "displayName": format!("{key} minor"),
+                        "strength": strength,
+                        "firstToSecondRelativeStrength": 0.25,
+                        "windowStartMs": 8_000,
+                        "windowEndMs": 20_000,
+                    }))
+                    .unwrap()
+                })
+                .collect();
         let winners = window_winners_from_results(&one_window);
         assert_eq!(winners.len(), 1);
         assert_eq!(
@@ -3730,7 +3806,8 @@ mod tonic_evidence_tests {
             })
             .collect();
         assert_eq!(
-            window_disagreement_metrics(&two_profiles).profile_disagreement_ratio, 1.0,
+            window_disagreement_metrics(&two_profiles).profile_disagreement_ratio,
+            1.0,
             "one window, two profiles, two tonics — the case the metric was written for"
         );
     }
@@ -3789,7 +3866,10 @@ mod tonic_evidence_tests {
             }
             latest = Some(payload);
         }
-        (latest.expect("the replay ran at least one cycle"), fresh_cycles)
+        (
+            latest.expect("the replay ran at least one cycle"),
+            fresh_cycles,
+        )
     }
 
     #[test]
@@ -3861,14 +3941,20 @@ mod tonic_evidence_tests {
         assert!(reason.contains("relative_pair_ambiguity"), "{reason}");
         // The notes are still drawn at full strength; only the root steps back.
         assert_eq!(out.primary_key.as_deref(), Some("G"));
-        assert!(reason.contains("E minor"), "the other reading must be named: {reason}");
+        assert!(
+            reason.contains("E minor"),
+            "the other reading must be named: {reason}"
+        );
 
         // The part that has to be in `alternatives` and not only in `reason`. A consolidated vote
         // has one entry, so without this the list is empty, `keyFusion.ts::relativeHedge` finds no
         // relative, and the readout falls back to "unsure" — downgrading a correct diagram and
         // leaving nothing for the neck to anchor to. Shipped once without it; the log of a real
         // run said `engine_ambiguous_but_shown` where it should have said `tonic_open`.
-        let offered = out.alternatives.first().expect("the other name must be offered");
+        let offered = out
+            .alternatives
+            .first()
+            .expect("the other name must be offered");
         assert_eq!(
             (offered.key.as_str(), offered.scale.as_str()),
             ("E", "minor"),
@@ -3889,7 +3975,11 @@ mod tonic_evidence_tests {
             true,
             &history,
         );
-        assert!(!out.ambiguous, "a separated pair is a verdict: {:?}", out.reason);
+        assert!(
+            !out.ambiguous,
+            "a separated pair is a verdict: {:?}",
+            out.reason
+        );
         assert_eq!(out.state, "likely_key");
     }
 
@@ -3905,7 +3995,11 @@ mod tonic_evidence_tests {
             true,
             &history,
         );
-        assert!(!out.ambiguous, "unchanged legacy behaviour: {:?}", out.reason);
+        assert!(
+            !out.ambiguous,
+            "unchanged legacy behaviour: {:?}",
+            out.reason
+        );
     }
 
     fn payload(key: &str, scale: &str) -> DetectedKeyPayload {
@@ -3976,158 +4070,315 @@ mod tonic_evidence_tests {
 mod tests {
     #[test]
     fn actual_relative_modulation_reaches_final_gate_in_both_capture_modes() {
-        let fixture: serde_json::Value=serde_json::from_str(include_str!("../tests/fixtures/generic_candidate_windows.json")).unwrap();
-        let cases=fixture["cases"].as_array().unwrap();
-        for reverse in [false,true] {
-            let (old,new)=if reverse {(("A","minor"),("C","major"))} else {(("C","major"),("A","minor"))};
-            for mode in [CaptureMode::ProcessLoopback,CaptureMode::EndpointLoopback] {
-                let mut evidence=super::AnalysisEvidence::default();
-                let mut history=VecDeque::new();
-                let mut previous=None;
-                let mut previous_choice=String::new();
-                let mut repeats=0;
-                let mut likely=0;
-                let mut cooldown_until=0;
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/generic_candidate_windows.json"
+        ))
+        .unwrap();
+        let cases = fixture["cases"].as_array().unwrap();
+        for reverse in [false, true] {
+            let (old, new) = if reverse {
+                (("A", "minor"), ("C", "major"))
+            } else {
+                (("C", "major"), ("A", "minor"))
+            };
+            for mode in [CaptureMode::ProcessLoopback, CaptureMode::EndpointLoopback] {
+                let mut evidence = super::AnalysisEvidence::default();
+                let mut history = VecDeque::new();
+                let mut previous = None;
+                let mut previous_choice = String::new();
+                let mut repeats = 0;
+                let mut likely = 0;
+                let mut cooldown_until = 0;
                 for step in 0..60 {
-                    let expected=if step<20 {old} else {new};
-                    let case=cases.iter().find(|c| c["key"].as_str()==Some(expected.0) && c["scale"].as_str()==Some(expected.1)).unwrap();
-                    let windows: Vec<crate::audio_models::WindowAnalysisResult>=serde_json::from_value(case["windows"].clone()).unwrap();
-                    assert!(evidence.accept(&windows,step*4000,step*4000+12000));
-                    let mut result=aggregate_results(&evidence.windows,mode,None,true,&history);
-                    let choice=format!("{}:{}",result.primary_key.as_deref().unwrap(),result.primary_scale.as_deref().unwrap());
-                    if history.len()==super::HISTORY_HORIZON { history.pop_front(); }
-                    history.push_back(choice.clone());
-                    repeats=if choice==previous_choice {repeats+1} else {1};
-                    previous_choice=choice;
-                    let metrics=contradiction_metrics_from_history(&history);
-                    let contradiction=metrics.contradiction_burst;
-                    if contradiction {cooldown_until=step+4;}
-                    result=with_switch_hysteresis(result,previous.as_ref());
-                    likely=if !result.ambiguous && repeats>=super::PRIMARY_KEY_REPEAT_MIN && !contradiction && step>=cooldown_until {likely+1} else {0};
-                    result.source="audio_analysis:numpy_fallback".into();
-                    result=apply_ready_streak_gate(result,likely,"numpy_fallback",metrics.tonic_entropy,metrics.dominant_share);
-                    let winners=super::window_winners_from_results(&evidence.windows);
-                    let mut tonics=std::collections::BTreeMap::new();
-                    for winner in super::recent_window_horizon(&winners,super::AGGREGATION_RECENT_WINDOW_COUNT) { *tonics.entry(winner.key).or_insert(0usize)+=1; }
-                    let (dominance,distinct)=super::window_vote_quality(&tonics);
-                    result=enforce_apply_gate(result,"numpy_fallback",true,true,repeats>=super::PRIMARY_KEY_REPEAT_MIN,
-                        contradiction,step<cooldown_until,false,dominance,distinct,&metrics,likely);
-                    if step==19 || step==59 {
-                        assert_eq!(result.primary_key.as_deref(),Some(expected.0));
-                        assert_eq!(result.primary_scale.as_deref(),Some(expected.1));
-                        assert_eq!(result.reason.as_deref(),Some("stable_numpy_estimate"),"{expected:?} {mode:?} step{step}: {result:?}");
+                    let expected = if step < 20 { old } else { new };
+                    let case = cases
+                        .iter()
+                        .find(|c| {
+                            c["key"].as_str() == Some(expected.0)
+                                && c["scale"].as_str() == Some(expected.1)
+                        })
+                        .unwrap();
+                    let windows: Vec<crate::audio_models::WindowAnalysisResult> =
+                        serde_json::from_value(case["windows"].clone()).unwrap();
+                    assert!(evidence.accept(&windows, step * 4000, step * 4000 + 12000));
+                    let mut result =
+                        aggregate_results(&evidence.windows, mode, None, true, &history);
+                    let choice = format!(
+                        "{}:{}",
+                        result.primary_key.as_deref().unwrap(),
+                        result.primary_scale.as_deref().unwrap()
+                    );
+                    if history.len() == super::HISTORY_HORIZON {
+                        history.pop_front();
                     }
-                    previous=Some(result);
+                    history.push_back(choice.clone());
+                    repeats = if choice == previous_choice {
+                        repeats + 1
+                    } else {
+                        1
+                    };
+                    previous_choice = choice;
+                    let metrics = contradiction_metrics_from_history(&history);
+                    let contradiction = metrics.contradiction_burst;
+                    if contradiction {
+                        cooldown_until = step + 4;
+                    }
+                    result = with_switch_hysteresis(result, previous.as_ref());
+                    likely = if !result.ambiguous
+                        && repeats >= super::PRIMARY_KEY_REPEAT_MIN
+                        && !contradiction
+                        && step >= cooldown_until
+                    {
+                        likely + 1
+                    } else {
+                        0
+                    };
+                    result.source = "audio_analysis:numpy_fallback".into();
+                    result = apply_ready_streak_gate(
+                        result,
+                        likely,
+                        "numpy_fallback",
+                        metrics.tonic_entropy,
+                        metrics.dominant_share,
+                    );
+                    let winners = super::window_winners_from_results(&evidence.windows);
+                    let mut tonics = std::collections::BTreeMap::new();
+                    for winner in super::recent_window_horizon(
+                        &winners,
+                        super::AGGREGATION_RECENT_WINDOW_COUNT,
+                    ) {
+                        *tonics.entry(winner.key).or_insert(0usize) += 1;
+                    }
+                    let (dominance, distinct) = super::window_vote_quality(&tonics);
+                    result = enforce_apply_gate(
+                        result,
+                        "numpy_fallback",
+                        true,
+                        true,
+                        repeats >= super::PRIMARY_KEY_REPEAT_MIN,
+                        contradiction,
+                        step < cooldown_until,
+                        false,
+                        dominance,
+                        distinct,
+                        &metrics,
+                        likely,
+                    );
+                    if step == 19 || step == 59 {
+                        assert_eq!(result.primary_key.as_deref(), Some(expected.0));
+                        assert_eq!(result.primary_scale.as_deref(), Some(expected.1));
+                        assert_eq!(
+                            result.reason.as_deref(),
+                            Some("stable_numpy_estimate"),
+                            "{expected:?} {mode:?} step{step}: {result:?}"
+                        );
+                    }
+                    previous = Some(result);
                 }
             }
         }
     }
     #[test]
     fn track_identity_normalizes_unicode_like_frontend() {
-        assert_eq!(super::normalize_track_field(Some("  BJÖRK  DEJA  VU ")),"björk deja vu");
+        assert_eq!(
+            super::normalize_track_field(Some("  BJÖRK  DEJA  VU ")),
+            "björk deja vu"
+        );
     }
 
     #[test]
     fn endpoint_confidence_is_measured_evidence_with_an_explicit_stricter_gate() {
-        for (confidence,eligible) in [(0.92,true),(0.87,false),(0.55,false)] {
-            let mut result=crate::audio_models::DetectedKeyPayload::unavailable("test");
-            result.primary_key=Some("D".into());result.primary_scale=Some("major".into());
-            result.state="likely_key".into();result.source="audio_analysis:numpy_fallback".into();
-            result.confidence=confidence;result.stability=0.95;result.ambiguous=false;result.enough_audio=true;
-            result.capture_mode=CaptureMode::EndpointLoopback;
-            result=super::apply_capture_degrade(result);
-            assert_eq!(result.confidence,confidence);
-            result=enforce_apply_gate(result,"numpy_fallback",true,true,true,false,false,false,0.95,1,&stable_cm(),8);
-            assert_eq!(result.reason.as_deref()==Some("stable_numpy_estimate"),eligible);
+        for (confidence, eligible) in [(0.92, true), (0.87, false), (0.55, false)] {
+            let mut result = crate::audio_models::DetectedKeyPayload::unavailable("test");
+            result.primary_key = Some("D".into());
+            result.primary_scale = Some("major".into());
+            result.state = "likely_key".into();
+            result.source = "audio_analysis:numpy_fallback".into();
+            result.confidence = confidence;
+            result.stability = 0.95;
+            result.ambiguous = false;
+            result.enough_audio = true;
+            result.capture_mode = CaptureMode::EndpointLoopback;
+            result = super::apply_capture_degrade(result);
+            assert_eq!(result.confidence, confidence);
+            result = enforce_apply_gate(
+                result,
+                "numpy_fallback",
+                true,
+                true,
+                true,
+                false,
+                false,
+                false,
+                0.95,
+                1,
+                &stable_cm(),
+                8,
+            );
+            assert_eq!(
+                result.reason.as_deref() == Some("stable_numpy_estimate"),
+                eligible
+            );
             assert!(!result.ready_to_apply);
         }
     }
     #[test]
     fn actual_python_candidates_can_reach_live_estimate_gate_for_all_keys() {
-        let fixture: serde_json::Value=serde_json::from_str(include_str!("../tests/fixtures/generic_candidate_windows.json")).unwrap();
-        let mut endpoint_eligible=0;
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/generic_candidate_windows.json"
+        ))
+        .unwrap();
+        let mut endpoint_eligible = 0;
         for case in fixture["cases"].as_array().unwrap() {
-            let key=case["key"].as_str().unwrap();
-            let scale=case["scale"].as_str().unwrap();
-            let template: Vec<crate::audio_models::WindowAnalysisResult>=serde_json::from_value(case["windows"].clone()).unwrap();
-            assert!(template.iter().all(|w|w.candidates.as_ref().unwrap().len()==24));
-            for mode in [CaptureMode::ProcessLoopback,CaptureMode::EndpointLoopback] {
-                let mut evidence=super::AnalysisEvidence::default();
-                let mut history=VecDeque::new();
-                let mut result=crate::audio_models::DetectedKeyPayload::unavailable("test");
+            let key = case["key"].as_str().unwrap();
+            let scale = case["scale"].as_str().unwrap();
+            let template: Vec<crate::audio_models::WindowAnalysisResult> =
+                serde_json::from_value(case["windows"].clone()).unwrap();
+            assert!(template
+                .iter()
+                .all(|w| w.candidates.as_ref().unwrap().len() == 24));
+            for mode in [CaptureMode::ProcessLoopback, CaptureMode::EndpointLoopback] {
+                let mut evidence = super::AnalysisEvidence::default();
+                let mut history = VecDeque::new();
+                let mut result = crate::audio_models::DetectedKeyPayload::unavailable("test");
                 for step in 0..20 {
-                    assert!(evidence.accept(&template,step*4000,step*4000+12000));
-                    result=aggregate_results(&evidence.windows,mode,None,true,&history);
-                    if history.len()==super::HISTORY_HORIZON { history.pop_front(); }
-                    history.push_back(format!("{}:{}",result.primary_key.as_deref().unwrap(),result.primary_scale.as_deref().unwrap()));
+                    assert!(evidence.accept(&template, step * 4000, step * 4000 + 12000));
+                    result = aggregate_results(&evidence.windows, mode, None, true, &history);
+                    if history.len() == super::HISTORY_HORIZON {
+                        history.pop_front();
+                    }
+                    history.push_back(format!(
+                        "{}:{}",
+                        result.primary_key.as_deref().unwrap(),
+                        result.primary_scale.as_deref().unwrap()
+                    ));
                 }
-                let metrics=contradiction_metrics_from_history(&history);
-                result.source="audio_analysis:numpy_fallback".into();
-                result=apply_ready_streak_gate(result,8,"numpy_fallback",metrics.tonic_entropy,metrics.dominant_share);
-                result=enforce_apply_gate(result,"numpy_fallback",true,true,true,false,false,false,1.0,1,&metrics,8);
-                assert_eq!(result.primary_key.as_deref(),Some(key));
-                assert_eq!(result.primary_scale.as_deref(),Some(scale));
-                assert!(!result.ambiguous,"{key} {scale} {mode:?}: {:?} {} {}",result.reason,result.confidence,result.stability);
-                assert_eq!(result.reason.as_deref(),Some("stable_numpy_estimate"),"{key} {scale} {mode:?}: {result:?}");
-                if mode==CaptureMode::EndpointLoopback { endpoint_eligible+=1; }
-                assert!(!result.ready_to_apply,"numpy must remain suggestion-only for Practice");
+                let metrics = contradiction_metrics_from_history(&history);
+                result.source = "audio_analysis:numpy_fallback".into();
+                result = apply_ready_streak_gate(
+                    result,
+                    8,
+                    "numpy_fallback",
+                    metrics.tonic_entropy,
+                    metrics.dominant_share,
+                );
+                result = enforce_apply_gate(
+                    result,
+                    "numpy_fallback",
+                    true,
+                    true,
+                    true,
+                    false,
+                    false,
+                    false,
+                    1.0,
+                    1,
+                    &metrics,
+                    8,
+                );
+                assert_eq!(result.primary_key.as_deref(), Some(key));
+                assert_eq!(result.primary_scale.as_deref(), Some(scale));
+                assert!(
+                    !result.ambiguous,
+                    "{key} {scale} {mode:?}: {:?} {} {}",
+                    result.reason, result.confidence, result.stability
+                );
+                assert_eq!(
+                    result.reason.as_deref(),
+                    Some("stable_numpy_estimate"),
+                    "{key} {scale} {mode:?}: {result:?}"
+                );
+                if mode == CaptureMode::EndpointLoopback {
+                    endpoint_eligible += 1;
+                }
+                assert!(
+                    !result.ready_to_apply,
+                    "numpy must remain suggestion-only for Practice"
+                );
             }
         }
-        assert_eq!(endpoint_eligible,24);
+        assert_eq!(endpoint_eligible, 24);
         eprintln!("actual DSP native gate: 24/24 process keys eligible, 24/24 endpoint keys eligible under stricter endpoint gates");
     }
     #[test]
     fn weak_absolute_fit_cannot_become_certain_from_candidate_separation() {
-        for scale in ["major","minor"] {
-            let windows: Vec<_>=(0..9).map(|i|scored_window("D",scale,"A",scale,0.55,0.25,i*4000)).collect();
-            let result=aggregate_results(&windows,CaptureMode::ProcessLoopback,None,true,&VecDeque::from(vec![format!("D:{scale}");16]));
+        for scale in ["major", "minor"] {
+            let windows: Vec<_> = (0..9)
+                .map(|i| scored_window("D", scale, "A", scale, 0.55, 0.25, i * 4000))
+                .collect();
+            let result = aggregate_results(
+                &windows,
+                CaptureMode::ProcessLoopback,
+                None,
+                true,
+                &VecDeque::from(vec![format!("D:{scale}"); 16]),
+            );
             assert!(result.ambiguous);
-            assert!(result.confidence<0.7);
+            assert!(result.confidence < 0.7);
             assert!(!result.ready_to_apply);
         }
     }
     #[test]
     fn evidence_deduplicates_rescans_and_accepts_fresh_absolute_endpoints() {
         let mut evidence = super::AnalysisEvidence::default();
-        let windows = vec![scored_window("D","major","B","minor",0.94,0.64,0)];
-        assert!(evidence.accept(&windows,48_000,60_000));
+        let windows = vec![scored_window("D", "major", "B", "minor", 0.94, 0.64, 0)];
+        assert!(evidence.accept(&windows, 48_000, 60_000));
         let revision = evidence.revision;
-        let before = aggregate_results(&evidence.windows,CaptureMode::ProcessLoopback,None,true,&VecDeque::new());
-        for _ in 0..10 { assert!(!evidence.accept(&windows,48_000,60_000)); }
-        assert_eq!(evidence.revision,revision);
-        assert_eq!(evidence.windows.len(),1);
-        let after = aggregate_results(&evidence.windows,CaptureMode::ProcessLoopback,None,true,&VecDeque::new());
-        assert_eq!(before.confidence,after.confidence);
-        assert_eq!(before.stability,after.stability);
+        let before = aggregate_results(
+            &evidence.windows,
+            CaptureMode::ProcessLoopback,
+            None,
+            true,
+            &VecDeque::new(),
+        );
+        for _ in 0..10 {
+            assert!(!evidence.accept(&windows, 48_000, 60_000));
+        }
+        assert_eq!(evidence.revision, revision);
+        assert_eq!(evidence.windows.len(), 1);
+        let after = aggregate_results(
+            &evidence.windows,
+            CaptureMode::ProcessLoopback,
+            None,
+            true,
+            &VecDeque::new(),
+        );
+        assert_eq!(before.confidence, after.confidence);
+        assert_eq!(before.stability, after.stability);
         // Identical relative offsets refer to NEW audio after the rolling buffer fills.
-        assert!(evidence.accept(&windows,52_000,64_000));
-        assert_eq!(evidence.revision,revision+1);
-        assert_eq!(evidence.windows.len(),2);
+        assert!(evidence.accept(&windows, 52_000, 64_000));
+        assert_eq!(evidence.revision, revision + 1);
+        assert_eq!(evidence.windows.len(), 2);
         evidence.reset();
-        assert_eq!(evidence.revision,revision+1);
-        assert!(evidence.accept(&windows,64_000,76_000));
-        assert_eq!(evidence.revision,revision+2);
+        assert_eq!(evidence.revision, revision + 1);
+        assert!(evidence.accept(&windows, 64_000, 76_000));
+        assert_eq!(evidence.revision, revision + 2);
     }
 
     #[test]
     fn capture_endpoint_advances_after_ring_fills_and_across_reset() {
         let mut capture = crate::audio_capture::AudioCaptureManager::new();
         let rate = capture.sample_rate_hz();
-        capture.ingest_mono_samples(rate,&vec![0.2;rate as usize*64]);
+        capture.ingest_mono_samples(rate, &vec![0.2; rate as usize * 64]);
         let seconds = capture.available_buffer_seconds();
         let endpoint = capture.accepted_samples();
-        capture.ingest_mono_samples(rate,&vec![0.2;rate as usize*4]);
-        assert_eq!(capture.available_buffer_seconds(),seconds);
-        assert_eq!(capture.accepted_samples(),endpoint+rate as u64*4);
-        let (samples,start,end) = super::aligned_analysis_samples(capture.latest_samples(60),capture.accepted_samples(),capture.grid_origin(),rate);
-        assert_eq!(end,68*rate as u64);
+        capture.ingest_mono_samples(rate, &vec![0.2; rate as usize * 4]);
+        assert_eq!(capture.available_buffer_seconds(), seconds);
+        assert_eq!(capture.accepted_samples(), endpoint + rate as u64 * 4);
+        let (samples, start, end) = super::aligned_analysis_samples(
+            capture.latest_samples(60),
+            capture.accepted_samples(),
+            capture.grid_origin(),
+            rate,
+        );
+        assert_eq!(end, 68 * rate as u64);
         // The whole of what the ring holds, not a 44-second slice of it: `ROLLING_BUFFER_SECONDS`
         // and `MAX_ANALYSIS_SPAN_SECONDS` are both 60, so nothing captured is discarded.
-        assert_eq!(start,8_000);
-        assert_eq!(samples.len(),60*rate as usize);
+        assert_eq!(start, 8_000);
+        assert_eq!(samples.len(), 60 * rate as usize);
         capture.reset();
-        capture.ingest_mono_samples(rate,&vec![0.2;rate as usize*12]);
-        assert_eq!(capture.accepted_samples(),80*rate as u64);
+        capture.ingest_mono_samples(rate, &vec![0.2; rate as usize * 12]);
+        assert_eq!(capture.accepted_samples(), 80 * rate as u64);
     }
 
     #[test]
@@ -4135,10 +4386,11 @@ mod tests {
         // Eighty seconds held, so the span cap is what decides the window rather than how much
         // audio happens to exist. The point is that a partial hop at the end moves neither
         // endpoint: a re-scan of the same audio must not read as new evidence.
-        for seconds in [80,81,82,83] {
-            let (_,start,end)=super::aligned_analysis_samples(vec![0.2;80*100],seconds*100,0,100);
-            assert_eq!(end,8000);
-            assert_eq!(start,20000);
+        for seconds in [80, 81, 82, 83] {
+            let (_, start, end) =
+                super::aligned_analysis_samples(vec![0.2; 80 * 100], seconds * 100, 0, 100);
+            assert_eq!(end, 8000);
+            assert_eq!(start, 20000);
         }
     }
 
@@ -4180,54 +4432,95 @@ mod tests {
         let rate = 100u32;
         let slack = std::time::Duration::from_millis(super::CAPTURE_PACKET_SLACK_MS);
         // Nothing analysed yet, ring started at 5s, 9s of it held: the first window is 3s away.
-        assert_eq!(super::next_analysis_due_in(1400, 500, 0, 12, rate), std::time::Duration::from_secs(3) + slack);
+        assert_eq!(
+            super::next_analysis_due_in(1400, 500, 0, 12, rate),
+            std::time::Duration::from_secs(3) + slack
+        );
         // Last analysed at 17s on that grid: the next hop completes at 21s.
-        assert_eq!(super::next_analysis_due_in(1850, 500, 1700, 12, rate), std::time::Duration::from_millis(2500) + slack);
+        assert_eq!(
+            super::next_analysis_due_in(1850, 500, 1700, 12, rate),
+            std::time::Duration::from_millis(2500) + slack
+        );
         // Already due: wake only for the packet slack.
-        assert_eq!(super::next_analysis_due_in(2200, 500, 1700, 12, rate), slack);
+        assert_eq!(
+            super::next_analysis_due_in(2200, 500, 1700, 12, rate),
+            slack
+        );
     }
 
     #[test]
     fn stability_requirements_keep_their_nine_seconds_at_any_poll_rate() {
-        assert_eq!(super::stable_window(super::CAPTURE_STABLE_MIN_CYCLES), std::time::Duration::from_secs(9));
-        assert_eq!(super::stable_window(super::SESSION_STABLE_MIN_CYCLES), std::time::Duration::from_secs(9));
+        assert_eq!(
+            super::stable_window(super::CAPTURE_STABLE_MIN_CYCLES),
+            std::time::Duration::from_secs(9)
+        );
+        assert_eq!(
+            super::stable_window(super::SESSION_STABLE_MIN_CYCLES),
+            std::time::Duration::from_secs(9)
+        );
     }
 
     #[test]
     fn cloud_hit_keeps_local_capture_enabled_while_playing() {
-        for cloud_hit in [false,true] {
-            assert!(super::should_run_local_capture(true,true,cloud_hit));
-            assert!(!super::should_run_local_capture(true,false,cloud_hit));
-            assert!(!super::should_run_local_capture(false,true,cloud_hit));
+        for cloud_hit in [false, true] {
+            assert!(super::should_run_local_capture(true, true, cloud_hit));
+            assert!(!super::should_run_local_capture(true, false, cloud_hit));
+            assert!(!super::should_run_local_capture(false, true, cloud_hit));
         }
     }
 
     #[test]
     fn accumulating_candidates_follow_sustained_modulation_in_both_modes() {
-        let roots=["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
-        for (index,key) in roots.iter().enumerate() {
-            for scale in ["major","minor"] {
-                let next_key=roots[(index+2)%12];
-                let mut evidence=super::AnalysisEvidence::default();
-                let mut history=VecDeque::new();
-                let mut result=crate::audio_models::DetectedKeyPayload::unavailable("test");
+        let roots = [
+            "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+        ];
+        for (index, key) in roots.iter().enumerate() {
+            for scale in ["major", "minor"] {
+                let next_key = roots[(index + 2) % 12];
+                let mut evidence = super::AnalysisEvidence::default();
+                let mut history = VecDeque::new();
+                let mut result = crate::audio_models::DetectedKeyPayload::unavailable("test");
                 for step in 0..40 {
-                    let tonic=if step < 16 {*key} else {next_key};
-                    let runner=if step < 16 {next_key} else {*key};
-                    let window=scored_window(tonic,scale,runner,scale,0.94,0.63,step*4000);
-                    assert!(evidence.accept(&[window],0,step*4000+12000));
-                    result=aggregate_results(&evidence.windows,CaptureMode::ProcessLoopback,None,true,&history);
-                    if history.len()==super::HISTORY_HORIZON { history.pop_front(); }
-                    history.push_back(format!("{}:{}",result.primary_key.as_deref().unwrap(),scale));
-                    if step==15 { assert_eq!(result.primary_key.as_deref(),Some(*key)); assert!(!result.ambiguous); }
+                    let tonic = if step < 16 { *key } else { next_key };
+                    let runner = if step < 16 { next_key } else { *key };
+                    let window =
+                        scored_window(tonic, scale, runner, scale, 0.94, 0.63, step * 4000);
+                    assert!(evidence.accept(&[window], 0, step * 4000 + 12000));
+                    result = aggregate_results(
+                        &evidence.windows,
+                        CaptureMode::ProcessLoopback,
+                        None,
+                        true,
+                        &history,
+                    );
+                    if history.len() == super::HISTORY_HORIZON {
+                        history.pop_front();
+                    }
+                    history.push_back(format!(
+                        "{}:{}",
+                        result.primary_key.as_deref().unwrap(),
+                        scale
+                    ));
+                    if step == 15 {
+                        assert_eq!(result.primary_key.as_deref(), Some(*key));
+                        assert!(!result.ambiguous);
+                    }
                 }
-                assert_eq!(result.primary_key.as_deref(),Some(next_key));
-                assert!(!result.ambiguous,"{next_key} {scale}: {:?}",result.reason);
-                assert!(result.confidence>=super::MIN_CONFIDENCE_READY);
+                assert_eq!(result.primary_key.as_deref(), Some(next_key));
+                assert!(!result.ambiguous, "{next_key} {scale}: {:?}", result.reason);
+                assert!(result.confidence >= super::MIN_CONFIDENCE_READY);
             }
         }
     }
-    fn scored_window(key: &str, scale: &str, runner: &str, runner_scale: &str, top: f32, second: f32, start: u64) -> crate::audio_models::WindowAnalysisResult {
+    fn scored_window(
+        key: &str,
+        scale: &str,
+        runner: &str,
+        runner_scale: &str,
+        top: f32,
+        second: f32,
+        start: u64,
+    ) -> crate::audio_models::WindowAnalysisResult {
         serde_json::from_value(serde_json::json!({"profileType":"test", "key":key,"scale":scale,
             "displayName":format!("{key} {scale}"),"strength":top,"firstToSecondRelativeStrength":(top-second)/top,
             "windowStartMs":start,"windowEndMs":start+12000,
@@ -4236,11 +4529,16 @@ mod tests {
 
     #[test]
     fn close_candidates_remain_ambiguous_for_every_root_and_mode() {
-        for key in ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"] {
-            for (scale, runner_scale) in [("major","minor"),("minor","major")] {
-                let windows: Vec<_> = (0..9).map(|i| scored_window(key,scale,key,runner_scale,0.9,0.89,i*4000)).collect();
+        for key in [
+            "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+        ] {
+            for (scale, runner_scale) in [("major", "minor"), ("minor", "major")] {
+                let windows: Vec<_> = (0..9)
+                    .map(|i| scored_window(key, scale, key, runner_scale, 0.9, 0.89, i * 4000))
+                    .collect();
                 let history = VecDeque::from(vec![format!("{key}:{scale}"); 8]);
-                let payload = aggregate_results(&windows,CaptureMode::ProcessLoopback,None,true,&history);
+                let payload =
+                    aggregate_results(&windows, CaptureMode::ProcessLoopback, None, true, &history);
                 assert!(payload.ambiguous, "close candidates {key} {scale}");
                 assert!(payload.confidence < 0.7);
             }
@@ -4254,24 +4552,36 @@ mod tests {
                 let (key,scale,strength) = if i < 2 {(early_key,early_scale,0.63)} else {(late_key,late_scale,0.72)};
                 serde_json::from_value(serde_json::json!({"profileType":"test","key":key,"scale":scale,"displayName":format!("{key} {scale}"),"strength":strength,"firstToSecondRelativeStrength":0.22,"windowStartMs":i*4000,"windowEndMs":i*4000+12000})).unwrap()
             }).collect();
-            aggregate_results(&windows,CaptureMode::ProcessLoopback,None,true,&VecDeque::from(vec![format!("{late_key}:{late_scale}");8]))
+            aggregate_results(
+                &windows,
+                CaptureMode::ProcessLoopback,
+                None,
+                true,
+                &VecDeque::from(vec![format!("{late_key}:{late_scale}"); 8]),
+            )
         };
-        let major = evaluate("A","minor","C","major");
-        let minor = evaluate("C","major","A","minor");
+        let major = evaluate("A", "minor", "C", "major");
+        let minor = evaluate("C", "major", "A", "minor");
         assert_eq!(major.primary_scale.as_deref(), Some("major"));
         assert_eq!(minor.primary_scale.as_deref(), Some("minor"));
-        assert!((major.confidence-minor.confidence).abs() < 0.0001);
-        assert_eq!(major.ambiguous,minor.ambiguous);
+        assert!((major.confidence - minor.confidence).abs() < 0.0001);
+        assert_eq!(major.ambiguous, minor.ambiguous);
     }
 
     #[test]
     fn sustained_modulation_can_replace_a_high_confidence_previous_key() {
         let mut last = crate::audio_models::DetectedKeyPayload::unavailable("test");
-        last.primary_key=Some("C".into()); last.primary_scale=Some("major".into());
-        last.confidence=0.99; last.ambiguous=false;
-        let mut next=last.clone(); next.primary_key=Some("D".into()); next.confidence=0.98;
-        next.stability=0.98; next.window_count=9; next.enough_audio=true;
-        assert!(!with_switch_hysteresis(next,Some(&last)).ambiguous);
+        last.primary_key = Some("C".into());
+        last.primary_scale = Some("major".into());
+        last.confidence = 0.99;
+        last.ambiguous = false;
+        let mut next = last.clone();
+        next.primary_key = Some("D".into());
+        next.confidence = 0.98;
+        next.stability = 0.98;
+        next.window_count = 9;
+        next.enough_audio = true;
+        assert!(!with_switch_hysteresis(next, Some(&last)).ambiguous);
     }
     use super::{
         aggregate_results, analyzer_executable_candidates, analyzer_file_candidates,
@@ -4752,8 +5062,20 @@ mod tests {
         payload.state = "likely_key".into();
         payload.ambiguous = false;
         payload.ready_to_apply = true;
-        let gated = enforce_apply_gate(payload, "unavailable", false, false, false,
-            false, false, true, 0.0, 0, &stable_cm(), 0);
+        let gated = enforce_apply_gate(
+            payload,
+            "unavailable",
+            false,
+            false,
+            false,
+            false,
+            false,
+            true,
+            0.0,
+            0,
+            &stable_cm(),
+            0,
+        );
         assert!(gated.ready_to_apply);
         assert_eq!(gated.primary_key.as_deref(), Some("Bb"));
     }
@@ -4773,14 +5095,37 @@ mod tests {
         // Each case changes one piece of otherwise stable evidence.
         for case in 0..9 {
             let mut next = payload.clone();
-            if case == 0 { next.ambiguous = true; }
-            if case == 1 { next.enough_audio = false; }
-            if case == 2 { next.confidence = 0.7; }
-            if case == 3 { next.state = "paused_hold".into(); }
-            let gated = enforce_apply_gate(next, "numpy_fallback", case != 4,
-                true, true, case == 5, case == 6, case == 7, 0.95, 1,
-                &stable_cm(), if case == 8 { 0 } else { 8 });
-            assert_ne!(gated.reason.as_deref(), Some("stable_numpy_estimate"), "case {case}");
+            if case == 0 {
+                next.ambiguous = true;
+            }
+            if case == 1 {
+                next.enough_audio = false;
+            }
+            if case == 2 {
+                next.confidence = 0.7;
+            }
+            if case == 3 {
+                next.state = "paused_hold".into();
+            }
+            let gated = enforce_apply_gate(
+                next,
+                "numpy_fallback",
+                case != 4,
+                true,
+                true,
+                case == 5,
+                case == 6,
+                case == 7,
+                0.95,
+                1,
+                &stable_cm(),
+                if case == 8 { 0 } else { 8 },
+            );
+            assert_ne!(
+                gated.reason.as_deref(),
+                Some("stable_numpy_estimate"),
+                "case {case}"
+            );
             assert!(!gated.ready_to_apply);
         }
     }
@@ -4788,8 +5133,11 @@ mod tests {
     #[test]
     fn cloud_hit_requires_valid_key_and_major_or_minor() {
         let control = super::CloudResolutionControl {
-            track_identity: Some("track".into()), state: "hit".into(),
-            key: Some("Bb".into()), mode: Some("dorian".into()), error: None,
+            track_identity: Some("track".into()),
+            state: "hit".into(),
+            key: Some("Bb".into()),
+            mode: Some("dorian".into()),
+            error: None,
         };
         assert!(!super::set_cloud_resolution(control));
     }
@@ -4806,12 +5154,36 @@ mod tests {
             payload.confidence = 0.95;
             payload.stability = 0.95;
             payload.ambiguous = false;
-            let gated = enforce_apply_gate(payload.clone(), backend, true, true, true,
-                false, false, false, 0.95, 1, &stable_cm(), 8);
+            let gated = enforce_apply_gate(
+                payload.clone(),
+                backend,
+                true,
+                true,
+                true,
+                false,
+                false,
+                false,
+                0.95,
+                1,
+                &stable_cm(),
+                8,
+            );
             assert!(!gated.ready_to_apply, "not enough audio on {backend}");
             payload.enough_audio = true;
-            let gated = enforce_apply_gate(payload, backend, true, true, true,
-                false, false, false, 0.95, 1, &stable_cm(), 8);
+            let gated = enforce_apply_gate(
+                payload,
+                backend,
+                true,
+                true,
+                true,
+                false,
+                false,
+                false,
+                0.95,
+                1,
+                &stable_cm(),
+                8,
+            );
             assert!(gated.ready_to_apply, "stable supported backend {backend}");
         }
     }
@@ -4959,7 +5331,10 @@ mod tests {
         use std::time::{Duration, Instant};
         let handle = std::thread::spawn(|| std::thread::sleep(Duration::from_millis(200)));
         let started = Instant::now();
-        assert!(!super::join_engine_before_deadline(handle, Duration::from_millis(20)));
+        assert!(!super::join_engine_before_deadline(
+            handle,
+            Duration::from_millis(20)
+        ));
         assert!(started.elapsed() < Duration::from_millis(150));
     }
 }
@@ -4983,11 +5358,23 @@ mod pause_tests {
         let p = paused();
         let track = Some(p.track.as_str());
         assert_eq!(
-            capture_transition(Some(&p), CaptureMode::Unavailable, Some("Brave"), track, true),
+            capture_transition(
+                Some(&p),
+                CaptureMode::Unavailable,
+                Some("Brave"),
+                track,
+                true
+            ),
             CaptureTransition::Pausing
         );
         assert_eq!(
-            capture_transition(Some(&p), CaptureMode::EndpointLoopback, Some("Brave"), track, false),
+            capture_transition(
+                Some(&p),
+                CaptureMode::EndpointLoopback,
+                Some("Brave"),
+                track,
+                false
+            ),
             CaptureTransition::Resuming
         );
     }
@@ -4998,24 +5385,54 @@ mod pause_tests {
         let track = Some(p.track.as_str());
         // Nothing was paused: every change is a change, exactly as before.
         assert_eq!(
-            capture_transition(None, CaptureMode::EndpointLoopback, Some("Brave"), track, false),
+            capture_transition(
+                None,
+                CaptureMode::EndpointLoopback,
+                Some("Brave"),
+                track,
+                false
+            ),
             CaptureTransition::Changed
         );
         // Another song, another player, no identity, or a different kind of capture.
         assert_eq!(
-            capture_transition(Some(&p), CaptureMode::EndpointLoopback, Some("Brave"), Some("sting - shape of my heart"), false),
+            capture_transition(
+                Some(&p),
+                CaptureMode::EndpointLoopback,
+                Some("Brave"),
+                Some("sting - shape of my heart"),
+                false
+            ),
             CaptureTransition::Changed
         );
         assert_eq!(
-            capture_transition(Some(&p), CaptureMode::EndpointLoopback, Some("Spotify"), track, false),
+            capture_transition(
+                Some(&p),
+                CaptureMode::EndpointLoopback,
+                Some("Spotify"),
+                track,
+                false
+            ),
             CaptureTransition::Changed
         );
         assert_eq!(
-            capture_transition(Some(&p), CaptureMode::EndpointLoopback, Some("Brave"), None, false),
+            capture_transition(
+                Some(&p),
+                CaptureMode::EndpointLoopback,
+                Some("Brave"),
+                None,
+                false
+            ),
             CaptureTransition::Changed
         );
         assert_eq!(
-            capture_transition(Some(&p), CaptureMode::ProcessLoopback, Some("Brave"), track, false),
+            capture_transition(
+                Some(&p),
+                CaptureMode::ProcessLoopback,
+                Some("Brave"),
+                track,
+                false
+            ),
             CaptureTransition::Changed
         );
     }

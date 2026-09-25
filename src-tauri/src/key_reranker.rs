@@ -67,27 +67,27 @@ pub const FEATURE_COUNT: usize = 3 + CHORD_FEATURE_COUNT;
 /// musician would give, which is the best evidence available that it is reading music and not
 /// noise, and the refit onto 396 clips did not disturb it.
 const WEIGHTS: [f32; FEATURE_COUNT] = [
-      119.733771,  // score_gap_to_leader
-       -0.635209,  // shortlist_position
-        0.027512,  // is_major
-        2.568233,  // time_on_tonic
-       -0.069787,  // time_on_relative_tonic
-        0.022856,  // time_on_V_major
-        1.296036,  // time_on_IV_major
-       -0.039347,  // time_on_iv_minor
-        0.670455,  // time_on_ii_minor
-       -0.335625,  // time_on_vi_minor
-        0.459751,  // time_on_III_major
-        0.989837,  // time_on_VII_major
-        1.293328,  // time_diatonic
-        3.863603,  // changes_into_tonic
-        3.437716,  // cadence_V_to_tonic
-        3.311931,  // cadence_IV_to_tonic
-       -0.888510,  // cadence_VII_to_tonic
-        0.064399,  // opens_on_tonic
-       -0.470241,  // closes_on_tonic
-       -0.035638,  // most_common_is_tonic
-       -0.253790,  // longest_run_is_tonic
+    119.733771, // score_gap_to_leader
+    -0.635209,  // shortlist_position
+    0.027512,   // is_major
+    2.568233,   // time_on_tonic
+    -0.069787,  // time_on_relative_tonic
+    0.022856,   // time_on_V_major
+    1.296036,   // time_on_IV_major
+    -0.039347,  // time_on_iv_minor
+    0.670455,   // time_on_ii_minor
+    -0.335625,  // time_on_vi_minor
+    0.459751,   // time_on_III_major
+    0.989837,   // time_on_VII_major
+    1.293328,   // time_diatonic
+    3.863603,   // changes_into_tonic
+    3.437716,   // cadence_V_to_tonic
+    3.311931,   // cadence_IV_to_tonic
+    -0.888510,  // cadence_VII_to_tonic
+    0.064399,   // opens_on_tonic
+    -0.470241,  // closes_on_tonic
+    -0.035638,  // most_common_is_tonic
+    -0.253790,  // longest_run_is_tonic
 ];
 
 /// One entry of the analyzer's shortlist.
@@ -146,7 +146,12 @@ pub fn rerank(shortlist: &[ShortlistEntry]) -> Option<usize> {
         // past twenty — where the unrestricted numbers are the in-sample ones, since these weights
         // were fitted on those clips. See `scripts/key-research/exp_rerank_spans.py`.
         if position > 0
-            && !crate::key_confidence::same_note_set(&entry.key, &entry.scale, &leader.key, &leader.scale)
+            && !crate::key_confidence::same_note_set(
+                &entry.key,
+                &entry.scale,
+                &leader.key,
+                &leader.scale,
+            )
         {
             continue;
         }
@@ -156,7 +161,9 @@ pub fn rerank(shortlist: &[ShortlistEntry]) -> Option<usize> {
             if entry.scale == "major" { 1.0 } else { 0.0 },
         ];
         let mut score = 0.0f32;
-        for (weight, value) in WEIGHTS.iter().zip(context.iter().chain(entry.chord_features.iter()))
+        for (weight, value) in WEIGHTS
+            .iter()
+            .zip(context.iter().chain(entry.chord_features.iter()))
         {
             score += weight * value;
         }

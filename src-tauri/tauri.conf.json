@@ -23,7 +23,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: http://asset.localhost; font-src 'self' data:; connect-src 'self' https: ipc: http://ipc.localhost; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: http://asset.localhost; font-src 'self' data:; connect-src 'self' https: ipc: http://ipc.localhost; frame-src 'self' blob: data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
     }
   },
   "bundle": {
@@ -31,6 +31,7 @@
     "targets": "all",
     "resources": [
       "sidecars/key_analyzer/key_analyzer.py",
+      "sidecars/chordsync",
       "sidecars/libkeyfinder_cli/build/gsv-libkeyfinder-cli",
       "sidecars/libkeyfinder_cli/build/libkeyfinder.so.2"
     ],

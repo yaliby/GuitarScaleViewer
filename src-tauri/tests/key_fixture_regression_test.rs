@@ -213,33 +213,55 @@ fn fixture_regression_with_real_sidecar() {
         for window in &response.windows {
             assert!(window.strength.is_finite());
             winners.insert(window.key.clone());
-            let Some(candidates)=window.candidates.as_ref() else {
+            let Some(candidates) = window.candidates.as_ref() else {
                 // Essentia and older sidecars retain the optional winner-only
                 // protocol. Only the NumPy backend promises all 24 candidates.
-                assert_ne!(response.backend_used.as_deref(),Some("numpy_fallback"),"{} numpy candidates missing",fixture.id);
-                *scores.entry((window.key.to_ascii_uppercase(),window.scale.to_ascii_lowercase())).or_insert(0.0)+=window.strength;
+                assert_ne!(
+                    response.backend_used.as_deref(),
+                    Some("numpy_fallback"),
+                    "{} numpy candidates missing",
+                    fixture.id
+                );
+                *scores
+                    .entry((
+                        window.key.to_ascii_uppercase(),
+                        window.scale.to_ascii_lowercase(),
+                    ))
+                    .or_insert(0.0) += window.strength;
                 continue;
             };
-            assert_eq!(candidates.len(),24,"{} must score every key",fixture.id);
-            assert!(candidates.iter().all(|c|c.score.is_finite() && (0.0..=1.0).contains(&c.score)));
-            assert!(candidates.windows(2).all(|c|c[0].score>=c[1].score));
-            let distinct: std::collections::HashSet<_>=candidates.iter().map(|c|(&c.key,&c.scale)).collect();
-            assert_eq!(distinct.len(),24);
-            let top=&candidates[0];
-            assert_eq!((&window.key,&window.scale),(&top.key,&top.scale));
-            assert!((window.strength-top.score).abs()<1e-5);
-            let margin=(top.score-candidates[1].score)/top.score.max(1e-9);
-            let actual_margin=window.first_to_second_relative_strength.expect("candidate scores include their normalized margin");
-            assert!((actual_margin-margin).abs()<1e-5);
+            assert_eq!(candidates.len(), 24, "{} must score every key", fixture.id);
+            assert!(candidates
+                .iter()
+                .all(|c| c.score.is_finite() && (0.0..=1.0).contains(&c.score)));
+            assert!(candidates.windows(2).all(|c| c[0].score >= c[1].score));
+            let distinct: std::collections::HashSet<_> =
+                candidates.iter().map(|c| (&c.key, &c.scale)).collect();
+            assert_eq!(distinct.len(), 24);
+            let top = &candidates[0];
+            assert_eq!((&window.key, &window.scale), (&top.key, &top.scale));
+            assert!((window.strength - top.score).abs() < 1e-5);
+            let margin = (top.score - candidates[1].score) / top.score.max(1e-9);
+            let actual_margin = window
+                .first_to_second_relative_strength
+                .expect("candidate scores include their normalized margin");
+            assert!((actual_margin - margin).abs() < 1e-5);
             for candidate in candidates {
-                let key=(candidate.key.to_ascii_uppercase(),candidate.scale.to_ascii_lowercase());
-                *scores.entry(key).or_insert(0.0)+=candidate.score;
+                let key = (
+                    candidate.key.to_ascii_uppercase(),
+                    candidate.scale.to_ascii_lowercase(),
+                );
+                *scores.entry(key).or_insert(0.0) += candidate.score;
             }
         }
         // The generator deliberately cycles all twelve roots here. Its old
         // fixed-A-minor assertion was not a legitimate tonal reference label.
-        if fixture.r#class=="contradiction_prone" {
-            assert!(winners.len()>=3,"{} must retain competing tonic evidence",fixture.id);
+        if fixture.r#class == "contradiction_prone" {
+            assert!(
+                winners.len() >= 3,
+                "{} must retain competing tonic evidence",
+                fixture.id
+            );
             continue;
         }
         let mut ranked: Vec<_> = scores.into_iter().collect();
@@ -260,12 +282,10 @@ fn fixture_regression_with_real_sidecar() {
                 fixture.id
             );
         }
-        let alternative_match = fixture.acceptable_alternatives.iter().any(|alt| {
-            (
-                alt.key.to_ascii_uppercase(),
-                alt.scale.to_ascii_lowercase(),
-            ) == top_key
-        });
+        let alternative_match = fixture
+            .acceptable_alternatives
+            .iter()
+            .any(|alt| (alt.key.to_ascii_uppercase(), alt.scale.to_ascii_lowercase()) == top_key);
 
         assert!(
             top_key == expected_primary || alternative_match,

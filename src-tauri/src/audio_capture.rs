@@ -28,19 +28,30 @@ const RECENT_SILENCE_BLOCK_WINDOW: Duration = Duration::from_secs(14);
 /// monitor instead and never picks a PID. Kept compiled (and unit-tested) on every platform so
 /// the selection rule cannot rot while nobody is building for Windows.
 #[cfg_attr(not(windows), allow(dead_code))]
-fn choose_capture_pid(source: &str, expected_exe: Option<&str>, active: &[(u32, String)], named: &[u32]) -> Option<u32> {
+fn choose_capture_pid(
+    source: &str,
+    expected_exe: Option<&str>,
+    active: &[(u32, String)],
+    named: &[u32],
+) -> Option<u32> {
     let source = source.to_ascii_lowercase();
-    let matching: Vec<u32> = active.iter().filter_map(|(pid, name)| {
-        let matches = if let Some(exe) = expected_exe {
-            name.eq_ignore_ascii_case(exe)
-        } else {
-            name.eq_ignore_ascii_case(&source)
-        };
-        matches.then_some(*pid)
-    }).collect();
+    let matching: Vec<u32> = active
+        .iter()
+        .filter_map(|(pid, name)| {
+            let matches = if let Some(exe) = expected_exe {
+                name.eq_ignore_ascii_case(exe)
+            } else {
+                name.eq_ignore_ascii_case(&source)
+            };
+            matches.then_some(*pid)
+        })
+        .collect();
     match matching.as_slice() {
         [pid] => Some(*pid),
-        [] => match named { [pid] => Some(*pid), _ => None },
+        [] => match named {
+            [pid] => Some(*pid),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -50,16 +61,25 @@ mod selection_tests {
     #[test]
     fn prefers_the_audio_producing_spotify_process_over_a_helper() {
         let active = vec![(20, "Spotify.exe".to_string())];
-        assert_eq!(super::choose_capture_pid("spotify", Some("Spotify.exe"), &active, &[10, 20]), Some(20));
+        assert_eq!(
+            super::choose_capture_pid("spotify", Some("Spotify.exe"), &active, &[10, 20]),
+            Some(20)
+        );
     }
     #[test]
     fn unrelated_audio_and_ambiguous_helpers_use_endpoint_fallback() {
         let active = vec![(30, "chrome.exe".to_string())];
-        assert_eq!(super::choose_capture_pid("spotify", Some("Spotify.exe"), &active, &[10, 20]), None);
+        assert_eq!(
+            super::choose_capture_pid("spotify", Some("Spotify.exe"), &active, &[10, 20]),
+            None
+        );
     }
     #[test]
     fn a_single_known_player_process_is_a_valid_fallback() {
-        assert_eq!(super::choose_capture_pid("vlc", Some("vlc.exe"), &[], &[40]), Some(40));
+        assert_eq!(
+            super::choose_capture_pid("vlc", Some("vlc.exe"), &[], &[40]),
+            Some(40)
+        );
     }
 }
 
@@ -269,9 +289,11 @@ mod win {
     fn find_process_ids_by_exe(exe_name: &str) -> Vec<u32> {
         let refreshes = RefreshKind::nothing().with_processes(ProcessRefreshKind::everything());
         let system = System::new_with_specifics(refreshes);
-        system.processes_by_name(OsStr::new(exe_name))
+        system
+            .processes_by_name(OsStr::new(exe_name))
             .filter(|p| p.name().to_string_lossy().eq_ignore_ascii_case(exe_name))
-            .map(|p| p.pid().as_u32()).collect()
+            .map(|p| p.pid().as_u32())
+            .collect()
     }
 
     fn process_basename_from_pid(pid: u32) -> Option<String> {
@@ -295,7 +317,9 @@ mod win {
         }
         struct ComSession;
         impl Drop for ComSession {
-            fn drop(&mut self) { wasapi::deinitialize(); }
+            fn drop(&mut self) {
+                wasapi::deinitialize();
+            }
         }
         let _com_session = ComSession;
         let enumerator = match DeviceEnumerator::new() {
@@ -368,7 +392,10 @@ mod win {
             .into_iter()
             .filter_map(|pid| process_basename_from_pid(pid).map(|name| (pid, name)))
             .collect();
-        let named = exe.as_deref().map(find_process_ids_by_exe).unwrap_or_default();
+        let named = exe
+            .as_deref()
+            .map(find_process_ids_by_exe)
+            .unwrap_or_default();
         let selected = super::choose_capture_pid(source_app, exe.as_deref(), &active, &named);
         log::debug!(
             "audio_capture: selected audio PID={selected:?} for source={source_app}; matching processes={}",
@@ -1288,7 +1315,9 @@ impl AudioCaptureManager {
             self.grid_origin_samples = self.accepted_samples;
         }
 
-        self.accepted_samples = self.accepted_samples.saturating_add(normalized.len() as u64);
+        self.accepted_samples = self
+            .accepted_samples
+            .saturating_add(normalized.len() as u64);
         for &sample in &normalized {
             if self.mono_ring.len() >= self.max_samples {
                 let _ = self.mono_ring.pop_front();
@@ -1323,13 +1352,23 @@ mod pause_tests {
         let origin = paused.grid_origin();
         paused.pause_capture("playback_paused_or_stopped");
         assert_eq!(paused.available_buffer_seconds(), 20.0);
-        assert_eq!(paused.grid_origin(), origin, "the hop grid must carry on where it stopped");
+        assert_eq!(
+            paused.grid_origin(),
+            origin,
+            "the hop grid must carry on where it stopped"
+        );
         assert_eq!(paused.snapshot().capture_mode, CaptureMode::Unavailable);
-        assert!(!paused.snapshot().has_live_capture, "nothing is analysed while paused");
+        assert!(
+            !paused.snapshot().has_live_capture,
+            "nothing is analysed while paused"
+        );
         // Resuming appends to the same ring and keeps counting on the same lifetime timeline.
         seconds_of_audio(&mut paused, 4);
         assert_eq!(paused.available_buffer_seconds(), 24.0);
-        assert_eq!(paused.accepted_samples(), ANALYZER_SAMPLE_RATE_HZ as u64 * 24);
+        assert_eq!(
+            paused.accepted_samples(),
+            ANALYZER_SAMPLE_RATE_HZ as u64 * 24
+        );
 
         let mut stopped = AudioCaptureManager::new();
         seconds_of_audio(&mut stopped, 20);

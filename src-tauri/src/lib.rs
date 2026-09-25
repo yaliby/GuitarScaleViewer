@@ -12,6 +12,7 @@ pub mod key_detection;
 pub mod key_engine;
 pub mod key_reranker;
 mod media_session;
+mod playalong;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -73,13 +74,16 @@ pub fn run() {
             key_engine::get_detected_key,
             key_engine::reset_detected_key,
             key_engine::set_cloud_resolution,
-            key_engine::get_cloud_resolution
+            key_engine::get_cloud_resolution,
+            playalong::resolve_playalong,
+            playalong::follow_playalong
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|_app, event| {
             if matches!(event, tauri::RunEvent::Exit) {
                 key_engine::shutdown_key_engine();
+                playalong::shutdown_playalong();
             }
         });
 }

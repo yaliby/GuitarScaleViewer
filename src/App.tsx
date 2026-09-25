@@ -22,6 +22,7 @@ import {
   Menu,
   RotateCcw,
   Save,
+  ScrollText,
   Trash2,
   X,
 } from "lucide-react";
@@ -35,6 +36,7 @@ import { Fretboard, musicalLabel } from "./components/Fretboard";
 import { ListeningPanel } from "./components/ListeningPanel";
 import { StudioScreens, type StudioView } from "./components/StudioScreens";
 import LiveJamScreen from "./LiveJamScreen";
+import PlayAlongScreen from "./PlayAlongScreen";
 import { Transport } from "./components/Transport";
 import { useCloudKeyResolution } from "./hooks/useCloudKeyResolution";
 import { useDetectedKey } from "./hooks/useDetectedKey";
@@ -946,7 +948,7 @@ export default function App() {
     />
   );
   /* Live Jam is the whole window: the neck needs it, so the nav folds into the hamburger. */
-  const immersive = view === "jam";
+  const immersive = view === "jam" || view === "playalong";
 
   return (
     <MotionConfig reducedMotion="user">
@@ -975,6 +977,15 @@ export default function App() {
             >
               <Headphones size={17} />
               <span>Live Jam</span>
+              <i className="nav-dot" />
+            </button>
+            <button
+              className={`nav-item ${view === "playalong" ? "active" : ""}`}
+              aria-current={view === "playalong" ? "page" : undefined}
+              onClick={() => changeView("playalong")}
+            >
+              <ScrollText size={17} />
+              <span>Play Along</span>
               <i className="nav-dot" />
             </button>
             <button
@@ -1139,6 +1150,16 @@ export default function App() {
                 onToggleMenu={() => setSidebarOpen((open) => !open)}
               />
             }
+            playalong={
+              <PlayAlongScreen
+                root={session.root}
+                scaleType={session.scaleType}
+                fused={fused}
+                menuOpen={sidebarOpen}
+                onToggleMenu={() => setSidebarOpen((open) => !open)}
+                onOpenJam={() => changeView("jam")}
+              />
+            }
             session={session}
             notes={notes}
             playing={audio.playing}
@@ -1167,7 +1188,7 @@ export default function App() {
             onAudition={audition}
             onNavigate={changeView}
           />
-          {view !== "jam" && (
+          {view !== "jam" && view !== "playalong" && (
             <Transport
               session={session}
               onChange={updateSession}

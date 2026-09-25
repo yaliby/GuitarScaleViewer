@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-resolve-playalong"
+description = "Allows resolving synced lyrics and a chord chart for the current now-playing track."
+commands.allow = ["resolve_playalong"]

@@ -88,7 +88,10 @@ pub struct CalibrationInputs {
 }
 
 fn features(inputs: &CalibrationInputs) -> [f32; FEATURE_COUNT] {
-    let log_span = inputs.span_seconds.clamp(1.0, SPAN_FEATURE_MAX_SECONDS).ln();
+    let log_span = inputs
+        .span_seconds
+        .clamp(1.0, SPAN_FEATURE_MAX_SECONDS)
+        .ln();
     let run = inputs.run.min(RUN_CAP) as f32;
     [
         inputs.note_set_margin,
@@ -191,8 +194,7 @@ pub fn calibration_inputs(
     let newest = results.iter().max_by_key(|w| w.window_end_ms)?;
     let margin = newest.note_set_margin.filter(|m| m.is_finite())?;
     let top_score = newest.top_score.filter(|s| s.is_finite())?;
-    let span_seconds =
-        newest.window_end_ms.saturating_sub(newest.window_start_ms) as f32 / 1000.0;
+    let span_seconds = newest.window_end_ms.saturating_sub(newest.window_start_ms) as f32 / 1000.0;
     let run = earlier_newest_first(results, newest)
         .take_while(|w| same_note_set(&w.key, &w.scale, &newest.key, &newest.scale))
         .count();
@@ -245,7 +247,10 @@ mod tests {
                 span_seconds: span,
                 run,
             });
-            assert!((p - expected).abs() < 5e-4, "{margin} {top} {span} {run}: {p} vs {expected}");
+            assert!(
+                (p - expected).abs() < 5e-4,
+                "{margin} {top} {span} {run}: {p} vs {expected}"
+            );
         }
     }
 

@@ -91,10 +91,14 @@ struct ManagedChild(Child);
 
 impl std::ops::Deref for ManagedChild {
     type Target = Child;
-    fn deref(&self) -> &Child { &self.0 }
+    fn deref(&self) -> &Child {
+        &self.0
+    }
 }
 impl std::ops::DerefMut for ManagedChild {
-    fn deref_mut(&mut self) -> &mut Child { &mut self.0 }
+    fn deref_mut(&mut self) -> &mut Child {
+        &mut self.0
+    }
 }
 impl Drop for ManagedChild {
     fn drop(&mut self) {
@@ -105,19 +109,25 @@ impl Drop for ManagedChild {
 
 struct TempWav(PathBuf);
 impl Drop for TempWav {
-    fn drop(&mut self) { let _ = std::fs::remove_file(&self.0); }
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
 }
 
 /// Stops the sidecar flashing a console window on Windows. A no-op everywhere else, which is why
 /// the parameter is unused off-Windows rather than the signature being conditional.
 fn hide_console(#[cfg_attr(not(windows), allow(unused_variables))] command: &mut Command) {
-    #[cfg(windows)] {
+    #[cfg(windows)]
+    {
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x08000000); // CREATE_NO_WINDOW
     }
 }
 
-fn read_sidecar_line(lines: &mpsc::Receiver<Result<String, String>>, timeout: Duration) -> Result<String, String> {
+fn read_sidecar_line(
+    lines: &mpsc::Receiver<Result<String, String>>,
+    timeout: Duration,
+) -> Result<String, String> {
     lines.recv_timeout(timeout).map_err(|error| match error {
         mpsc::RecvTimeoutError::Timeout => "sidecar response deadline exceeded".to_string(),
         mpsc::RecvTimeoutError::Disconnected => "sidecar closed output stream".to_string(),
@@ -128,7 +138,12 @@ fn stdout_lines(stdout: ChildStdout) -> mpsc::Receiver<Result<String, String>> {
     let (sender, receiver) = mpsc::sync_channel(1);
     std::thread::spawn(move || {
         for line in BufReader::new(stdout).lines() {
-            if sender.send(line.map_err(|error| format!("read sidecar: {error}"))).is_err() { break; }
+            if sender
+                .send(line.map_err(|error| format!("read sidecar: {error}")))
+                .is_err()
+            {
+                break;
+            }
         }
     });
     receiver
@@ -272,9 +287,11 @@ impl SidecarKeyDetector {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         hide_console(&mut command);
-        let mut child = ManagedChild(command
-            .spawn()
-            .map_err(|e| format!("spawn sidecar ({}): {e}", self.launch.descriptor))?);
+        let mut child = ManagedChild(
+            command
+                .spawn()
+                .map_err(|e| format!("spawn sidecar ({}): {e}", self.launch.descriptor))?,
+        );
         let stdin = child
             .stdin
             .take()
@@ -644,10 +661,12 @@ impl KeyDetector for LibKeyFinderDetector {
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
         hide_console(&mut cmd);
         let _temp_wav = TempWav(wav_path.clone());
-        let mut child = ManagedChild(
-            cmd.spawn()
-                .map_err(|e| format!("run libkeyfinder analyzer ({}): {e}", self.launch.descriptor))?,
-        );
+        let mut child = ManagedChild(cmd.spawn().map_err(|e| {
+            format!(
+                "run libkeyfinder analyzer ({}): {e}",
+                self.launch.descriptor
+            )
+        })?);
         if let Some(stderr) = child.stderr.take() {
             SidecarKeyDetector::spawn_stderr_pump(stderr);
         }
@@ -808,7 +827,10 @@ pub fn analysis_from_cli_stdout(stdout: &str, span_ms: u64) -> Result<AnalysisOu
             .map(|best_other| score - best_other)
             .filter(|margin| margin.is_finite())
     });
-    let top_score = shortlist.first().map(|entry| entry.score).filter(|s| s.is_finite());
+    let top_score = shortlist
+        .first()
+        .map(|entry| entry.score)
+        .filter(|s| s.is_finite());
 
     let display = format!("{} {}", key, scale);
     // The CLI now measures how well the chroma fits the key it named. Older builds do not,
@@ -914,7 +936,13 @@ mod tests {
             .ok()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| if cfg!(windows) { "py".into() } else { "python3".into() })
+            .unwrap_or_else(|| {
+                if cfg!(windows) {
+                    "py".into()
+                } else {
+                    "python3".into()
+                }
+            })
     }
 
     /// Needs numpy (or essentia) installed for the python sidecar to report a backend at all.
@@ -924,8 +952,10 @@ mod tests {
     #[test]
     #[ignore = "requires the python analyzer stack (numpy); run with --ignored"]
     fn numpy_worker_is_healthy_and_can_analyze_silence() {
-        let detector = SidecarKeyDetector::from_python_script(&python(),
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("sidecars/key_analyzer/key_analyzer.py"));
+        let detector = SidecarKeyDetector::from_python_script(
+            &python(),
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("sidecars/key_analyzer/key_analyzer.py"),
+        );
         assert!(detector.health().healthy, "{:?}", detector.health());
         let output = detector.analyze(&vec![0.0; 8000 * 4], 8000, 4, 2).unwrap();
         assert!(output.windows.is_empty());
@@ -941,7 +971,9 @@ mod tests {
 
     #[test]
     fn sidecar_startup_has_a_deadline() {
-        let detector = controlled_worker("import time; time.sleep(2); print('{\"ready\":true,\"numpyAvailable\":true}')");
+        let detector = controlled_worker(
+            "import time; time.sleep(2); print('{\"ready\":true,\"numpyAvailable\":true}')",
+        );
         let start = Instant::now();
         let result = detector.spawn_worker();
         assert!(result.is_err(), "delayed ready must time out");
@@ -963,7 +995,10 @@ mod tests {
     #[test]
     fn libkeyfinder_cli_has_a_deadline() {
         let mut detector = LibKeyFinderDetector::from_executable(PathBuf::from(python()));
-        detector.launch.args_prefix = vec!["-c".into(), "import time; time.sleep(2); print('{\"key\":\"C\",\"scale\":\"major\"}')".into()];
+        detector.launch.args_prefix = vec![
+            "-c".into(),
+            "import time; time.sleep(2); print('{\"key\":\"C\",\"scale\":\"major\"}')".into(),
+        ];
         detector.launch.response_timeout = Duration::from_millis(100);
         let start = Instant::now();
         assert!(detector.analyze(&[0.0; 20], 8000, 1, 1).is_err());
@@ -973,9 +1008,11 @@ mod tests {
     #[test]
     fn libkeyfinder_preserves_flat_accidentals() {
         let mut detector = LibKeyFinderDetector::from_executable(PathBuf::from(python()));
-        detector.launch.args_prefix = vec!["-c".into(), "print('{\"key\":\"Bb\",\"scale\":\"major\"}')".into()];
+        detector.launch.args_prefix = vec![
+            "-c".into(),
+            "print('{\"key\":\"Bb\",\"scale\":\"major\"}')".into(),
+        ];
         let result = detector.analyze(&[0.0; 20], 8000, 1, 1).unwrap();
         assert_eq!(result.windows[0].key, "Bb");
     }
 }
-

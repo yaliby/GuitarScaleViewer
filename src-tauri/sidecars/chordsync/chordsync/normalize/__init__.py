@@ -1,0 +1,2 @@
+"""Metadata normalization subsystem."""
+
