@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
+import { chordsyncPackageDir, resolveChordsyncPython } from './scripts/chordsyncPython';
 
 /**
  * Kept in step with the webview's devUrl by dev.sh, which picks a free port and passes the
@@ -14,19 +15,18 @@ const CHORDSYNC_PORT = Number(process.env.CHORDSYNC_HTTP_PORT ?? 18766);
 
 function chordsyncCheckout(root: string): string {
   const sibling = path.resolve(root, '../ChordSync');
-  if (existsSync(path.join(sibling, 'chordsync', '__init__.py'))) {
-    return sibling;
-  }
-  return path.join(root, 'src-tauri/sidecars/chordsync');
+  return chordsyncPackageDir(root, existsSync(path.join(sibling, 'chordsync', '__init__.py')));
 }
 
 function chordsyncPython(root: string): string {
-  const candidates = [
-    process.env.CHORDSYNC_PYTHON,
-    path.join(chordsyncCheckout(root), '.venv/bin/python'),
-    path.join(root, 'src-tauri/sidecars/chordsync/.venv/bin/python'),
-  ].filter((value): value is string => Boolean(value));
-  return candidates.find((candidate) => existsSync(candidate)) ?? 'python3';
+  const sibling = path.resolve(root, '../ChordSync');
+  return resolveChordsyncPython({
+    root,
+    configured: process.env.CHORDSYNC_PYTHON,
+    platform: process.platform,
+    exists: existsSync,
+    siblingHasPackage: existsSync(path.join(sibling, 'chordsync', '__init__.py')),
+  });
 }
 
 /** Runs ChordSync's own resolver (LRCLIB + Tab4U/UG) next to Vite. */

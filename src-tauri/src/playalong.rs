@@ -101,24 +101,34 @@ fn read_line(
     })?
 }
 
-pub(crate) fn python_command() -> String {
+fn configured_chordsync_python() -> Option<String> {
     std::env::var("CHORDSYNC_PYTHON")
         .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .or_else(|| {
-            std::env::var("KEY_ANALYZER_PYTHON")
-                .ok()
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-        })
-        .unwrap_or_else(|| {
-            if cfg!(windows) {
-                "py".to_string()
-            } else {
-                "python3".to_string()
-            }
-        })
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+/// Program plus leading launcher args (`py -3` on Windows).
+///
+/// `CHORDSYNC_PYTHON` is the interpreter `dev.ps1` selects. Otherwise the sidecar
+/// `.venv` (Windows `Scripts/python.exe` or Unix `bin/python`) is used. The key
+/// analyzer environment is not a fallback: it never installs ChordSync's
+/// `requirements.txt`, so Play Along dies with `No module named 'rapidfuzz'`.
+pub(crate) fn chordsync_invocation(script: &Path) -> (String, Vec<String>) {
+    let program = if let Some(configured) = configured_chordsync_python() {
+        configured
+    } else if let Some(venv) = venv_python(script) {
+        venv.to_string_lossy().into_owned()
+    } else if cfg!(windows) {
+        "py".to_string()
+    } else {
+        "python3".to_string()
+    };
+    let mut args = Vec::new();
+    if program.eq_ignore_ascii_case("py") {
+        args.push("-3".to_string());
+    }
+    (program, args)
 }
 
 fn search_roots() -> Vec<PathBuf> {
@@ -206,13 +216,7 @@ pub(crate) fn venv_python(script: &Path) -> Option<PathBuf> {
 fn spawn_worker() -> Result<SidecarWorker, String> {
     let script =
         sidecar_script().ok_or_else(|| "chordsync sidecar script not found".to_string())?;
-    let mut program = python_command();
-    let mut args: Vec<String> = Vec::new();
-    if let Some(venv) = venv_python(&script) {
-        program = venv.to_string_lossy().to_string();
-    } else if program.eq_ignore_ascii_case("py") {
-        args.push("-3".to_string());
-    }
+    let (program, mut args) = chordsync_invocation(&script);
     args.push(script.to_string_lossy().to_string());
     args.push("--serve".to_string());
 

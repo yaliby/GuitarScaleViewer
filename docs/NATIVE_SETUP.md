@@ -13,6 +13,8 @@ From the project directory:
 
 The setup script uses `.tools/cargo`, `.tools/rustup` and `.tools/analyzer-venv`; it does not modify the global PATH or install WSL. Install Microsoft's C++ build tools separately if absent. The first Cargo build downloads its dependencies and may take several minutes.
 
+Play Along and song memory use a separate environment at `src-tauri/sidecars/chordsync/.venv`. `dev.ps1` creates it (or `./setup-native.ps1 -ChordSyncOnly`) and sets `CHORDSYNC_PYTHON` to `Scripts\python.exe`. That install includes `rapidfuzz` from `src-tauri/sidecars/chordsync/requirements.txt`. The analyzer venv does not, and pointing ChordSync at it fails at startup.
+
 Keep the Tauri npm API/CLI and Rust runtime in the same 2.10 minor-version family. Their manifest ranges are constrained to this family so an unrelated dependency refresh does not break desktop packaging.
 
 The analyzer is packaged as a PyInstaller directory in `src-tauri/sidecars/key_analyzer/dist/key_analyzer`. Tauri includes this directory under `analyzer` in its resource directory. Discovery first honors `KEY_ANALYZER_SIDECAR`, then uses Tauri's resource directory, followed by development paths. The installed application does not depend on the working directory or a developer's Python/WSL paths.

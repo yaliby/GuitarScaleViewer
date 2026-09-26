@@ -13,7 +13,7 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 
 use crate::playalong::{
-    chordsync_package_root, hide_console, python_command, sidecar_script, venv_python,
+    chordsync_invocation, chordsync_package_root, hide_console, sidecar_script,
 };
 
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(120);
@@ -47,13 +47,7 @@ fn capture_script() -> Option<PathBuf> {
 
 fn capture_command(flag: &str, body: &Value) -> Result<Command, String> {
     let script = capture_script().ok_or_else(|| "track capture script not found".to_string())?;
-    let mut program = python_command();
-    let mut args: Vec<String> = Vec::new();
-    if let Some(venv) = venv_python(&script) {
-        program = venv.to_string_lossy().to_string();
-    } else if program.eq_ignore_ascii_case("py") {
-        args.push("-3".to_string());
-    }
+    let (program, mut args) = chordsync_invocation(&script);
     args.push(script.to_string_lossy().to_string());
     args.push(flag.to_string());
     args.push(serde_json::to_string(body).map_err(|error| error.to_string())?);

@@ -63,6 +63,24 @@ def bind_chordsync() -> Path:
 
 CHORD_ROOT = bind_chordsync()
 
+
+def require_chordsync_deps() -> None:
+    """Fail before the package import so a missing Windows venv is obvious."""
+    try:
+        import rapidfuzz  # noqa: F401
+    except ModuleNotFoundError:
+        sys.stderr.write(
+            "ChordSync is missing rapidfuzz. On Windows, run setup-native.ps1 "
+            "or npm.cmd run desktop. That creates "
+            "src-tauri/sidecars/chordsync/.venv, installs requirements.txt, "
+            "and points CHORDSYNC_PYTHON at its python.exe. "
+            "The key-analyzer environment does not include these packages.\n"
+        )
+        raise SystemExit(1)
+
+
+require_chordsync_deps()
+
 from follow_session import FollowSession, playalong_track_key  # noqa: E402  — after CHORD_ROOT is on sys.path
 
 _RESOLVE_GEN = 0

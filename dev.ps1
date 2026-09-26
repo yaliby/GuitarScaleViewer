@@ -10,6 +10,14 @@ if (-not (Test-Path $analyzer) -or -not (Get-Command cargo -ErrorAction Silently
 } elseif ($Build) {
     # Always include current analyzer sources in a release package.
     & (Join-Path $PSScriptRoot 'setup-native.ps1') -SkipRust
+} else {
+    # Analyzer setup does not install ChordSync. Play Along and song memory need rapidfuzz.
+    & (Join-Path $PSScriptRoot 'setup-native.ps1') -ChordSyncOnly
+}
+if ($LASTEXITCODE) { throw 'Native setup failed.' }
+$env:CHORDSYNC_PYTHON = Join-Path $PSScriptRoot 'src-tauri/sidecars/chordsync/.venv/Scripts/python.exe'
+if (-not (Test-Path $env:CHORDSYNC_PYTHON)) {
+    throw "ChordSync Python is missing at $env:CHORDSYNC_PYTHON"
 }
 if (-not (Test-Path 'node_modules')) {
     npm.cmd ci --no-audit --no-fund

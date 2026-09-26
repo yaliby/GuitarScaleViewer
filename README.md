@@ -167,7 +167,7 @@ GSMTC/WASAPI path on Windows.
 | `KEY_ANALYZER_AB` | Run two backends side by side and emit `detected-key-ab-update` | unset |
 | `ALLOW_DEGRADED_ANALYZER` | Let `dev.sh`/`dev.ps1` start without an analyzer backend | `0` |
 | `GSV_LOG_DIR` | Where the Rust side writes logs | `logs/` |
-| `CHORDSYNC_PYTHON` | Interpreter for the Play Along sidecar | sibling ChordSync `.venv`, else sidecar `.venv`, else `python3` |
+| `CHORDSYNC_PYTHON` | Interpreter for the Play Along sidecar | Windows: `src-tauri/sidecars/chordsync/.venv/Scripts/python.exe`, set by `dev.ps1`. Elsewhere: sibling ChordSync `.venv`, else that same sidecar `.venv`, else `python3` |
 | `CHORDSYNC_ROOT` | Checkout that contains the live `chordsync/` package | sibling `../ChordSync`, else the vendored copy |
 | `CHORDSYNC_SIDECAR` | Explicit path to `chordsync_sidecar.py` | auto-discovered |
 
@@ -186,6 +186,12 @@ and an unreadable row is skipped instead of putting a broken root on the neck.
 - **`npm` is blocked by PowerShell policy:** use `npm.cmd`, as in the commands above.
 - **`python` is not found or opens the Microsoft Store:** install Python 3.13,
   ensure it is on PATH, and reopen PowerShell before retrying.
+- **Play Along or song memory fails with `No module named 'rapidfuzz'`, or Vite
+  says the Python command is unavailable:** the key-analyzer environment does not
+  contain ChordSync. `npm.cmd run desktop` creates
+  `src-tauri/sidecars/chordsync/.venv`, installs `requirements.txt` (including
+  rapidfuzz), and points both Vite and Tauri at that `python.exe`. The first
+  launch after this fix downloads those packages.
 - **`link.exe` or Windows SDK errors:** install the Visual Studio C++ workload
   and Windows SDK, then reopen PowerShell.
 - **Audio detection is unavailable in the browser:** launch with

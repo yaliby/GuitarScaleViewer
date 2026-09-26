@@ -44,4 +44,13 @@ python3 -m venv src-tauri/sidecars/chordsync/.venv
 src-tauri/sidecars/chordsync/.venv/bin/pip install -r src-tauri/sidecars/chordsync/requirements.txt
 ```
 
+Windows (`dev.ps1` does this and exports `CHORDSYNC_PYTHON`):
+
+```powershell
+./setup-native.ps1 -ChordSyncOnly
+# src-tauri/sidecars/chordsync/.venv/Scripts/python.exe
+```
+
+That environment is not the key-analyzer venv. ChordSync needs `rapidfuzz` from `requirements.txt`.
+
 Song capture also needs **FFmpeg** on PATH and **yt-dlp** (pulled in by that requirements file). Audio files land in `~/.local/share/fretboard-studio/captures` (or `$GSV_CAPTURE_DIR`).
