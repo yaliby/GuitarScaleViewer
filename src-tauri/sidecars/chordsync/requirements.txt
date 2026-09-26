@@ -6,3 +6,4 @@ lxml>=5.2
 rapidfuzz>=3.9
 numpy>=1.24
 structlog>=24.1
+yt-dlp>=2024.8.6

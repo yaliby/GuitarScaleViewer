@@ -3,6 +3,8 @@ import { Headphones, Menu, X } from "lucide-react";
 import type { FusedKey } from "./services/keyFusion";
 import { useMediaSession } from "./hooks/useMediaSession";
 import { usePlayAlong } from "./hooks/usePlayAlong";
+import { useTrackCapture } from "./hooks/useTrackCapture";
+import { TrackCaptureBar } from "./components/TrackCaptureBar";
 import { SCALE_TYPE_LABELS, type ScaleType } from "./scaleDataProvider";
 import { clockLabel } from "./ui/statusLabels";
 import { Led } from "./ui/gear";
@@ -311,6 +313,7 @@ export default function PlayAlongScreen({
   const media = useMediaSession();
   const [devOpen, setDevOpen] = useState(false);
   const playalong = usePlayAlong(media);
+  const capture = useTrackCapture(media);
   const split = useSplit();
   const title =
     media.title || playalong.title || playalong.payload?.track?.title;
@@ -414,6 +417,7 @@ export default function PlayAlongScreen({
           </span>
         </p>
       </form>
+      <TrackCaptureBar capture={capture} compact />
 
       <div
         className={`playalong-stage${split.vertical ? " is-vertical" : ""}${devOpen ? " has-dev" : ""}`}

@@ -66,4 +66,12 @@ test("workspace navigation opens distinct screens and preserves the musical cont
     page.getByRole("region", { name: "Play Along workspace" }),
   ).toBeVisible();
   await expect(page.getByTestId("playalong-key")).toContainText("D");
+  await page.getByRole("button", { name: "Open navigation menu" }).click();
+  await page.getByRole("button", { name: "Songs", exact: true }).click();
+  await expect(
+    page.getByRole("region", { name: "Songs workspace" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: /songs this app has saved/i }),
+  ).toBeVisible();
 });

@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-recognition-run"
+description = "Allows running Harmonia whole-song recognition on captured audio PCM."
+commands.allow = ["recognition_run"]

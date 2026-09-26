@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import type { DetectedKeyState } from './useDetectedKey';
 import type { MediaSessionUiState } from './useMediaSession';
 import { lookupSongKey, normalizeLookupKey, type KeyLookupSource } from '../services/songKeyApi';
+import { getSongMemoryRevision, readConfirmedScale, subscribeSongMemory } from '../services/songMemory';
 import { buildLookupInputs } from '../services/trackIdentity';
 import { trace } from '../services/debugLog';
 
@@ -24,6 +25,22 @@ type CloudHit = {
   source: KeyLookupSource;
   sourceLabel: string;
 };
+
+type CloudCache = {
+  trackIdentity: string | null;
+  cloudState: CloudState;
+  resolutionState: ResolutionState;
+  cloudHit: CloudHit | null;
+};
+
+let cloudUsers = 0;
+let cloudCache: CloudCache | null = null;
+
+function cachedCloud(trackIdentity: string | null): CloudCache | null {
+  if (cloudUsers === 0 || !cloudCache) return null;
+  if (cloudCache.trackIdentity !== trackIdentity) return null;
+  return cloudCache;
+}
 
 type CloudControlWire = {
   track_identity: string | null;
@@ -72,25 +89,42 @@ async function syncCloudControl(control: CloudControlWire): Promise<void> {
 /**
  * Looks the playing track up in the bundled verified library. No network.
  * A miss leaves the local engine as the only remaining leg.
+ * `reportToEngine` is false when another mounted screen owns the Rust control,
+ * so the two listeners cannot overwrite each other.
  */
-export function useCloudKeyResolution(media: MediaSessionUiState, detectedKey: DetectedKeyState) {
-  const [cloudState, setCloudState] = useState<CloudState>('idle');
-  const [resolutionState, setResolutionState] = useState<ResolutionState>('no_session');
-  const [cloudHit, setCloudHit] = useState<CloudHit | null>(null);
-  const activeTrackRef = useRef<string | null>(null);
-
+export function useCloudKeyResolution(
+  media: MediaSessionUiState,
+  detectedKey: DetectedKeyState,
+  reportToEngine = true,
+) {
   const { trackIdentity, title, artist, hasSession, playing, paused } = useMemo(
     () => buildLookupInputs(media),
     [media],
   );
+  const seeded = cachedCloud(trackIdentity);
+  const [cloudState, setCloudState] = useState<CloudState>(seeded?.cloudState ?? 'idle');
+  const [resolutionState, setResolutionState] = useState<ResolutionState>(
+    seeded?.resolutionState ?? 'no_session',
+  );
+  const [cloudHit, setCloudHit] = useState<CloudHit | null>(seeded?.cloudHit ?? null);
+  const activeTrackRef = useRef<string | null>(seeded ? trackIdentity : null);
+  const memoryRevision = useSyncExternalStore(
+    subscribeSongMemory,
+    getSongMemoryRevision,
+    getSongMemoryRevision,
+  );
 
   useEffect(() => {
+    const report = (control: CloudControlWire) => {
+      if (!reportToEngine) return;
+      void syncCloudControl(control);
+    };
     if (!hasSession) {
       activeTrackRef.current = null;
       setCloudState('idle');
       setCloudHit(null);
       setResolutionState('no_session');
-      void syncCloudControl({
+      report({
         track_identity: null,
         state: 'idle',
         key: null,
@@ -119,7 +153,7 @@ export function useCloudKeyResolution(media: MediaSessionUiState, detectedKey: D
       setCloudState('miss');
       setCloudHit(null);
       setResolutionState('cloud_miss_local_detecting');
-      void syncCloudControl({
+      report({
         track_identity: trackIdentity,
         state: 'miss',
         key: null,
@@ -129,55 +163,73 @@ export function useCloudKeyResolution(media: MediaSessionUiState, detectedKey: D
       return;
     }
 
-    const result = lookupSongKey({ title, artist });
-    if (!result.found) {
-      setCloudState('miss');
-      setCloudHit(null);
-      setResolutionState('cloud_miss_local_detecting');
-      void syncCloudControl({
+    let cancelled = false;
+    const applyHit = (hit: CloudHit) => {
+      if (cancelled) return;
+      setCloudState('hit');
+      setCloudHit(hit);
+      setResolutionState('cloud_hit');
+      report({
         track_identity: trackIdentity,
-        state: 'miss',
-        key: null,
-        mode: null,
+        state: 'hit',
+        key: hit.key,
+        mode: hit.mode,
         error: null,
       });
-      return;
-    }
-
-    const parsed = normalizeLookupKey(result.song);
-    if (!parsed) {
-      setCloudState('miss');
-      setCloudHit(null);
-      setResolutionState('cloud_miss_local_detecting');
-      void syncCloudControl({
-        track_identity: trackIdentity,
-        state: 'miss',
-        key: null,
-        mode: null,
-        error: null,
-      });
-      return;
-    }
-
-    const hit: CloudHit = {
-      key: parsed.key,
-      mode: parsed.mode,
-      displayName: `${parsed.key} ${parsed.mode}`,
-      verified: true,
-      source: result.song.source,
-      sourceLabel: result.song.sourceLabel,
     };
-    setCloudState('hit');
-    setCloudHit(hit);
-    setResolutionState('cloud_hit');
-    void syncCloudControl({
-      track_identity: trackIdentity,
-      state: 'hit',
-      key: hit.key,
-      mode: hit.mode,
-      error: null,
-    });
-  }, [artist, hasSession, paused, playing, title, trackIdentity]);
+    const applyMiss = () => {
+      if (cancelled) return;
+      setCloudState('miss');
+      setCloudHit(null);
+      setResolutionState('cloud_miss_local_detecting');
+      report({
+        track_identity: trackIdentity,
+        state: 'miss',
+        key: null,
+        mode: null,
+        error: null,
+      });
+    };
+
+    void (async () => {
+      const remembered = await readConfirmedScale(title, artist);
+      if (cancelled) return;
+      if (remembered) {
+        applyHit({
+          key: remembered.key,
+          mode: remembered.mode,
+          displayName: `${remembered.key} ${remembered.mode}`,
+          verified: true,
+          source: 'remembered',
+          sourceLabel: 'Saved for this song',
+        });
+        return;
+      }
+
+      const result = lookupSongKey({ title, artist });
+      if (!result.found) {
+        applyMiss();
+        return;
+      }
+      const parsed = normalizeLookupKey(result.song);
+      if (!parsed) {
+        applyMiss();
+        return;
+      }
+      applyHit({
+        key: parsed.key,
+        mode: parsed.mode,
+        displayName: `${parsed.key} ${parsed.mode}`,
+        verified: true,
+        source: result.song.source,
+        sourceLabel: result.song.sourceLabel,
+      });
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [artist, hasSession, memoryRevision, paused, playing, reportToEngine, title, trackIdentity]);
 
   useEffect(() => {
     if (!isActiveSession(media)) {
@@ -208,6 +260,19 @@ export function useCloudKeyResolution(media: MediaSessionUiState, detectedKey: D
     paused,
   ]);
 
+  useEffect(() => {
+    cloudUsers += 1;
+    return () => {
+      cloudUsers -= 1;
+      if (cloudUsers === 0) cloudCache = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!reportToEngine || cloudUsers === 0) return;
+    cloudCache = { trackIdentity, cloudState, resolutionState, cloudHit };
+  }, [cloudHit, cloudState, reportToEngine, resolutionState, trackIdentity]);
+
   const source = useMemo<'cloud_verified' | 'local_detected' | 'none'>(() => {
     if (cloudState === 'hit' && cloudHit?.verified) {
       return 'cloud_verified';
@@ -220,13 +285,13 @@ export function useCloudKeyResolution(media: MediaSessionUiState, detectedKey: D
 
   const sourceBadge = useMemo(() => {
     if (source === 'cloud_verified') {
-      return 'Verified library key';
+      return cloudHit?.source === 'remembered' ? 'Saved for this song' : 'Verified library key';
     }
     if (source === 'local_detected') {
       return 'Local audio detection';
     }
     return 'No key yet';
-  }, [source]);
+  }, [cloudHit, source]);
 
   return {
     cloudState,

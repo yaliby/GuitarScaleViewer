@@ -184,4 +184,28 @@ describe("usePlayAlong", () => {
 
     expect(api.follow).not.toHaveBeenCalled();
   });
+
+  it("keeps the resolved song and follow loop after one screen unmounts", async () => {
+    const keepAlive = renderHook(() => usePlayAlong(media()));
+    const screen = renderHook(() => usePlayAlong(media()));
+    await waitFor(() =>
+      expect(screen.result.current.payload?.track?.title).toBe("First song"),
+    );
+    const follows = api.follow.mock.calls.length;
+
+    screen.unmount();
+
+    await waitFor(() =>
+      expect(api.follow.mock.calls.length).toBeGreaterThan(follows),
+    );
+    expect(keepAlive.result.current.payload?.track?.title).toBe("First song");
+
+    api.resolve.mockClear();
+    const again = renderHook(() => usePlayAlong(media()));
+    expect(again.result.current.payload?.track?.title).toBe("First song");
+    expect(api.resolve).not.toHaveBeenCalled();
+
+    again.unmount();
+    keepAlive.unmount();
+  });
 });

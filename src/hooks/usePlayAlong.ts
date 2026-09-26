@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import type { MediaSessionUiState } from "./useMediaSession";
 import { followPlayalong, resolvePlayalong } from "../playalong/resolve";
 import type {
@@ -37,6 +37,21 @@ type FollowTrack = {
   artist: string;
   album: string | null;
   sourceApp: string | null;
+};
+
+type Snapshot = {
+  status: PlayAlongStatus;
+  payload: PlayAlongPayload | null;
+  followMs: number | null;
+  lyricIndex: number | null;
+  chartIndex: number | null;
+  reason: string | null;
+  syncHint: string | null;
+  singingSource: SingingSource;
+  title: string;
+  artist: string;
+  youtube: DevSourcePanel | null;
+  whisper: DevSourcePanel | null;
 };
 
 function trackKey(
@@ -131,239 +146,298 @@ function panelChanged(
   );
 }
 
-/**
- * ChordSync resolve + follow, driven by the same OS media session Live Jam reads
- * (`useMediaSession` → Rust `get_current_media` / `media-session-update`).
- */
-export function usePlayAlong(media: MediaSessionUiState): PlayAlongState {
+function emptySnapshot(): Snapshot {
+  return {
+    status: "idle",
+    payload: null,
+    followMs: null,
+    lyricIndex: null,
+    chartIndex: null,
+    reason: null,
+    syncHint: null,
+    singingSource: "lrc",
+    title: "",
+    artist: "",
+    youtube: null,
+    whisper: null,
+  };
+}
+
+type Listener = (snapshot: Snapshot) => void;
+
+let snapshot: Snapshot = emptySnapshot();
+let activeTrack: FollowTrack | null = null;
+let resolvedKey = "";
+let mediaRef: MediaSessionUiState | null = null;
+let lastMediaKey = "\0unset";
+let seq = 0;
+let epoch = 0;
+let inflight = false;
+let followSerial = 0;
+let timer: number | null = null;
+const subscribers = new Set<Listener>();
+
+function publish(next: Snapshot): void {
+  snapshot = next;
+  subscribers.forEach((listener) => listener(snapshot));
+}
+
+function assign(partial: Partial<Snapshot>): void {
+  let changed = false;
+  const next = { ...snapshot };
+  (Object.keys(partial) as (keyof Snapshot)[]).forEach((key) => {
+    const value = partial[key];
+    if (!Object.is(next[key], value)) {
+      next[key] = value as never;
+      changed = true;
+    }
+  });
+  if (changed) publish(next);
+}
+
+function clearActiveTrack(): void {
+  seq += 1;
+  activeTrack = null;
+  resolvedKey = "";
+  assign({
+    status: "idle",
+    payload: null,
+    reason: null,
+    syncHint: null,
+    singingSource: "lrc",
+    lyricIndex: null,
+    chartIndex: null,
+    followMs: null,
+    youtube: null,
+    whisper: null,
+  });
+}
+
+function run(
+  nextTitle: string,
+  nextArtist: string,
+  mode: FollowTrack["mode"] = "manual",
+): void {
+  const snap = mediaRef;
+  const track = nextTitle.trim();
+  if (!track || !snap) {
+    clearActiveTrack();
+    return;
+  }
+  const cleanArtist = nextArtist.trim();
+  const nextTrack: FollowTrack = {
+    key: trackKey(track, cleanArtist, snap.album, snap.sourceApp),
+    mode,
+    title: track,
+    artist: cleanArtist,
+    album: snap.album,
+    sourceApp: snap.sourceApp,
+  };
+  const token = epoch;
+  const mySeq = (seq += 1);
+  const sameTrack = nextTrack.key === activeTrack?.key;
+  activeTrack = nextTrack;
+  if (!sameTrack) {
+    assign({
+      status: "loading",
+      payload: null,
+      reason: null,
+      syncHint: null,
+      singingSource: "lrc",
+      lyricIndex: null,
+      chartIndex: null,
+      followMs: snap.positionMs,
+      youtube: null,
+      whisper: null,
+    });
+  }
+  void resolvePlayalong({
+    title: track,
+    artist: cleanArtist,
+    album: nextTrack.album,
+    durationMs: snap.durationMs,
+    sourceApp: nextTrack.sourceApp,
+    gen: mySeq,
+  })
+    .then((next) => {
+      if (token !== epoch || mySeq !== seq) return;
+      const key = nextTrack.key;
+      const alreadyResolved = key === resolvedKey;
+      const chartChanged =
+        snapshot.payload?.chart?.sourceUrl !== next.chart?.sourceUrl ||
+        (snapshot.payload?.chartHtml ?? null) !== (next.chartHtml ?? null);
+      resolvedKey = key;
+      assign({
+        payload: next,
+        status: payloadStatus(next.status),
+        reason: next.reason ?? null,
+        lyricIndex: alreadyResolved ? snapshot.lyricIndex : null,
+        chartIndex:
+          alreadyResolved && !chartChanged ? snapshot.chartIndex : null,
+        followMs: snap.positionMs,
+      });
+    })
+    .catch((error: unknown) => {
+      if (token !== epoch || mySeq !== seq) return;
+      assign({
+        status: "error",
+        reason: error instanceof Error ? error.message : String(error),
+      });
+    });
+}
+
+function syncFromMedia(media: MediaSessionUiState): void {
+  mediaRef = media;
   const mediaTitle = media.title?.trim() ?? "";
   const mediaArtist = media.artist?.trim() ?? "";
-  const [title, setTitle] = useState(mediaTitle);
-  const [artist, setArtist] = useState(mediaArtist);
-  const [payload, setPayload] = useState<PlayAlongPayload | null>(null);
-  const [status, setStatus] = useState<PlayAlongStatus>(
-    mediaTitle ? "loading" : "idle",
+  const key = [mediaTitle, mediaArtist, media.album ?? "", media.sourceApp ?? ""].join(
+    "\0",
   );
-  const [reason, setReason] = useState<string | null>(null);
-  const [syncHint, setSyncHint] = useState<string | null>(null);
-  const [singingSource, setSingingSource] = useState<SingingSource>("lrc");
-  const [lyricIndex, setLyricIndex] = useState<number | null>(null);
-  const [chartIndex, setChartIndex] = useState<number | null>(null);
-  const [followMs, setFollowMs] = useState<number | null>(null);
-  const [youtube, setYoutube] = useState<DevSourcePanel | null>(null);
-  const [whisper, setWhisper] = useState<DevSourcePanel | null>(null);
-  const seqRef = useRef(0);
-  const resolvedKeyRef = useRef("");
-  const activeTrackRef = useRef<FollowTrack | null>(
-    mediaTitle
-      ? {
-          key: trackKey(mediaTitle, mediaArtist, media.album, media.sourceApp),
-          mode: "media",
-          title: mediaTitle,
-          artist: mediaArtist,
-          album: media.album,
-          sourceApp: media.sourceApp,
-        }
-      : null,
-  );
-  const mediaRef = useRef(media);
-  const payloadRef = useRef(payload);
-  const titleRef = useRef(title);
-  const artistRef = useRef(artist);
-  mediaRef.current = media;
-  payloadRef.current = payload;
-  titleRef.current = title;
-  artistRef.current = artist;
-
-  const clearActiveTrack = () => {
-    seqRef.current += 1;
-    activeTrackRef.current = null;
-    resolvedKeyRef.current = "";
-    setStatus("idle");
-    setPayload(null);
-    setReason(null);
-    setSyncHint(null);
-    setSingingSource("lrc");
-    setLyricIndex(null);
-    setChartIndex(null);
-    setFollowMs(null);
-    setYoutube(null);
-    setWhisper(null);
-  };
-
-  const run = (
-    nextTitle: string,
-    nextArtist: string,
-    mode: FollowTrack["mode"] = "manual",
-  ) => {
-    const snap = mediaRef.current;
-    const track = nextTitle.trim();
-    if (!track) {
+  if (key === lastMediaKey) return;
+  lastMediaKey = key;
+  if (!mediaTitle) {
+    if (activeTrack?.mode === "media") {
+      assign({ title: "", artist: "" });
       clearActiveTrack();
-      return;
     }
-    const cleanArtist = nextArtist.trim();
-    const nextTrack: FollowTrack = {
-      key: trackKey(track, cleanArtist, snap.album, snap.sourceApp),
-      mode,
-      title: track,
-      artist: cleanArtist,
-      album: snap.album,
-      sourceApp: snap.sourceApp,
-    };
-    const seq = (seqRef.current += 1);
-    const sameTrack = nextTrack.key === activeTrackRef.current?.key;
-    activeTrackRef.current = nextTrack;
-    if (!sameTrack) {
-      setStatus("loading");
-      setPayload(null);
-      setReason(null);
-      setSyncHint(null);
-      setSingingSource("lrc");
-      setLyricIndex(null);
-      setChartIndex(null);
-      setFollowMs(snap.positionMs);
-      setYoutube(null);
-      setWhisper(null);
-    }
-    void resolvePlayalong({
-      title: track,
-      artist: cleanArtist,
-      album: nextTrack.album,
-      durationMs: snap.durationMs,
-      sourceApp: nextTrack.sourceApp,
-      gen: seq,
-    })
-      .then((next) => {
-        if (seq !== seqRef.current) return;
-        const key = nextTrack.key;
-        const sameTrack = key === resolvedKeyRef.current;
-        const chartChanged =
-          payloadRef.current?.chart?.sourceUrl !== next.chart?.sourceUrl ||
-          (payloadRef.current?.chartHtml ?? null) !== (next.chartHtml ?? null);
-        resolvedKeyRef.current = key;
-        setPayload(next);
-        setStatus(payloadStatus(next.status));
-        setReason(next.reason ?? null);
-        if (!sameTrack) {
-          setLyricIndex(null);
-          setChartIndex(null);
-        } else if (chartChanged) {
-          setChartIndex(null);
-        }
-        setFollowMs(snap.positionMs);
-      })
-      .catch((error: unknown) => {
-        if (seq !== seqRef.current) return;
-        setStatus("error");
-        setReason(error instanceof Error ? error.message : String(error));
-      });
-  };
+    return;
+  }
+  assign({ title: mediaTitle, artist: mediaArtist });
+  run(mediaTitle, mediaArtist, "media");
+}
 
-  useEffect(() => {
-    if (!mediaTitle) {
-      if (activeTrackRef.current?.mode === "media") {
-        setTitle("");
-        setArtist("");
-        clearActiveTrack();
+function tick(): void {
+  if (inflight || !activeTrack || !mediaRef) return;
+  const snap = mediaRef;
+  const track = activeTrack;
+  const requestKey = track.key;
+  const token = epoch;
+  const serial = (followSerial += 1);
+  inflight = true;
+  void followPlayalong({
+    title: track.title,
+    artist: track.artist,
+    album: track.album,
+    durationMs: snap.durationMs,
+    positionMs: snap.positionMs,
+    sourceApp: track.sourceApp,
+    playbackStatus: snap.playbackStatus,
+    playing: playingOf(snap),
+  })
+    .then((next) => {
+      if (serial === followSerial) inflight = false;
+      if (token !== epoch || !next || activeTrack?.key !== requestKey) return;
+      const partial: Partial<Snapshot> = {};
+      if (snapshot.lyricIndex !== next.lyricIndex) {
+        partial.lyricIndex = next.lyricIndex;
       }
-      return;
-    }
-    setTitle(mediaTitle);
-    setArtist(mediaArtist);
-    run(mediaTitle, mediaArtist, "media");
+      if (snapshot.chartIndex !== next.chartIndex) {
+        partial.chartIndex = next.chartIndex;
+      }
+      if (
+        typeof next.positionMs === "number" &&
+        snapshot.followMs !== next.positionMs
+      ) {
+        partial.followMs = next.positionMs;
+      }
+      const source = asSingingSource(next.singingSource);
+      if (snapshot.singingSource !== source) partial.singingSource = source;
+      const hint = next.syncHint ?? null;
+      if (snapshot.syncHint !== hint) partial.syncHint = hint;
+      if (next.youtube && panelChanged(snapshot.youtube, next.youtube)) {
+        partial.youtube = next.youtube;
+      }
+      if (next.whisper && panelChanged(snapshot.whisper, next.whisper)) {
+        partial.whisper = next.whisper;
+      }
+      assign(partial);
+    })
+    .catch(() => {
+      if (serial === followSerial) inflight = false;
+    });
+}
+
+function startLoop(): void {
+  if (timer != null) return;
+  tick();
+  timer = window.setInterval(tick, 70);
+}
+
+function resetStore(): void {
+  epoch += 1;
+  seq += 1;
+  followSerial += 1;
+  inflight = false;
+  activeTrack = null;
+  resolvedKey = "";
+  lastMediaKey = `\0reset:${epoch}`;
+  if (timer != null) {
+    window.clearInterval(timer);
+    timer = null;
+  }
+  snapshot = emptySnapshot();
+}
+
+function subscribe(listener: Listener): () => void {
+  subscribers.add(listener);
+  listener(snapshot);
+  if (subscribers.size === 1) startLoop();
+  return () => {
+    subscribers.delete(listener);
+    if (subscribers.size === 0) resetStore();
+  };
+}
+
+function setTitle(value: string): void {
+  assign({ title: value });
+}
+
+function setArtist(value: string): void {
+  assign({ artist: value });
+}
+
+function search(nextTitle?: string, nextArtist?: string): void {
+  run(nextTitle ?? snapshot.title, nextArtist ?? snapshot.artist, "manual");
+}
+
+/**
+ * ChordSync resolve + follow, driven by the OS media session.
+ * The snapshot lives for the whole app session: App keeps one subscriber,
+ * so leaving Play Along does not drop the lyrics or the follow loop.
+ */
+export function usePlayAlong(media: MediaSessionUiState): PlayAlongState {
+  const [snap, setSnap] = useState(snapshot);
+  mediaRef = media;
+
+  useEffect(() => subscribe(setSnap), []);
+  useEffect(() => {
+    syncFromMedia(media);
     // Auto-follow the OS now-playing title; manual Search calls `search`.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- identity is the song, not every position tick
-  }, [mediaTitle, mediaArtist, media.album, media.sourceApp]);
-
-  useEffect(() => {
-    let cancelled = false;
-    let inflight = false;
-    const tick = () => {
-      if (cancelled || inflight) return;
-      const snap = mediaRef.current;
-      const track = activeTrackRef.current;
-      if (!track) return;
-      const requestKey = track.key;
-      inflight = true;
-      void followPlayalong({
-        title: track.title,
-        artist: track.artist,
-        album: track.album,
-        durationMs: snap.durationMs,
-        positionMs: snap.positionMs,
-        sourceApp: track.sourceApp,
-        playbackStatus: snap.playbackStatus,
-        playing: playingOf(snap),
-      })
-        .then((next) => {
-          inflight = false;
-          if (cancelled || !next || activeTrackRef.current?.key !== requestKey)
-            return;
-          setLyricIndex((prev) =>
-            prev === next.lyricIndex ? prev : next.lyricIndex,
-          );
-          setChartIndex((prev) =>
-            prev === next.chartIndex ? prev : next.chartIndex,
-          );
-          if (typeof next.positionMs === "number") {
-            setFollowMs((prev) =>
-              prev === next.positionMs ? prev : (next.positionMs ?? prev),
-            );
-          }
-          const source = asSingingSource(next.singingSource);
-          setSingingSource((prev) => (prev === source ? prev : source));
-          const hint = next.syncHint ?? null;
-          setSyncHint((prev) => (prev === hint ? prev : hint));
-          if (next.youtube) {
-            setYoutube((prev) =>
-              panelChanged(prev, next.youtube ?? null)
-                ? (next.youtube ?? null)
-                : prev,
-            );
-          }
-          if (next.whisper) {
-            setWhisper((prev) =>
-              panelChanged(prev, next.whisper ?? null)
-                ? (next.whisper ?? null)
-                : prev,
-            );
-          }
-        })
-        .catch(() => {
-          inflight = false;
-        });
-    };
-    tick();
-    const id = window.setInterval(tick, 70);
-    return () => {
-      cancelled = true;
-      window.clearInterval(id);
-    };
-  }, []);
+  }, [media.title, media.artist, media.album, media.sourceApp]);
 
   return {
-    status,
-    payload,
-    positionMs: followMs ?? media.positionMs,
-    lyricIndex,
-    chartIndex,
-    reason,
-    syncHint,
-    singingSource,
-    singingLines: singingLinesOf(singingSource, payload, youtube, whisper),
-    lyricsProvider: lyricsProviderOf(singingSource, payload),
-    title,
-    artist,
-    youtube,
-    whisper,
+    status: snap.status,
+    payload: snap.payload,
+    positionMs: snap.followMs ?? media.positionMs,
+    lyricIndex: snap.lyricIndex,
+    chartIndex: snap.chartIndex,
+    reason: snap.reason,
+    syncHint: snap.syncHint,
+    singingSource: snap.singingSource,
+    singingLines: singingLinesOf(
+      snap.singingSource,
+      snap.payload,
+      snap.youtube,
+      snap.whisper,
+    ),
+    lyricsProvider: lyricsProviderOf(snap.singingSource, snap.payload),
+    title: snap.title,
+    artist: snap.artist,
+    youtube: snap.youtube,
+    whisper: snap.whisper,
     setTitle,
     setArtist,
-    search: (nextTitle, nextArtist) =>
-      run(
-        nextTitle ?? titleRef.current,
-        nextArtist ?? artistRef.current,
-        "manual",
-      ),
+    search,
   };
 }

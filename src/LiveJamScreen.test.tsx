@@ -1,16 +1,21 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { useState } from 'react';
 import LiveJamScreen from './LiveJamScreen';
 import type { PracticeSession } from './practice/session';
 import { DEFAULT_SESSION } from './practice/session';
+import { resetNeckFollowForTests } from './neckFollow';
 
 /**
  * Smoke test for the Live Jam chassis: type-check and build both pass on a tree that throws on
  * mount, so something has to actually render it. Outside Tauri every backend hook falls back,
  * which is also what the browser dev server shows.
  */
+beforeEach(() => {
+  resetNeckFollowForTests();
+});
+
 afterEach(() => {
   cleanup();
 });

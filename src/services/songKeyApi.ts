@@ -7,7 +7,7 @@ import { trace } from './debugLog';
  * There is no server. A miss means the local engine is the remaining leg.
  */
 
-export type KeyLookupSource = 'verified_library';
+export type KeyLookupSource = 'verified_library' | 'remembered';
 
 export type LookupSongInput = {
   title: string;

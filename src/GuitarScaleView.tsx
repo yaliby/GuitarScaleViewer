@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Layers3, Menu, SlidersHorizontal, X } from 'lucide-react';
 import type { ScaleContext, ScaleType } from './scaleDataProvider';
@@ -10,7 +10,8 @@ import { useMediaSession } from './hooks/useMediaSession';
 import { controlMediaPlayback, seekMedia } from './hooks/mediaTransport';
 import { useDetectedKey } from './hooks/useDetectedKey';
 import { useCloudKeyResolution } from './hooks/useCloudKeyResolution';
-import { clearsApplyGate, fuseKey, shouldRevise, type FusedKey } from './services/keyFusion';
+import { clearsApplyGate, fuseKey, shouldRevise } from './services/keyFusion';
+import { readNeckFollow, useNeckFollow } from './neckFollow';
 import { trace } from './services/debugLog';
 import { Fretboard } from './fretboard/Fretboard';
 import type { FretboardViewMode } from './fretboard/geometry';
@@ -22,6 +23,8 @@ import { VinylDeck } from './ui/VinylDeck';
 import { ScaleControls } from './ui/ScaleControls';
 import { ViewModeSwitch } from './ui/ViewModeSwitch';
 import { DevDrawer } from './ui/DevDrawer';
+import { useTrackCapture } from './hooks/useTrackCapture';
+import { rememberScale } from './services/songMemory';
 import './ui/lab-jam.css';
 
 /** Open + 24 fretted positions (extend via props later). */
@@ -49,6 +52,11 @@ type Props = {
   /** The shell's navigation drawer. This screen is the whole window, so it carries the toggle. */
   menuOpen: boolean;
   onToggleMenu: () => void;
+  /**
+   * False while this screen is kept alive on another workspace. Detection still runs;
+   * only the visible screen is allowed to move the neck or talk to the engine.
+   */
+  followSong?: boolean;
   numFrets?: number;
 };
 
@@ -76,14 +84,14 @@ export default function GuitarScaleView({
   onFlipRelative,
   menuOpen,
   onToggleMenu,
+  followSong = true,
   numFrets = DEFAULT_NUM_FRETS,
 }: Props) {
   const [viewMode, setViewMode] = useState<FretboardViewMode>('scale-all');
   const [selectedChord, setSelectedChord] = useState<ScaleChordWithVoicings | null>(null);
-  /* Apply is the one control that acts on the pipeline, and it ships engaged: the neck follows
-     the song unasked, and a player who wants it to stay put switches Apply off. Nothing has to
-     be pressed to get a key — only to stop getting one. */
-  const [applyDetected, setApplyDetected] = useState(true);
+  /* Apply and the settled key live outside this screen, so leaving the room does not
+     turn follow back on or throw away the reading the neck was holding. */
+  const { applyDetected, setApplyDetected, neckKey, setNeckKey } = useNeckFollow();
   const [devMockEnabled, setDevMockEnabled] = useState(false);
   const [devMockTitle, setDevMockTitle] = useState('Numb');
   const [devMockArtist, setDevMockArtist] = useState('Linkin Park');
@@ -94,20 +102,14 @@ export default function GuitarScaleView({
   const [cuePositionMs, setCuePositionMs] = useState<number | null>(null);
   /* Play/pause on the record is optimistic: the grooves stop or start before the OS session catches up. */
   const [heldPlaybackStatus, setHeldPlaybackStatus] = useState<string | null>(null);
-  /* The key the neck is currently drawing, and the evidence behind it. Held in state rather
-     than derived, because the revision policy compares the next reading against it. */
-  const [neckKey, setNeckKey] = useState<FusedKey | null>(null);
-  const lastAutoDecisionRef = useRef<string>('');
-  const lastGateHoldRef = useRef<string>('');
-  const prevApplyRef = useRef(applyDetected);
-  /* A "follow the song again" that the gate has not let through yet. See the effect below. */
-  const applyPendingRef = useRef(false);
+  const follow = readNeckFollow();
 
   const mediaSession = useMediaSession();
+  const capture = useTrackCapture(mediaSession);
   const { detectedKey, detectedKeyAb } = useDetectedKey();
   const cloudMediaInput = useMemo(
     () =>
-      devMockEnabled
+      followSong && devMockEnabled
         ? {
             ...mediaSession,
             title: devMockTitle.trim() || mediaSession.title,
@@ -115,9 +117,9 @@ export default function GuitarScaleView({
             playbackStatus: 'playing',
           }
         : mediaSession,
-    [devMockArtist, devMockEnabled, devMockTitle, mediaSession],
+    [devMockArtist, devMockEnabled, devMockTitle, followSong, mediaSession],
   );
-  const cloudResolution = useCloudKeyResolution(cloudMediaInput, detectedKey);
+  const cloudResolution = useCloudKeyResolution(cloudMediaInput, detectedKey, followSong);
 
   /* Library lookup is the bundled dictionary. A miss leaves the local engine as the remaining leg. */
   const cloudHit = cloudResolution.cloudHit;
@@ -239,12 +241,13 @@ export default function GuitarScaleView({
    * of the song while the deck reads the right one.
    */
   useEffect(() => {
-    if (!prevApplyRef.current && applyDetected) {
-      applyPendingRef.current = true;
+    if (!followSong) return;
+    if (!follow.prevApply && applyDetected) {
+      follow.applyPending = true;
     }
-    prevApplyRef.current = applyDetected;
+    follow.prevApply = applyDetected;
     if (!applyDetected) {
-      applyPendingRef.current = false;
+      follow.applyPending = false;
       return;
     }
     if (!fused.root || !fused.scale) {
@@ -252,8 +255,8 @@ export default function GuitarScaleView({
     }
     if (!clearsApplyGate(fused, applyThreshold)) {
       const held = `${fused.root}:${fused.scale}:${fused.confidencePct}:${applyThreshold}`;
-      if (lastGateHoldRef.current !== held) {
-        lastGateHoldRef.current = held;
+      if (follow.lastGateHold !== held) {
+        follow.lastGateHold = held;
         trace(
           'apply',
           'apply.gate',
@@ -271,15 +274,15 @@ export default function GuitarScaleView({
       }
       return;
     }
-    lastGateHoldRef.current = '';
-    const justEnabled = applyPendingRef.current;
-    applyPendingRef.current = false;
+    follow.lastGateHold = '';
+    const justEnabled = follow.applyPending;
+    follow.applyPending = false;
     if (!justEnabled && !shouldRevise(neckKey, fused)) {
       return;
     }
     const sig = `${fused.root}:${fused.scale}:${fused.certainty}`;
-    if (lastAutoDecisionRef.current !== sig || justEnabled) {
-      lastAutoDecisionRef.current = sig;
+    if (follow.lastAutoDecision !== sig || justEnabled) {
+      follow.lastAutoDecision = sig;
       trace(
         'apply',
         'neck.follow',
@@ -301,7 +304,7 @@ export default function GuitarScaleView({
     }
     setNeckKey(fused);
     onApplyDetectedKey(fused.root, fused.scale);
-  }, [applyDetected, applyThreshold, fused, neckKey, onApplyDetectedKey]);
+  }, [applyDetected, applyThreshold, followSong, fused, neckKey, onApplyDetectedKey]);
 
   useEffect(() => {
     if (heldPlaybackStatus == null) {
@@ -357,7 +360,7 @@ export default function GuitarScaleView({
       {/* Deck: the record, what the machine hears, and the key now on the neck. */}
       <div className="lab-deck">
         <VinylDeck
-          playing={playing}
+          playing={playing && followSong}
           playbackStatus={deckSession.playbackStatus}
           positionMs={mediaSession.positionMs}
           durationMs={mediaSession.durationMs}
@@ -391,6 +394,20 @@ export default function GuitarScaleView({
           applyThreshold={applyThreshold}
           onApplyThresholdChange={onApplyThresholdChange}
           cuePositionMs={cuePositionMs}
+          capture={capture}
+          scaleSaved={cloudResolution.cloudHit?.source === 'remembered'}
+          onRememberScale={
+            mediaSession.title?.trim() && fused.root && fused.scale
+              ? () => {
+                  void rememberScale({
+                    title: mediaSession.title ?? '',
+                    artist: mediaSession.artist ?? '',
+                    key: fused.root ?? '',
+                    mode: fused.scale ?? '',
+                  });
+                }
+              : undefined
+          }
         />
 
         <KeyReadout

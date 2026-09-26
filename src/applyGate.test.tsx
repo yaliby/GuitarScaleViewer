@@ -22,6 +22,7 @@ vi.mock('./hooks/useDetectedKey', () => ({
 
 import LiveJamScreen from './LiveJamScreen';
 import { DEFAULT_SESSION, type PracticeSession } from './practice/session';
+import { resetNeckFollowForTests } from './neckFollow';
 
 /** An E minor reading the engine cannot separate from its relative: `tonic_open`, priced at 70. */
 const HEARD: DetectedKeyState = {
@@ -68,6 +69,7 @@ const neckKey = () => (screen.getByPlaceholderText('A') as HTMLInputElement).val
 const gateSlider = () => screen.getByRole('slider', { name: 'Apply confidence gate' });
 
 beforeEach(() => {
+  resetNeckFollowForTests();
   detection.state = HEARD;
 });
 afterEach(cleanup);
@@ -124,5 +126,53 @@ describe('the Apply gate', () => {
     render(<Harness applyThreshold={100} />);
     fireEvent.change(screen.getByPlaceholderText('A'), { target: { value: 'C' } });
     expect(neckKey()).toBe('C');
+  });
+
+  it('keeps a resisted reading when live jam is left and opened again', () => {
+    function Room() {
+      const [open, setOpen] = useState(true);
+      const [session, setSession] = useState<PracticeSession>({
+        ...DEFAULT_SESSION,
+        root: 'A',
+        scaleType: 'minor',
+        applyThreshold: 0,
+      });
+      return (
+        <>
+          <button type="button" onClick={() => setOpen((value) => !value)}>
+            Leave room
+          </button>
+          {open ? (
+            <LiveJamScreen
+              menuOpen={false}
+              onToggleMenu={() => {}}
+              root={session.root}
+              scaleType={session.scaleType}
+              tuningId={session.tuningId}
+              capo={session.capo}
+              applyThreshold={session.applyThreshold}
+              onChange={(patch) => setSession((current) => ({ ...current, ...patch }))}
+            />
+          ) : null}
+        </>
+      );
+    }
+
+    render(<Room />);
+    expect(neckKey()).toBe('E');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Leave room' }));
+    detection.state = {
+      ...HEARD,
+      primaryKey: 'G',
+      primaryScale: 'major',
+      displayName: 'G major',
+      ambiguous: false,
+      alternatives: [],
+      confidence: 1,
+    };
+    fireEvent.click(screen.getByRole('button', { name: 'Leave room' }));
+
+    expect(neckKey()).toBe('E');
   });
 });

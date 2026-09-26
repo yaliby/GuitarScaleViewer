@@ -4837,6 +4837,8 @@ mod tests {
             playback_status: "playing".to_string(),
             position_ms: Some(5_000),
             duration_ms: Some(185_000),
+            track_url: None,
+            artwork_url: None,
         };
         let mut seeked = base.clone();
         seeked.position_ms = Some(97_000);
@@ -4853,6 +4855,8 @@ mod tests {
             playback_status: "playing".to_string(),
             position_ms: Some(0),
             duration_ms: Some(200_000),
+            track_url: None,
+            artwork_url: None,
         };
         let second = MediaSessionPayload {
             title: Some("Song B".to_string()),

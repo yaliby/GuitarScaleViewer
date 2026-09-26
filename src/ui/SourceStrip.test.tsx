@@ -94,3 +94,27 @@ describe('SourceStrip Apply gate', () => {
     expect(gateSlider()).toHaveAttribute('aria-valuetext', '70%, 10 of 14 bars');
   });
 });
+
+describe('SourceStrip save lamp', () => {
+  it('lights Save while a song is downloading in the background', () => {
+    renderStrip({
+      capture: {
+        status: 'capturing',
+        progressPct: 22,
+        stage: 'download',
+        track: null,
+        error: null,
+        query: '',
+        autoEnabled: true,
+        playing: false,
+        setQuery: vi.fn(),
+        setAutoEnabled: vi.fn(),
+        captureNow: vi.fn(),
+        captureQuery: vi.fn(),
+        togglePlayback: vi.fn(),
+      },
+    });
+    expect(screen.getByRole('img', { name: 'Save: Saving in the background' })).toBeInTheDocument();
+    expect(screen.getByTestId('track-capture-status').textContent).toMatch(/Downloading/i);
+  });
+});

@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-recognition-available"
+description = "Allows checking whether Harmonia whole-song recognition is installed."
+commands.allow = ["recognition_available"]

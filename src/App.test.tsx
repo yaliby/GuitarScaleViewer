@@ -94,10 +94,12 @@ vi.mock("./audio/usePracticeAudio", () => ({
 }));
 
 import App from "./App";
+import { resetNeckFollowForTests } from "./neckFollow";
 
 afterEach(() => cleanup());
 
 beforeEach(() => {
+  resetNeckFollowForTests();
   vi.spyOn(window, "scrollTo").mockImplementation(() => {});
   localStorage.clear();
   mocks.detected = {
@@ -232,6 +234,36 @@ describe("practice studio shell", () => {
     expect(screen.getByTestId("playalong-key")).toHaveTextContent("Bb");
     expect(
       screen.getByRole("button", { name: "Open navigation menu" }),
+    ).toBeInTheDocument();
+  });
+
+  it("closes live jam and play along when another room opens", async () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Play Along" }));
+    expect(
+      await screen.findByRole("region", { name: "Play Along workspace" }),
+    ).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Open navigation menu" }));
+    fireEvent.click(screen.getByRole("button", { name: "Explore" }));
+    expect(
+      await screen.findByRole("region", { name: "Scale atlas" }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("region", { name: "Play Along workspace" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("region", { name: "Live Jam workspace" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("opens the saved-song library from the Songs workspace", async () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Songs" }));
+    const songs = await screen.findByRole("region", { name: "Songs workspace" });
+    expect(songs).toBeInTheDocument();
+    expect(screen.queryByLabelText("Tempo")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { level: 2, name: /songs this app has saved/i }),
     ).toBeInTheDocument();
   });
   it("updates and persists the shared musical context", async () => {

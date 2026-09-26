@@ -1,5 +1,5 @@
-import { act, renderHook, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DetectedKeyState } from './useDetectedKey';
 import type { MediaSessionUiState } from './useMediaSession';
 
@@ -87,10 +87,15 @@ function libraryHit(key: string, mode: 'major' | 'minor') {
 }
 
 beforeEach(() => {
+  localStorage.clear();
   tauriMocks.isTauri.mockReturnValue(false);
   tauriMocks.invoke.mockReset();
   tauriMocks.listen.mockReset();
   apiMocks.lookupSongKey.mockReset();
+});
+
+afterEach(() => {
+  cleanup();
 });
 
 describe('useCloudKeyResolution', () => {
@@ -107,6 +112,39 @@ describe('useCloudKeyResolution', () => {
 
     await act(async () => undefined);
     expect(apiMocks.lookupSongKey).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses a scale saved for this song and does not ask the library', async () => {
+    localStorage.setItem(
+      'gsv.song-memory.scales.v1',
+      JSON.stringify({
+        'blue in green\u001fmiles davis': {
+          key: 'Bb',
+          mode: 'minor',
+          savedAt: '2026-01-01T00:00:00.000Z',
+        },
+      }),
+    );
+    const { result } = renderHook(() => useCloudKeyResolution(PLAYING, DETECTED));
+
+    await waitFor(() => expect(result.current.cloudState).toBe('hit'));
+    expect(result.current.cloudHit).toMatchObject({
+      key: 'Bb',
+      mode: 'minor',
+      source: 'remembered',
+    });
+    expect(apiMocks.lookupSongKey).not.toHaveBeenCalled();
+    localStorage.clear();
+  });
+
+  it('keeps a library hit when another screen subscribes to the same song', async () => {
+    apiMocks.lookupSongKey.mockReturnValue(libraryHit('Bb', 'major'));
+    const first = renderHook(() => useCloudKeyResolution(PLAYING, DETECTED));
+    await waitFor(() => expect(first.result.current.cloudHit?.key).toBe('Bb'));
+
+    const second = renderHook(() => useCloudKeyResolution(PLAYING, DETECTED, false));
+    expect(second.result.current.cloudHit?.key).toBe('Bb');
+    expect(second.result.current.cloudState).toBe('hit');
   });
 
   it('preserves B-flat from a valid library result', async () => {

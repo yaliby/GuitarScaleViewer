@@ -1,0 +1,219 @@
+{
+  "schema_version": 1,
+  "model_id": "E004-transposition-tcn",
+  "status": "experimental",
+  "recommended_default": false,
+  "license": "See docs/data/dataset-audit.md; trained on CC BY 4.0 GuitarSet",
+  "sha256": "26913443b06adb66c384130ae38fac26f4b9aaeeaed933fe1261c1058171ca79",
+  "bytes": 233441,
+  "input": {
+    "name": "features",
+    "dtype": "float32",
+    "shape": [
+      "batch",
+      "frames",
+      26
+    ],
+    "normalization": "embedded in ONNX; input raw features"
+  },
+  "feature_config": {
+    "sample_rate": 22050,
+    "n_fft": 2048,
+    "hop_length": 512,
+    "version": "chroma-bass-v1"
+  },
+  "feature_contract": {
+    "channels": "samples-by-channels arithmetic mean in float32",
+    "resampling": "scipy resample_poly rational ratio, default Kaiser window beta5; preferred input already 22050Hz",
+    "framing": "No centering. Pad right to2048 only if short; discard incomplete final frame",
+    "window": "float32 symmetric Hann:0.5-0.5*cos(2*pi*n/2047)",
+    "spectrum": "unnormalized abs(rfft(windowed frame)), float32",
+    "pitch_bins": "freq>=27.5Hz; round-to-even(69+12*log2(freq/440)) mod12",
+    "features_0_11": "C..B chroma sums, L1 normalize using max(sum,1e-8)",
+    "features_12_23": "C..B bass sums, freq<=330Hz, independently L1 normalized",
+    "feature_24": "log1p(100*sqrt(mean(windowed_frame**2)))",
+    "feature_25": "sum(max(L1_magnitude[t]-L1_magnitude[t-1],0)); first=0",
+    "time": "(frame_index*512+1024)/22050 seconds"
+  },
+  "outputs": {
+    "root": [
+      "C",
+      "C#",
+      "D",
+      "D#",
+      "E",
+      "F",
+      "F#",
+      "G",
+      "G#",
+      "A",
+      "A#",
+      "B",
+      "N"
+    ],
+    "triad": [
+      "none",
+      "major",
+      "minor",
+      "diminished",
+      "augmented",
+      "sus2",
+      "sus4",
+      "power"
+    ],
+    "seventh": [
+      "none",
+      "minor",
+      "major",
+      "diminished"
+    ],
+    "bass": "absolute pitch classes0..11;12=N",
+    "extensions": [
+      "6",
+      "9",
+      "11",
+      "13"
+    ],
+    "boundary": "single logit per frame"
+  },
+  "output_semantics": "Raw independent logits, no whole-chord calibrated confidence. Unsupported alterations remain unmodeled.",
+  "receptive_field_frames": 15,
+  "chunking": "Use overlap equal to (receptive_field_frames-1)/2 on each side; retain interior outputs",
+  "onnx_runtime": {
+    "version": "1.30.0",
+    "provider": "CPUExecutionProvider",
+    "threads": 2,
+    "max_absolute_errors": {
+      "1": {
+        "root": 4.76837158203125e-07,
+        "triad": 9.5367431640625e-07,
+        "seventh": 1.1920928955078125e-07,
+        "bass": 3.8743019104003906e-07,
+        "extensions": 3.5762786865234375e-07,
+        "boundary": 2.384185791015625e-07
+      },
+      "17": {
+        "root": 9.5367431640625e-07,
+        "triad": 1.9073486328125e-06,
+        "seventh": 1.9073486328125e-06,
+        "bass": 9.5367431640625e-07,
+        "extensions": 9.5367431640625e-07,
+        "boundary": 1.1920928955078125e-06
+      },
+      "128": {
+        "root": 1.6689300537109375e-06,
+        "triad": 2.384185791015625e-06,
+        "seventh": 1.9073486328125e-06,
+        "bass": 1.430511474609375e-06,
+        "extensions": 1.9073486328125e-06,
+        "boundary": 1.1920928955078125e-06
+      },
+      "1024": {
+        "root": 1.9073486328125e-06,
+        "triad": 2.86102294921875e-06,
+        "seventh": 2.86102294921875e-06,
+        "bass": 2.384185791015625e-06,
+        "extensions": 1.9073486328125e-06,
+        "boundary": 1.430511474609375e-06
+      },
+      "2048": {
+        "root": 2.384185791015625e-06,
+        "triad": 3.337860107421875e-06,
+        "seventh": 2.86102294921875e-06,
+        "bass": 1.9073486328125e-06,
+        "extensions": 2.1457672119140625e-06,
+        "boundary": 1.9073486328125e-06
+      }
+    },
+    "median_seconds_2048_frames": 0.0022017000010237098,
+    "real_time_factor_inference_only": 4.6298489592144776e-05
+  },
+  "limitations": [
+    "GuitarSet-only narrow corpus",
+    "Validation minor-quality distribution shift",
+    "No general commercial-mix accuracy claim",
+    "Not all extensions or alterations represented"
+  ],
+  "root_calibration": {
+    "temperature": 1.1971407672683847,
+    "embedded": false,
+    "apply": "softmax(root_logits / temperature), root component only",
+    "source_split": "validation",
+    "note": "Root component only, not whole-chord confidence. Audit compositions are disjoint from calibration fit; both were used for model selection, so this is descriptive validation, not independent generalization evidence.",
+    "audit": {
+      "track_ids": [
+        "00_BN2-166-Ab_comp",
+        "00_BN2-166-Ab_solo",
+        "00_Funk2-119-G_comp",
+        "00_Funk2-119-G_solo",
+        "00_Jazz2-187-F#_comp",
+        "00_Jazz2-187-F#_solo",
+        "00_Rock2-85-F_comp",
+        "00_Rock2-85-F_solo",
+        "00_SS2-88-F_comp",
+        "00_SS2-88-F_solo",
+        "01_BN2-166-Ab_comp",
+        "01_BN2-166-Ab_solo",
+        "01_Funk2-119-G_comp",
+        "01_Funk2-119-G_solo",
+        "01_Jazz2-187-F#_comp",
+        "01_Jazz2-187-F#_solo",
+        "01_Rock2-85-F_comp",
+        "01_Rock2-85-F_solo",
+        "01_SS2-88-F_comp",
+        "01_SS2-88-F_solo",
+        "02_BN2-166-Ab_comp",
+        "02_BN2-166-Ab_solo",
+        "02_Funk2-119-G_comp",
+        "02_Funk2-119-G_solo",
+        "02_Jazz2-187-F#_comp",
+        "02_Jazz2-187-F#_solo",
+        "02_Rock2-85-F_comp",
+        "02_Rock2-85-F_solo",
+        "02_SS2-88-F_comp",
+        "02_SS2-88-F_solo",
+        "03_BN2-166-Ab_comp",
+        "03_BN2-166-Ab_solo",
+        "03_Funk2-119-G_comp",
+        "03_Funk2-119-G_solo",
+        "03_Jazz2-187-F#_comp",
+        "03_Jazz2-187-F#_solo",
+        "03_Rock2-85-F_comp",
+        "03_Rock2-85-F_solo",
+        "03_SS2-88-F_comp",
+        "03_SS2-88-F_solo",
+        "04_BN2-166-Ab_comp",
+        "04_BN2-166-Ab_solo",
+        "04_Funk2-119-G_comp",
+        "04_Funk2-119-G_solo",
+        "04_Jazz2-187-F#_comp",
+        "04_Jazz2-187-F#_solo",
+        "04_Rock2-85-F_comp",
+        "04_Rock2-85-F_solo",
+        "04_SS2-88-F_comp",
+        "04_SS2-88-F_solo",
+        "05_BN2-166-Ab_comp",
+        "05_BN2-166-Ab_solo",
+        "05_Funk2-119-G_comp",
+        "05_Funk2-119-G_solo",
+        "05_Jazz2-187-F#_comp",
+        "05_Jazz2-187-F#_solo",
+        "05_Rock2-85-F_comp",
+        "05_Rock2-85-F_solo",
+        "05_SS2-88-F_comp",
+        "05_SS2-88-F_solo"
+      ],
+      "frames": 84924,
+      "before": {
+        "nll": 2.0957281766313307,
+        "ece": 0.07102678506963735,
+        "accuracy": 0.3420587819697612
+      },
+      "after": {
+        "nll": 2.0783750747978904,
+        "ece": 0.06029837897549342,
+        "accuracy": 0.3420587819697612
+      }
+    }
+  }
+}

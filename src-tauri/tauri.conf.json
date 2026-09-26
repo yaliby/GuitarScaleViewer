@@ -23,7 +23,16 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: http://asset.localhost; font-src 'self' data:; connect-src 'self' https: ipc: http://ipc.localhost; frame-src 'self' blob: data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$HOME/.local/share/fretboard-studio/captures/**",
+          "$HOME/.fretboard-studio/captures/**",
+          "$APPDATA/**",
+          "$LOCALDATA/fretboard-studio/captures/**"
+        ]
+      },
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline' blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: http://asset.localhost blob:; font-src 'self' data:; media-src 'self' asset: http://asset.localhost blob: data:; connect-src 'self' https: ipc: http://ipc.localhost asset: http://asset.localhost; frame-src 'self' blob: data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
     }
   },
   "bundle": {

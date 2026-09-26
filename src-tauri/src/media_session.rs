@@ -20,6 +20,8 @@ pub struct MediaSessionPayload {
     pub playback_status: String,
     pub position_ms: Option<u64>,
     pub duration_ms: Option<u64>,
+    pub track_url: Option<String>,
+    pub artwork_url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -44,6 +46,8 @@ impl MediaSessionPayload {
             playback_status: "media_session_unavailable".to_string(),
             position_ms: None,
             duration_ms: None,
+            track_url: None,
+            artwork_url: None,
         }
     }
 
@@ -56,6 +60,8 @@ impl MediaSessionPayload {
             playback_status: "none".to_string(),
             position_ms: None,
             duration_ms: None,
+            track_url: None,
+            artwork_url: None,
         }
     }
 }
@@ -71,6 +77,8 @@ impl From<&SessionCandidate> for MediaSessionPayload {
             playback_status: session.playback_status.clone(),
             position_ms: session.position_ms,
             duration_ms: session.duration_ms,
+            track_url: session.track_url.clone(),
+            artwork_url: session.artwork_url.clone(),
         }
     }
 }
@@ -86,6 +94,8 @@ struct SessionCandidate {
     album: Option<String>,
     position_ms: Option<u64>,
     duration_ms: Option<u64>,
+    track_url: Option<String>,
+    artwork_url: Option<String>,
 }
 
 fn normalize_playback_status(raw: &str) -> String {
@@ -619,6 +629,8 @@ mod win {
             playback_status,
             position_ms,
             duration_ms,
+            track_url: None,
+            artwork_url: None,
         }
     }
 }
@@ -945,6 +957,8 @@ mod linux {
             album: metadata_string(&metadata, "xesam:album"),
             position_ms,
             duration_ms: metadata_duration_ms(&metadata),
+            track_url: metadata_string(&metadata, "xesam:url"),
+            artwork_url: metadata_string(&metadata, "mpris:artUrl"),
         })
     }
 
@@ -1227,6 +1241,8 @@ mod tests {
             album: None,
             position_ms: None,
             duration_ms: None,
+            track_url: None,
+            artwork_url: None,
         }
     }
 

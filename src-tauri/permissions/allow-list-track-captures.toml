@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-list-track-captures"
+description = "Allows listing locally captured audio files."
+commands.allow = ["list_track_captures"]

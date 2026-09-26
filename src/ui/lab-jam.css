@@ -433,6 +433,21 @@
   letter-spacing: 0.04em;
   color: var(--gear-engrave);
 }
+.lab-remember {
+  margin-top: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--gear-legend);
+  cursor: pointer;
+}
+.lab-remember:hover {
+  color: var(--gear-ink, inherit);
+}
 /* The Apply gate, directly under the strip it is set against. Deliberately the quietest control
    on the deck: a player who never touches it is the case the app is built for, and the panel
    should not imply a decision is being asked for. */

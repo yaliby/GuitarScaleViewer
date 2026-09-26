@@ -18,7 +18,13 @@ import type { ScaleNote } from "../scaleSpell";
 import { musicalLabel } from "./Fretboard";
 import "./studio-screens.css";
 
-export type StudioView = "explore" | "practice" | "progressions" | "jam" | "playalong";
+export type StudioView =
+  | "explore"
+  | "practice"
+  | "progressions"
+  | "jam"
+  | "playalong"
+  | "songs";
 type Props = {
   view: StudioView;
   context: ReactNode;
@@ -27,6 +33,7 @@ type Props = {
   listening: ReactNode;
   jam: ReactNode;
   playalong: ReactNode;
+  songs: ReactNode;
   session: PracticeSession;
   notes: ScaleNote[];
   playing: string | null;
@@ -121,16 +128,17 @@ export function StudioScreens(p: Props) {
   const reduceMotion = useReducedMotion();
   const { view, session, playing, beat } = p;
   const isRunning = playing !== null;
-  /*
-   * Live Jam is the window, not a card in the stack, so it stays outside the cross-fade: the
-   * neck is far too heavy to animate, and an exit that re-renders mid-flight (which any key
-   * change on that screen causes) can leave the presence stuck on the screen you just left.
-   */
+  /* Listening and lyric follow live in shared stores, so these rooms can unmount. */
   if (view === "jam") {
     return <div className="workspace screen screen-jam">{p.jam}</div>;
   }
   if (view === "playalong") {
-    return <div className="workspace screen screen-playalong">{p.playalong}</div>;
+    return (
+      <div className="workspace screen screen-playalong">{p.playalong}</div>
+    );
+  }
+  if (view === "songs") {
+    return <div className="workspace screen screen-songs">{p.songs}</div>;
   }
   return (
     <AnimatePresence mode="wait" initial={false}>

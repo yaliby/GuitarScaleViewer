@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { ListeningPanel } from "./ListeningPanel";
 import type { FusedKey } from "../services/keyFusion";
 import type { DetectedKeyState } from "../hooks/useDetectedKey";
@@ -91,6 +91,27 @@ describe("ListeningPanel reports the pipeline's decision", () => {
         screen.getByRole("button", { name: "Turn off Apply" }).getAttribute("aria-pressed"),
       ).toBe("true");
     }
+  });
+
+  it("saves the scale on the neck when the player marks it true", () => {
+    const onRememberScale = vi.fn();
+    render(
+      <ListeningPanel
+        media={media}
+        detected={detected}
+        cloud={{ cloudHit: null } as never}
+        fused={fused()}
+        applyDetected={true}
+        onToggleApply={vi.fn()}
+        applyThreshold={0}
+        onRetry={vi.fn()}
+        root="G"
+        scale="major"
+        onRememberScale={onRememberScale}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Mark this scale as right" }));
+    expect(onRememberScale).toHaveBeenCalledTimes(1);
   });
 
   it("shows the verified library as the source when a human entered the key", () => {

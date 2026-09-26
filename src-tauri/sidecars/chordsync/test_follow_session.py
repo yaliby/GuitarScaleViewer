@@ -49,6 +49,27 @@ class FollowSyncRulesTest(unittest.TestCase):
         )
         return session
 
+    def test_a_remembered_caption_offset_is_not_replaced_by_the_duration_guess(self) -> None:
+        parsed = ParsedLrc(lines=(_line(0, 10_000, HELLO), _line(1, 20_000, WORLD)))
+        session = FollowSession()
+        session.load(
+            parsed=parsed,
+            lines=[HELLO, WORLD],
+            lrc_duration_ms=180_000,
+            app_name="brave",
+            track_id="brave::Song::Artist::",
+            lyrics_state="synced",
+            chart_view="chords",
+            player_duration_ms=185_000,
+            song_title="Song",
+            song_artist="Artist",
+            remembered_offset_ms=12_000,
+            remembered_offset_source="captions",
+        )
+        self.assertEqual(session.lrc_offset_ms, 12_000)
+        self.assertEqual(session.lrc_offset_source, "captions")
+        self.assertTrue(session._timing_remembered)
+
     def test_track_identity_includes_source_like_app_controller(self) -> None:
         brave = playalong_track_key(
             title="Song",

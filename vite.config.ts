@@ -77,6 +77,7 @@ function chordsyncSidecar(): Plugin {
 export default defineConfig({
   plugins: [react(), chordsyncSidecar()],
   clearScreen: false,
+  worker: { format: 'es' },
   server: {
     // Bind IPv4 explicitly: WebKitGTK often resolves localhost to 127.0.0.1,
     // while Vite's default "localhost" can listen on ::1 only.

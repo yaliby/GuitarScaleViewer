@@ -7,6 +7,7 @@
   ],
   "permissions": [
     "core:default",
+    "core:path:default",
     "allow-get-current-media",
     "allow-control-media-playback",
     "allow-seek-media",
@@ -16,6 +17,13 @@
     "allow-set-cloud-resolution",
     "allow-get-cloud-resolution",
     "allow-resolve-playalong",
-    "allow-follow-playalong"
+    "allow-follow-playalong",
+    "allow-capture-track",
+    "allow-lookup-track-capture",
+    "allow-list-track-captures",
+    "allow-recognition-available",
+    "allow-recognition-run",
+    "allow-recognition-cancel",
+    "allow-song-memory"
   ]
 }

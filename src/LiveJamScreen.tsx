@@ -22,6 +22,8 @@ type Props = {
   /** The shell's navigation drawer, opened from this screen's own hamburger. */
   menuOpen: boolean;
   onToggleMenu: () => void;
+  /** False while the screen stays mounted behind another workspace. */
+  followSong?: boolean;
 };
 
 /**
@@ -39,6 +41,7 @@ export default function LiveJamScreen({
   onChange,
   menuOpen,
   onToggleMenu,
+  followSong = true,
 }: Props) {
   const [rootDraft, setRootDraft] = useState<string | null>(null);
 
@@ -125,6 +128,7 @@ export default function LiveJamScreen({
         onFlipRelative={flipRelative}
         menuOpen={menuOpen}
         onToggleMenu={onToggleMenu}
+        followSong={followSong}
       />
     </div>
   );

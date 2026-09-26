@@ -6,6 +6,8 @@ import {
   applyGateLabel,
   applyGateValueLabel,
   clockLabel,
+  captureLampLabel,
+  captureLed,
   detectionLed,
   detectionStateLabel,
   mediaPlaybackDisplayLabel,
@@ -15,6 +17,8 @@ import {
 } from './statusLabels';
 import { certaintyLabel, type KeyCertainty } from './statusLabels';
 import { GearToggle, Led, litSegments, METER_SEGMENTS, SignalMeter } from './gear';
+import type { TrackCaptureApi } from '../hooks/useTrackCapture';
+import { TrackCaptureBar } from '../components/TrackCaptureBar';
 
 export type SourceStripProps = {
   mediaSession: MediaSessionUiState;
@@ -38,6 +42,10 @@ export type SourceStripProps = {
   onApplyThresholdChange: (thresholdPct: number) => void;
   /** Live vinyl cue; when set, the transport clock follows the platter instead of the OS poll. */
   cuePositionMs?: number | null;
+  capture?: TrackCaptureApi;
+  /** Mark the scale on the neck as the true scale of this song. */
+  onRememberScale?: () => void;
+  scaleSaved?: boolean;
 };
 
 /**
@@ -50,8 +58,8 @@ export type SourceStripProps = {
 const GATE_STEP_PCT = 5;
 
 /**
- * What the machine is hearing — the Jam listening deck with the Lab's own instrumentation: two
- * pipeline lamps, a segmented certainty meter, and the Apply latch.
+ * What the machine is hearing — the Jam listening deck with the Lab's own instrumentation: the
+ * Detect / Library / Save lamps, a segmented certainty meter, and the Apply latch.
  *
  * Apply ships engaged and its gate ships open: the neck follows the song without anything being
  * pressed, and the deck reports how sure the pipeline is rather than asking the player to decide
@@ -73,6 +81,9 @@ export function SourceStrip({
   applyThreshold,
   onApplyThresholdChange,
   cuePositionMs,
+  capture,
+  onRememberScale,
+  scaleSaved = false,
 }: SourceStripProps) {
   /* True while the gate is being set, so the bars it is asking for can be counted off the strip
      as the slider moves — the whole reason the gate is drawn on the meter and not in a field. */
@@ -85,6 +96,9 @@ export function SourceStrip({
 
   const det = detectionLed(detected.state);
   const res = resolutionLed(resolutionState);
+  const sav = capture
+    ? captureLed(capture.status, capture.autoEnabled)
+    : null;
   const positionMs = cuePositionMs ?? mediaSession.positionMs;
   const cueing = cuePositionMs != null;
   const progress = playbackProgressPct(positionMs, mediaSession.durationMs);
@@ -116,6 +130,16 @@ export function SourceStrip({
             />
             <span className="legend">Library</span>
           </span>
+          {capture && sav ? (
+            <span>
+              <Led
+                tone={sav.tone}
+                pulse={sav.pulse}
+                label={`Save: ${captureLampLabel(capture.status, capture.autoEnabled)}`}
+              />
+              <span className="legend">Save</span>
+            </span>
+          ) : null}
         </span>
       </span>
 
@@ -169,6 +193,16 @@ export function SourceStrip({
                 ? `Scale tones confirmed — could be ${relativeAlternative}`
                 : 'Scale tones confirmed — root still open'}
         </p>
+        {onRememberScale ? (
+          <button
+            type="button"
+            className="lab-remember"
+            onClick={onRememberScale}
+            aria-label={scaleSaved ? 'Scale saved for this song' : 'Mark this scale as right'}
+          >
+            {scaleSaved ? 'Scale saved for this song' : 'Mark this scale as right'}
+          </button>
+        ) : null}
       </div>
 
       {/* The gate. It sits under the meter it is set against: the slider names a percentage, the
@@ -216,6 +250,7 @@ export function SourceStrip({
           Apply
         </GearToggle>
       </div>
+      {capture ? <TrackCaptureBar capture={capture} compact /> : null}
     </div>
   );
 }

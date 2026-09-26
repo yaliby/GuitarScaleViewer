@@ -15,6 +15,10 @@ playwright-report/
 src-tauri/sidecars/libkeyfinder_cli/build/
 src-tauri/sidecars/chordsync/.venv/
 
+# Vendored Harmonia recognition environment (never commit weights/venv)
+harmonia/ml/.venv/
+harmonia/**/__pycache__/
+
 # Local credentials and internal review artifacts
 .env
 .env.*

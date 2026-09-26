@@ -12,6 +12,8 @@ type MediaSessionWire = {
   playback_status: string;
   position_ms: number | null;
   duration_ms: number | null;
+  track_url?: string | null;
+  artwork_url?: string | null;
 };
 
 export type MediaSessionUiState = {
@@ -22,6 +24,8 @@ export type MediaSessionUiState = {
   playbackStatus: string;
   positionMs: number | null;
   durationMs: number | null;
+  trackUrl?: string | null;
+  artworkUrl?: string | null;
 };
 
 const BROWSER_FALLBACK: MediaSessionUiState = {
@@ -32,6 +36,8 @@ const BROWSER_FALLBACK: MediaSessionUiState = {
   playbackStatus: 'media_session_unavailable',
   positionMs: null,
   durationMs: null,
+  trackUrl: null,
+  artworkUrl: null,
 };
 
 const TAURI_EMPTY: MediaSessionUiState = {
@@ -48,6 +54,8 @@ function wireToUi(w: MediaSessionWire): MediaSessionUiState {
     playbackStatus: w.playback_status,
     positionMs: w.position_ms,
     durationMs: w.duration_ms,
+    trackUrl: w.track_url ?? null,
+    artworkUrl: w.artwork_url ?? null,
   };
 }
 

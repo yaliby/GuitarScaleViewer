@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-song-memory"
+description = "Allows reading and writing the local song memory file."
+commands.allow = ["song_memory"]

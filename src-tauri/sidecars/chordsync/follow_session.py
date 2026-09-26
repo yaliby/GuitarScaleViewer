@@ -110,6 +110,9 @@ class FollowSession:
         self._ear_misses = 0
         self._live_tail = ""
         self._language_hint: str | None = None
+        self.song_title = ""
+        self.song_artist = ""
+        self._timing_remembered = False
 
     @property
     def last_match_index(self) -> int | None:
@@ -154,6 +157,10 @@ class FollowSession:
         lyrics_state: str = "none",
         chart_view: str = "none",
         player_duration_ms: int | None = None,
+        song_title: str | None = None,
+        song_artist: str | None = None,
+        remembered_offset_ms: int | None = None,
+        remembered_offset_source: str | None = None,
     ) -> None:
         from chordsync.sync.chart_align import align_to_chart
         from chordsync.sync.ear_follow import ChartWords
@@ -183,6 +190,17 @@ class FollowSession:
             self.app_name = app_name
             self.lyrics_state = lyrics_state
             self.chart_view = chart_view
+            self.song_title = (song_title or "").strip()
+            self.song_artist = (song_artist or "").strip()
+            if remembered_offset_source in ("captions", "live") and isinstance(
+                remembered_offset_ms, (int, float)
+            ):
+                # A previous play already locked this clip's lyric clock.
+                self.lrc_offset_ms = int(remembered_offset_ms)
+                self.lrc_offset_source = str(remembered_offset_source)
+                self._timing_remembered = True
+                self._yt_offset_tried = True
+                self._ear_done = True
             if same and lines_changed:
                 # AppController._put_chart_on_screen: a new page resets the walk.
                 # Reloading the same chart must keep last_match_index.
@@ -294,6 +312,9 @@ class FollowSession:
         self._ear_cursor = None
         self._ear_misses = 0
         self._live_tail = ""
+        self.song_title = ""
+        self.song_artist = ""
+        self._timing_remembered = False
 
     def _effective_playing(self, req: dict[str, Any]) -> bool:
         raw = req.get("playing")
@@ -339,9 +360,28 @@ class FollowSession:
                 offset_ms=new_off,
             )
 
+    def _persist_locked_timing(self) -> None:
+        if self._timing_remembered or self.lrc_offset_source not in ("captions", "live"):
+            return
+        if not self.song_title:
+            return
+        try:
+            from song_memory import SongMemory
+
+            SongMemory().remember_timing(
+                self.song_title,
+                self.song_artist,
+                int(self.lrc_offset_ms),
+                self.lrc_offset_source,
+            )
+        except Exception as exc:
+            _log("timing_save_failed", error=str(exc))
+
     def _maybe_apply_youtube_caption_offset(self) -> None:
         from chordsync.sync.caption_align import CaptionCue, caption_lrc_offset_ms
 
+        if self._timing_remembered:
+            return
         parsed = self.parsed
         yt = self._youtube_parsed
         if parsed is None or yt is None:
@@ -355,6 +395,7 @@ class FollowSession:
         self.lrc_offset_ms = int(off)
         self.lrc_offset_source = "captions"
         _log("youtube_caption_offset", offset_ms=int(off), prev_ms=prev, cues=len(cues))
+        self._persist_locked_timing()
 
     def _ingest_sources(self, snap: SourceSnapshot) -> bool:
         live_changed = snap.live_lines != self._live_lines
@@ -437,6 +478,8 @@ class FollowSession:
     def _ear_sync(self) -> None:
         from chordsync.sync.caption_align import CaptionCue, lrc_offset_lock
 
+        if self._timing_remembered:
+            return
         parsed = self.parsed
         heard = self._live_lines
         if parsed is None or not heard or self._ear_done:
@@ -484,6 +527,7 @@ class FollowSession:
                 outliers=lock.outliers,
             )
             self._ear_done = True
+            self._persist_locked_timing()
 
     def _follow_chart_live(self, duration_ms: int | None) -> None:
         from chordsync.sync.ear_follow import MIN_WORDS as EAR_MIN_WORDS

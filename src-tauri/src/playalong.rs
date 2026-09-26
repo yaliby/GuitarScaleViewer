@@ -64,7 +64,7 @@ impl Default for PlayAlongSidecar {
     }
 }
 
-fn hide_console(#[cfg_attr(not(windows), allow(unused_variables))] command: &mut Command) {
+pub(crate) fn hide_console(#[cfg_attr(not(windows), allow(unused_variables))] command: &mut Command) {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -101,7 +101,7 @@ fn read_line(
     })?
 }
 
-fn python_command() -> String {
+pub(crate) fn python_command() -> String {
     std::env::var("CHORDSYNC_PYTHON")
         .ok()
         .map(|s| s.trim().to_string())
@@ -142,7 +142,7 @@ fn search_roots() -> Vec<PathBuf> {
     roots
 }
 
-fn sidecar_script() -> Option<PathBuf> {
+pub(crate) fn sidecar_script() -> Option<PathBuf> {
     if let Ok(configured) = std::env::var("CHORDSYNC_SIDECAR") {
         let path = PathBuf::from(configured.trim());
         if path.is_file() {
@@ -159,7 +159,7 @@ fn sidecar_script() -> Option<PathBuf> {
         .find(|path| path.is_file())
 }
 
-fn chordsync_package_root(script: &Path) -> PathBuf {
+pub(crate) fn chordsync_package_root(script: &Path) -> PathBuf {
     if let Ok(configured) = std::env::var("CHORDSYNC_ROOT") {
         let path = PathBuf::from(configured.trim());
         if path.join("chordsync").join("__init__.py").is_file() {
@@ -178,7 +178,7 @@ fn chordsync_package_root(script: &Path) -> PathBuf {
         .unwrap_or_else(|| script.to_path_buf())
 }
 
-fn venv_python(script: &Path) -> Option<PathBuf> {
+pub(crate) fn venv_python(script: &Path) -> Option<PathBuf> {
     let root = script.parent()?;
     let unix = root.join(".venv").join("bin").join("python");
     if unix.is_file() {
@@ -347,6 +347,32 @@ impl PlayAlongSidecar {
             *guard = None;
         }
     }
+
+    fn memory(&self, request: serde_json::Value) -> Result<serde_json::Value, String> {
+        let mut guard = self
+            .worker
+            .lock()
+            .map_err(|_| "chordsync sidecar lock poisoned".to_string())?;
+        if guard.is_none() {
+            *guard = Some(spawn_worker()?);
+        }
+        let mut body = request;
+        if !body.is_object() {
+            body = serde_json::json!({});
+        }
+        body["op"] = serde_json::json!("memory");
+        match request_json(
+            guard.as_mut().expect("worker just spawned"),
+            &body,
+            Duration::from_secs(15),
+        ) {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                *guard = None;
+                Err(error)
+            }
+        }
+    }
 }
 
 static SIDECAR: OnceLock<PlayAlongSidecar> = OnceLock::new();
@@ -403,4 +429,9 @@ pub fn follow_playalong(
         playing,
         dev,
     })
+}
+
+#[tauri::command]
+pub fn song_memory(request: serde_json::Value) -> Result<serde_json::Value, String> {
+    sidecar().memory(request)
 }

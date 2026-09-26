@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-lookup-track-capture"
+description = "Allows looking up a previously captured audio file."
+commands.allow = ["lookup_track_capture"]

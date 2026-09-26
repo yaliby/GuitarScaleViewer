@@ -1,0 +1,54 @@
+.harmonia-root {
+  color-scheme: dark;
+  --bg: #111719;
+  --surface: #182023;
+  --raised: #1d272a;
+  --line: #303b3e;
+  --text: #eeeae1;
+  --muted: #99a7aa;
+  --accent: #bce7ce;
+  --ink: #18382a;
+  --warning: #e6bc82;
+  --danger: #f0aaa0;
+  --space: 8px;
+  --radius: 10px;
+  --radius-small: 6px;
+  --motion-fast: 140ms;
+  --motion-normal: 260ms;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  font-synthesis: none;
+}.harmonia-root, .harmonia-root * {
+  box-sizing: border-box;
+}.harmonia-root {
+  margin: 0;
+  min-width: 360px;
+  background: var(--bg);
+  color: var(--text);
+}.harmonia-root button, .harmonia-root input, .harmonia-root select {
+  font: inherit;
+}.harmonia-root button {
+  cursor: pointer;
+}.harmonia-root button, .harmonia-root a, .harmonia-root input, .harmonia-root select {
+  -webkit-tap-highlight-color: transparent;
+}.harmonia-root :focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 5px;
+}.harmonia-root button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}.harmonia-root button {
+  color: inherit;
+}.harmonia-root button, .harmonia-root input, .harmonia-root select {
+  border-radius: var(--radius-small);
+}.harmonia-root input, .harmonia-root select {
+  accent-color: var(--accent);
+}.harmonia-root ::selection {
+  background: var(--accent);
+  color: var(--ink);
+}
+@media (prefers-reduced-motion: reduce) {.harmonia-root, .harmonia-root *, .harmonia-root *::before, .harmonia-root *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}

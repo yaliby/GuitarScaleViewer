@@ -138,7 +138,8 @@ async function resolveCloudLegs(
   await waitFor(() => {
     expect(['hit', 'miss']).toContain(result.current.cloudState);
   });
-  expect(fetchSpy).not.toHaveBeenCalled();
+  const urls = fetchSpy.mock.calls.map((call) => String(call[0]));
+  expect(urls.every((url) => url.includes('/chordsync/memory'))).toBe(true);
   const hit = result.current.cloudHit;
   const legs = {
     verified: hit?.verified ? { key: hit.key, mode: hit.mode, displayName: hit.displayName } : null,
@@ -425,7 +426,8 @@ describe('verified rows outrank every machine leg', () => {
     );
     await waitFor(() => expect(result.current.cloudState).toBe('hit'));
     expect(result.current.cloudHit).toMatchObject({ key: 'F#', mode: 'minor', verified: true });
-    expect(spy).not.toHaveBeenCalled();
+    const urls = spy.mock.calls.map((call) => String(call[0]));
+    expect(urls.every((url) => url.includes('/chordsync/memory'))).toBe(true);
   });
 });
 

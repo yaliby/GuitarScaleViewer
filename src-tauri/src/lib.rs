@@ -12,15 +12,17 @@ pub mod key_detection;
 pub mod key_engine;
 pub mod key_reranker;
 mod media_session;
+mod harmonia_recognition;
 mod playalong;
+mod song_capture;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
+            use tauri::Manager;
             // Dedicated log file that resets on every run.
             {
-                use tauri::Manager;
                 use tauri_plugin_log::{Target, TargetKind};
                 let configured_dir = std::env::var("GSV_LOG_DIR")
                     .ok()
@@ -64,6 +66,9 @@ pub fn run() {
             // unconditionally rather than re-gating on Windows only.
             media_session::spawn_media_session_poller(app.handle().clone());
             key_engine::spawn_key_engine(app.handle().clone());
+            app.manage(std::sync::Arc::new(
+                harmonia_recognition::RecognitionService::default(),
+            ));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -76,7 +81,14 @@ pub fn run() {
             key_engine::set_cloud_resolution,
             key_engine::get_cloud_resolution,
             playalong::resolve_playalong,
-            playalong::follow_playalong
+            playalong::follow_playalong,
+            song_capture::capture_track,
+            song_capture::lookup_track_capture,
+            song_capture::list_track_captures,
+            harmonia_recognition::recognition_available,
+            harmonia_recognition::recognition_run,
+            harmonia_recognition::recognition_cancel,
+            playalong::song_memory
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

@@ -100,6 +100,7 @@ describe('useCloudKeyResolution', () => {
     const { result } = renderHook(() => useCloudKeyResolution(media({}), NO_LOCAL_DETECTION));
     await waitFor(() => expect(result.current.cloudState).toBe('miss'));
     expect(result.current.cloudHit).toBeNull();
-    expect(spy).not.toHaveBeenCalled();
+    const urls = spy.mock.calls.map((call) => String(call[0]));
+    expect(urls.every((url) => url.includes('/chordsync/memory'))).toBe(true);
   });
 });

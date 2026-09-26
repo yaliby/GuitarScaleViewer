@@ -157,6 +157,119 @@ def _package_info() -> dict[str, Any]:
     }
 
 
+def _parsed_from_lyrics(lyrics: dict[str, Any] | None):
+    """Rebuild the LRC clock from a saved lyric list. No network."""
+    if not isinstance(lyrics, dict):
+        return None
+    synced = lyrics.get("synced")
+    if not isinstance(synced, list) or not synced:
+        return None
+    from chordsync.core.models import TimedLyricLine
+    from chordsync.core.scoring import normalize_text
+    from chordsync.lyrics.lrc_parser import ParsedLrc
+
+    lines = []
+    for index, row in enumerate(synced):
+        if not isinstance(row, dict):
+            continue
+        try:
+            time_ms = int(row.get("timeMs"))
+        except (TypeError, ValueError):
+            continue
+        text = str(row.get("text") or "")
+        try:
+            line_index = int(row.get("index"))
+        except (TypeError, ValueError):
+            line_index = index
+        lines.append(
+            TimedLyricLine(
+                time_ms=time_ms,
+                raw_text=text,
+                normalized_text=normalize_text(text),
+                line_index=line_index,
+            )
+        )
+    if not lines:
+        return None
+    return ParsedLrc(lines=tuple(lines))
+
+
+def _remembered_timing(playalong: dict[str, Any]) -> tuple[int | None, str | None]:
+    timing = playalong.get("timing")
+    if not isinstance(timing, dict) or timing.get("locked") is not True:
+        return None, None
+    source = timing.get("lrcOffsetSource")
+    offset = timing.get("lrcOffsetMs")
+    if source not in ("captions", "live") or not isinstance(offset, int):
+        return None, None
+    return offset, str(source)
+
+
+def _load_saved_playalong(
+    playalong: dict[str, Any],
+    *,
+    title: str,
+    artist: str | None,
+    source_app: str | None,
+    track_id: str,
+    player_duration_ms: int | None,
+    gen: int,
+) -> dict[str, Any]:
+    """Hand a saved chord page back to the screen and the lyric clock."""
+    lyrics = playalong.get("lyrics") if isinstance(playalong.get("lyrics"), dict) else None
+    parsed = _parsed_from_lyrics(lyrics)
+    lines = playalong.get("chartLyricLines")
+    matcher_lines = [str(line) for line in lines] if isinstance(lines, list) else []
+    lyrics_state = "synced" if parsed is not None else "none"
+    offset_ms, offset_source = _remembered_timing(playalong)
+    lrc_duration = playalong.get("lrcDurationMs")
+    with _RESOLVE_GEN_LOCK:
+        stale = gen > 0 and gen < _RESOLVE_GEN
+        if not stale:
+            ENGINE.load(
+                parsed=parsed,
+                lines=matcher_lines,
+                lrc_duration_ms=int(lrc_duration) if isinstance(lrc_duration, int) else None,
+                app_name=source_app,
+                track_id=track_id,
+                lyrics_state=lyrics_state,
+                chart_view="chords",
+                player_duration_ms=player_duration_ms,
+                song_title=title,
+                song_artist=artist,
+                remembered_offset_ms=offset_ms,
+                remembered_offset_source=offset_source,
+            )
+    payload = {
+        "status": playalong.get("status") or "chart",
+        "reason": playalong.get("reason"),
+        "track": playalong.get("track"),
+        "lyrics": lyrics,
+        "chart": playalong.get("chart"),
+        "chartHtml": playalong.get("chartHtml"),
+        "chartLyricLines": matcher_lines,
+        "remembered": True,
+        **_package_info(),
+    }
+    return payload
+
+
+def _save_playalong(title: str, artist: str | None, payload: dict[str, Any], lrc_duration_ms: int | None) -> None:
+    chart = payload.get("chart")
+    if not isinstance(chart, dict) or not str(chart.get("sourceUrl") or "").strip():
+        return
+    try:
+        from song_memory import SongMemory
+
+        SongMemory().remember_playalong(
+            title,
+            artist,
+            {**payload, "lrcDurationMs": lrc_duration_ms},
+        )
+    except Exception:
+        traceback.print_exc(limit=3, file=sys.stderr)
+
+
 async def _resolve(req: dict[str, Any]) -> dict[str, Any]:
     from chordsync.browser.chart_html import render_chart_html
     from chordsync.browser.chart_scrape import scrape_chart
@@ -209,6 +322,23 @@ async def _resolve(req: dict[str, Any]) -> dict[str, Any]:
         long_track=bool(player_duration_ms and player_duration_ms > 15 * 60_000),
         language_hint="he" if has_hebrew(title) or has_hebrew(artist or "") else None,
     )
+
+    try:
+        from song_memory import SongMemory
+
+        saved = SongMemory().playalong_for(title, artist)
+    except Exception:
+        saved = None
+    if saved is not None:
+        return _load_saved_playalong(
+            saved,
+            title=title,
+            artist=artist,
+            source_app=source_app,
+            track_id=track_id,
+            player_duration_ms=player_duration_ms,
+            gen=gen,
+        )
 
     cfg = load_config()
     db = Database(cfg.resolved_db_path())
@@ -320,9 +450,11 @@ async def _resolve(req: dict[str, Any]) -> dict[str, Any]:
                 lyrics_state=lyrics_state,
                 chart_view=chart_view,
                 player_duration_ms=player_duration_ms,
+                song_title=title,
+                song_artist=artist,
             )
 
-    return {
+    payload = {
         "status": status,
         "reason": chart_reason,
         "track": {
@@ -338,6 +470,9 @@ async def _resolve(req: dict[str, Any]) -> dict[str, Any]:
         "chartLyricLines": matcher_lines,
         **_package_info(),
     }
+    if not stale:
+        _save_playalong(title, artist, payload, lrc_duration_ms)
+    return payload
 
 
 def _handle(req: dict[str, Any]) -> dict[str, Any]:
@@ -346,8 +481,17 @@ def _handle(req: dict[str, Any]) -> dict[str, Any]:
         return {"status": "ok", "op": "ping", **_package_info()}
     if op == "resolve":
         return asyncio.run(_resolve(req))
+    if op == "memory":
+        from song_memory import handle_memory
+
+        return handle_memory(req)
     if op == "follow":
         return ENGINE.follow(req)
+    if op in {"capture", "lookup", "status", "list", "plan"}:
+        from track_capture import emit_progress_stderr, handle_request
+
+        progress = emit_progress_stderr if op == "capture" else None
+        return handle_request(req, progress=progress)
     return {"status": "error", "reason": f"unknown_op:{op}"}
 
 
@@ -400,10 +544,54 @@ def _http_serve(host: str, port: int) -> int:
             self._cors()
             self.end_headers()
 
+        def _send_file(self, path: Path, content_type: str) -> None:
+            data = path.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self._cors()
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "private, max-age=3600")
+            self.end_headers()
+            self.wfile.write(data)
+
         def do_GET(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
             if parsed.path in ("/health", "/", "/ping"):
                 return self._send(200, {"ready": True, "status": "ok", **_package_info()})
+            if parsed.path in ("/audio", "/artwork"):
+                from track_capture import get_track
+
+                qs = parse_qs(parsed.query)
+                cache_id = (qs.get("id") or [""])[0].strip()
+                track = get_track(cache_id) if cache_id else None
+                if track is None:
+                    return self._send(404, {"status": "error", "reason": "not_found"})
+                if parsed.path == "/artwork":
+                    art = Path(track.artwork_path) if track.artwork_path else None
+                    if art is None or not art.is_file():
+                        return self._send(404, {"status": "error", "reason": "no_artwork"})
+                    suffix = art.suffix.lower()
+                    mime = {".png": "image/png", ".webp": "image/webp"}.get(suffix, "image/jpeg")
+                    return self._send_file(art, mime)
+                audio = Path(track.path)
+                if not audio.is_file():
+                    return self._send(404, {"status": "error", "reason": "missing_file"})
+                mime = {".m4a": "audio/mp4", ".aac": "audio/aac", ".ogg": "audio/ogg"}.get(
+                    audio.suffix.lower(), "audio/mpeg"
+                )
+                return self._send_file(audio, mime)
+            if parsed.path in ("/captures", "/capture/list"):
+                try:
+                    return self._send(200, _handle({"op": "list"}))
+                except Exception as exc:
+                    return self._send(500, {"status": "error", "reason": str(exc)})
+            if parsed.path in ("/capture", "/lookup"):
+                qs = {k: v[0] for k, v in parse_qs(parsed.query).items() if v}
+                qs["op"] = "lookup"
+                try:
+                    return self._send(200, _handle(qs))
+                except Exception as exc:
+                    return self._send(500, {"status": "error", "reason": str(exc)})
             if parsed.path == "/resolve":
                 qs = {k: v[0] for k, v in parse_qs(parsed.query).items() if v}
                 qs["op"] = "resolve"
@@ -414,6 +602,14 @@ def _http_serve(host: str, port: int) -> int:
                         500,
                         {"status": "error", "reason": str(exc), "track": None, "lyrics": None, "chart": None},
                     )
+            if parsed.path == "/memory":
+                qs = {k: v[0] for k, v in parse_qs(parsed.query).items() if v}
+                qs["op"] = "memory"
+                qs.setdefault("action", "get")
+                try:
+                    return self._send(200, _handle(qs))
+                except Exception as exc:
+                    return self._send(500, {"status": "error", "reason": str(exc)})
             if parsed.path == "/follow":
                 qs = {k: v[0] for k, v in parse_qs(parsed.query).items() if v}
                 qs["op"] = "follow"
@@ -425,7 +621,7 @@ def _http_serve(host: str, port: int) -> int:
 
         def do_POST(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
-            if parsed.path not in ("/resolve", "/follow"):
+            if parsed.path not in ("/resolve", "/follow", "/capture", "/lookup", "/memory"):
                 return self._send(404, {"status": "error", "reason": "not_found"})
             length = int(self.headers.get("Content-Length") or 0)
             raw = self.rfile.read(length) if length else b"{}"
@@ -433,7 +629,7 @@ def _http_serve(host: str, port: int) -> int:
                 req = json.loads(raw.decode("utf-8") or "{}")
                 if not isinstance(req, dict):
                     raise ValueError("request must be an object")
-                req["op"] = parsed.path.lstrip("/")
+                req["op"] = "lookup" if parsed.path == "/lookup" else parsed.path.lstrip("/")
                 return self._send(200, _handle(req))
             except Exception as exc:
                 return self._send(
@@ -461,6 +657,22 @@ def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if "--serve" in args:
         return _serve()
+    if "--capture" in args or "--lookup" in args or "--plan" in args:
+        from track_capture import emit_progress_stderr, handle_request
+
+        flag = next(flag for flag in ("--capture", "--lookup", "--plan") if flag in args)
+        idx = args.index(flag)
+        raw = args[idx + 1] if idx + 1 < len(args) and not args[idx + 1].startswith("-") else ""
+        if not raw:
+            raw = sys.stdin.read()
+        req = json.loads(raw or "{}")
+        if not isinstance(req, dict):
+            raise SystemExit("capture request must be a JSON object")
+        req["op"] = str(req.get("op") or "").strip() or flag.lstrip("-")
+        progress = emit_progress_stderr if req["op"] == "capture" else None
+        payload = handle_request(req, progress=progress)
+        _emit(payload)
+        return 0 if payload.get("status") != "error" else 1
     if "--http" in args:
         idx = args.index("--http")
         bind = args[idx + 1] if idx + 1 < len(args) and not args[idx + 1].startswith("-") else "127.0.0.1:18766"
@@ -474,7 +686,10 @@ def main(argv: list[str] | None = None) -> int:
         payload = _handle({"op": "ping"})
         _emit(payload)
         return 0
-    print("usage: chordsync_sidecar.py --serve|--http [host:port]|--ping", file=sys.stderr)
+    print(
+        "usage: chordsync_sidecar.py --serve|--http [host:port]|--ping|--capture JSON|--lookup JSON",
+        file=sys.stderr,
+    )
     return 2
 
 

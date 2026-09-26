@@ -240,6 +240,56 @@ export function resolutionLed(state: string): { tone: LedTone; pulse: boolean } 
   }
 }
 
+/** Third deck lamp: the song file saving in the background, not the key. */
+export function captureLed(
+  status: string,
+  autoEnabled = false,
+): { tone: LedTone; pulse: boolean } {
+  switch (status) {
+    case 'capturing':
+      return { tone: 'hold', pulse: true };
+    case 'ready':
+      return { tone: 'live', pulse: false };
+    case 'error':
+      return { tone: 'fault', pulse: false };
+    default:
+      return { tone: autoEnabled ? 'hold' : 'off', pulse: false };
+  }
+}
+
+export function captureStageLabel(stage: string | null | undefined): string {
+  switch (stage) {
+    case 'extract':
+    case 'start':
+      return 'Finding';
+    case 'download':
+      return 'Downloading';
+    case 'encode':
+      return 'Encoding';
+    case 'copy':
+      return 'Saving';
+    case 'cache':
+      return 'Already saved';
+    case 'done':
+      return 'Saved';
+    default:
+      return 'Saving';
+  }
+}
+
+export function captureLampLabel(status: string, autoEnabled = false): string {
+  switch (status) {
+    case 'capturing':
+      return 'Saving in the background';
+    case 'ready':
+      return 'Song saved';
+    case 'error':
+      return 'Save failed';
+    default:
+      return autoEnabled ? 'Auto-save armed' : 'Auto-save off';
+  }
+}
+
 /**
  * One line for the heading pill: what the pipeline is doing right now, phrased for a player rather
  * than for the log. Ordered by what overrides what — a held snapshot beats everything, a key the

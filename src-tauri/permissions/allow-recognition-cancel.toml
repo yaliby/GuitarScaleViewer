@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-recognition-cancel"
+description = "Allows cancelling an in-flight Harmonia recognition job."
+commands.allow = ["recognition_cancel"]

@@ -1,4 +1,6 @@
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useMemo,
@@ -20,6 +22,7 @@ import {
   Headphones,
   ListMusic,
   Menu,
+  Music2,
   RotateCcw,
   Save,
   ScrollText,
@@ -40,7 +43,9 @@ import PlayAlongScreen from "./PlayAlongScreen";
 import { Transport } from "./components/Transport";
 import { useCloudKeyResolution } from "./hooks/useCloudKeyResolution";
 import { useDetectedKey } from "./hooks/useDetectedKey";
+import { usePlayAlong } from "./hooks/usePlayAlong";
 import { useMediaSession } from "./hooks/useMediaSession";
+import { useTrackCapture } from "./hooks/useTrackCapture";
 import { getPositionFrets, getPositionWindow } from "./music/positions";
 import {
   DEFAULT_SESSION,
@@ -57,8 +62,9 @@ import {
   clearsApplyGate,
   fuseKey,
   shouldRevise,
-  type FusedKey,
 } from "./services/keyFusion";
+import { readNeckFollow, useNeckFollow } from "./neckFollow";
+import { rememberScale } from "./services/songMemory";
 import {
   SCALE_TYPES_ORDERED,
   SCALE_TYPE_LABELS,
@@ -68,6 +74,7 @@ import {
 import { buildScaleNotes, SCALE_DEGREE_LABELS } from "./scaleSpell";
 import { TUNING_PRESETS } from "./tunings";
 
+const HarmoniaScreen = lazy(() => import("./harmonia/HarmoniaScreen"));
 
 const ROOTS = [
   "C",
@@ -164,13 +171,9 @@ export default function App() {
   const [guideOpen, setGuideOpen] = useState(false);
   const [setupName, setSetupName] = useState("");
   const [toast, setToast] = useState<string | null>(null);
-  /* Apply ships engaged: the neck takes the pipeline's key until the player switches it off. */
-  const [applyDetected, setApplyDetected] = useState(true);
-  /* The key the pipeline put on the neck, kept so the revision margin has something to beat. */
-  const [neckKey, setNeckKey] = useState<FusedKey | null>(null);
-  const prevApplyRef = useRef(applyDetected);
-  /* A "follow the song again" the gate has not let through yet. See the effect that reads it. */
-  const applyPendingRef = useRef(false);
+  /* One follow decision for every room. Leaving Live Jam does not drop the settled key. */
+  const { applyDetected, setApplyDetected, neckKey, setNeckKey } = useNeckFollow();
+  const follow = readNeckFollow();
   const [selectedChord, setSelectedChord] = useState<number | null>(null);
   const [voicingIndex, setVoicingIndex] = useState(0);
   const [playbackMode, setPlaybackMode] = useState<PlaybackMode>("scale");
@@ -178,8 +181,11 @@ export default function App() {
   const auditionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const media = useMediaSession();
+  /* Keeps lyric follow alive while Play Along is not on screen. */
+  usePlayAlong(media);
+  const capture = useTrackCapture(media);
   const { detectedKey, resetDetection } = useDetectedKey();
-  const cloud = useCloudKeyResolution(media, detectedKey);
+  const cloud = useCloudKeyResolution(media, detectedKey, view !== "jam");
   const audio = usePracticeAudio(session.volume);
   const updateSession = useCallback(
     (patch: Partial<PracticeSession>) =>
@@ -393,12 +399,12 @@ export default function App() {
      re-enable waits in `applyPendingRef` until a reading clears the gate rather than being spent
      against one that cannot pass. */
   useEffect(() => {
-    if (!prevApplyRef.current && applyDetected) {
-      applyPendingRef.current = true;
+    if (!follow.prevApply && applyDetected) {
+      follow.applyPending = true;
     }
-    prevApplyRef.current = applyDetected;
+    follow.prevApply = applyDetected;
     if (!applyDetected) {
-      applyPendingRef.current = false;
+      follow.applyPending = false;
       return;
     }
     if (view === "jam") {
@@ -410,8 +416,8 @@ export default function App() {
     if (!clearsApplyGate(fused, session.applyThreshold)) {
       return;
     }
-    const justEnabled = applyPendingRef.current;
-    applyPendingRef.current = false;
+    const justEnabled = follow.applyPending;
+    follow.applyPending = false;
     if (!justEnabled && !shouldRevise(neckKey, fused)) {
       return;
     }
@@ -557,6 +563,11 @@ export default function App() {
   };
   const changeView = (next: StudioView) => {
     audio.stop();
+    if (view === "songs") {
+      void import("./harmonia/composition").then((mod) =>
+        mod.pauseHarmoniaPlayback(),
+      );
+    }
     setPlaybackMode(next === "progressions" ? "progression" : "scale");
     window.scrollTo({ top: 0, behavior: "instant" });
     setView(next);
@@ -945,10 +956,24 @@ export default function App() {
       onRetry={() => void resetDetection()}
       root={session.root}
       scale={session.scaleType}
+      capture={capture}
+      scaleSaved={cloud.cloudHit?.source === "remembered"}
+      onRememberScale={
+        media.title?.trim() && fused.root && fused.scale
+          ? () => {
+              void rememberScale({
+                title: media.title ?? "",
+                artist: media.artist ?? "",
+                key: fused.root ?? "",
+                mode: fused.scale ?? "",
+              });
+            }
+          : undefined
+      }
     />
   );
   /* Live Jam is the whole window: the neck needs it, so the nav folds into the hamburger. */
-  const immersive = view === "jam" || view === "playalong";
+  const immersive = view === "jam" || view === "playalong" || view === "songs";
 
   return (
     <MotionConfig reducedMotion="user">
@@ -986,6 +1011,15 @@ export default function App() {
             >
               <ScrollText size={17} />
               <span>Play Along</span>
+              <i className="nav-dot" />
+            </button>
+            <button
+              className={`nav-item ${view === "songs" ? "active" : ""}`}
+              aria-current={view === "songs" ? "page" : undefined}
+              onClick={() => changeView("songs")}
+            >
+              <Music2 size={17} />
+              <span>Songs</span>
               <i className="nav-dot" />
             </button>
             <button
@@ -1148,6 +1182,7 @@ export default function App() {
                 onChange={updateSession}
                 menuOpen={sidebarOpen}
                 onToggleMenu={() => setSidebarOpen((open) => !open)}
+                followSong={view === "jam"}
               />
             }
             playalong={
@@ -1159,6 +1194,14 @@ export default function App() {
                 onToggleMenu={() => setSidebarOpen((open) => !open)}
                 onOpenJam={() => changeView("jam")}
               />
+            }
+            songs={
+              <Suspense fallback={<div className="harmonia-empty">Opening the song library…</div>}>
+                <HarmoniaScreen
+                  menuOpen={sidebarOpen}
+                  onToggleMenu={() => setSidebarOpen((open) => !open)}
+                />
+              </Suspense>
             }
             session={session}
             notes={notes}
@@ -1188,7 +1231,7 @@ export default function App() {
             onAudition={audition}
             onNavigate={changeView}
           />
-          {view !== "jam" && view !== "playalong" && (
+          {view !== "jam" && view !== "playalong" && view !== "songs" && (
             <Transport
               session={session}
               onChange={updateSession}

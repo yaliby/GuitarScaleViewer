@@ -1,0 +1,14 @@
+Harmonia experimental structured chord model E004-transposition-tcn
+
+Trained using GuitarSet 1.1.0 by Qingyang Xi, Rachel M. Bittner,
+Johan Pauwels, Xuzhou Ye and Juan P. Bello.
+Source: https://doi.org/10.5281/zenodo.3371780
+Dataset license: Creative Commons Attribution 4.0 International
+https://creativecommons.org/licenses/by/4.0/
+
+Transformations: microphone audio decoding/resampling, chroma/bass/energy/flux
+features, reduction of performed chord labels to component targets,
+feature-space pitch augmentation, supervised neural training, ONNX export.
+Original audio and annotations are not included. Dataset authors do not
+endorse Harmonia. This experimental model has substantial accuracy limits;
+see docs/ml-model.md and docs/evaluation.md.

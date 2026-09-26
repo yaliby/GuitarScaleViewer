@@ -9,9 +9,11 @@ import {
 } from "lucide-react";
 import type { DetectedKeyState } from "../hooks/useDetectedKey";
 import type { MediaSessionUiState } from "../hooks/useMediaSession";
+import type { TrackCaptureApi } from "../hooks/useTrackCapture";
 import type { useCloudKeyResolution } from "../hooks/useCloudKeyResolution";
 import type { FusedKey } from "../services/keyFusion";
 import { musicalLabel } from "./Fretboard";
+import { TrackCaptureBar } from "./TrackCaptureBar";
 
 type Props = {
   media: MediaSessionUiState;
@@ -36,6 +38,10 @@ type Props = {
   onRetry: () => void;
   root: string;
   scale: string;
+  capture?: TrackCaptureApi;
+  /** Mark the scale on the neck as the true scale of the song that's playing. */
+  onRememberScale?: () => void;
+  scaleSaved?: boolean;
 };
 export function ListeningPanel({
   media,
@@ -48,6 +54,9 @@ export function ListeningPanel({
   onRetry,
   root,
   scale,
+  capture,
+  onRememberScale,
+  scaleSaved = false,
 }: Props) {
   const [details, setDetails] = useState(false);
   const desktop = media.playbackStatus !== "media_session_unavailable";
@@ -81,7 +90,11 @@ export function ListeningPanel({
       </div>
       <div className="track-display">
         <div className="track-art">
-          <AudioLines size={23} />
+          {capture?.track?.artworkUrl ? (
+            <img src={capture.track.artworkUrl} alt="" />
+          ) : (
+            <AudioLines size={23} />
+          )}
         </div>
         <div>
           <strong>{media.title || "Your next jam starts here"}</strong>
@@ -95,7 +108,9 @@ export function ListeningPanel({
           {!desktop
             ? "Open the desktop app to identify the key of music playing on your computer. All practice tools work here."
             : fused.certainty === "verified"
-              ? "Found in the verified song library."
+              ? scaleSaved
+                ? "Saved for this song. This scale will not be analyzed again."
+                : "Found in the verified song library."
               : name
                 ? !applyDetected
                   ? "Apply is off, so the neck is staying where it is. Switch Apply on to take this key."
@@ -120,6 +135,7 @@ export function ListeningPanel({
             .join(" · ")}
         </div>
       ) : null}
+      {capture ? <TrackCaptureBar capture={capture} /> : null}
       <div className="listening-actions">
         <button
           className={`icon-button apply-toggle ${applyDetected ? "is-active" : ""}`}
@@ -135,6 +151,16 @@ export function ListeningPanel({
           {applyDetected ? <Zap size={16} /> : <ZapOff size={16} />}
           Apply
         </button>
+        {onRememberScale ? (
+          <button
+            type="button"
+            className="button subtle"
+            onClick={onRememberScale}
+            aria-label={scaleSaved ? "Scale saved for this song" : "Mark this scale as right"}
+          >
+            {scaleSaved ? "Scale saved for this song" : "Mark this scale as right"}
+          </button>
+        ) : null}
       </div>
       {!applyDetected && (
         <p className="lock-description">

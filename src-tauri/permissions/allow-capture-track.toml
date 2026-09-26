@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-capture-track"
+description = "Allows capturing a local audio file for the current song or a pasted YouTube link."
+commands.allow = ["capture_track"]
