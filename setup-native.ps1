@@ -42,6 +42,53 @@ function Install-ChordSyncVenv {
     Set-Content -Path $stampPath -Value $stamp -NoNewline
 }
 
+function Install-BundledFfmpeg {
+    $binDir = Join-Path $toolsDir 'ffmpeg/bin'
+    $ffmpeg = Join-Path $binDir 'ffmpeg.exe'
+    $ffprobe = Join-Path $binDir 'ffprobe.exe'
+    if ((Test-Path $ffmpeg) -and (Test-Path $ffprobe)) {
+        return
+    }
+    $systemFfmpeg = Get-Command ffmpeg -ErrorAction SilentlyContinue
+    $systemProbe = Get-Command ffprobe -ErrorAction SilentlyContinue
+    if ($systemFfmpeg -and $systemProbe) {
+        $encoders = & $systemFfmpeg.Source -hide_banner -encoders 2>&1 | Out-String
+        if ($encoders -match 'libmp3lame') { return }
+    }
+    # GPL shared build: libmp3lame is required to save captures as MP3. Not committed; .tools is gitignored.
+    $url = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-gpl-shared-8.1.zip'
+    $zip = Join-Path $toolsDir 'ffmpeg-win64-gpl.zip'
+    $extract = Join-Path $toolsDir 'ffmpeg-extract'
+    Write-Host 'Downloading FFmpeg so saved songs can be encoded to MP3...'
+    if (Test-Path $zip) { Remove-Item -Force $zip }
+    $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+    if ($curl) {
+        & curl.exe -L --fail --retry 3 -o $zip $url
+        if ($LASTEXITCODE -ne 0) { throw 'FFmpeg download failed.' }
+    } else {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
+    }
+    if (Test-Path $extract) { Remove-Item -Recurse -Force $extract }
+    Expand-Archive -Path $zip -DestinationPath $extract -Force
+    $found = Get-ChildItem -Path $extract -Recurse -Filter ffmpeg.exe | Select-Object -First 1
+    if (-not $found) { throw 'FFmpeg archive did not contain ffmpeg.exe.' }
+    if (Test-Path $binDir) { Remove-Item -Recurse -Force $binDir }
+    New-Item -ItemType Directory -Force -Path $binDir | Out-Null
+    Copy-Item -Path (Join-Path $found.DirectoryName '*') -Destination $binDir -Force
+    Remove-Item -Force $zip -ErrorAction SilentlyContinue
+    Remove-Item -Recurse -Force $extract -ErrorAction SilentlyContinue
+    if (-not (Test-Path $ffmpeg) -or -not (Test-Path $ffprobe)) {
+        throw 'FFmpeg setup did not produce ffmpeg.exe and ffprobe.exe.'
+    }
+    $encoders = & $ffmpeg -hide_banner -encoders 2>&1 | Out-String
+    if ($encoders -notmatch 'libmp3lame') {
+        throw 'Downloaded FFmpeg cannot encode MP3 (libmp3lame missing).'
+    }
+}
+
+Install-BundledFfmpeg
+
 if ($ChordSyncOnly) {
     Install-ChordSyncVenv
     Write-Host 'ChordSync Python environment is ready.'

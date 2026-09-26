@@ -408,13 +408,71 @@ def which_tool(name: str) -> str | None:
     return found if found else None
 
 
+def _project_root() -> Path | None:
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "setup-native.ps1").is_file() and (parent / "src-tauri").is_dir():
+            return parent
+    return None
+
+
+def _executable(directory: Path, name: str) -> Path | None:
+    for filename in (f"{name}.exe", name):
+        candidate = directory / filename
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _with_ffprobe(ffmpeg: Path) -> str | None:
+    """yt-dlp encodes with the ffprobe that sits next to ffmpeg."""
+    if ffmpeg.is_file() and _executable(ffmpeg.parent, "ffprobe") is not None:
+        return str(ffmpeg)
+    return None
+
+
+def resolve_ffmpeg(
+    env: Mapping[str, str] | None = None,
+    root: Path | None = None,
+    which: Callable[[str], str | None] | None = None,
+) -> str | None:
+    """Project-local FFmpeg first, then PATH. The desktop launcher downloads the local one."""
+    environ = os.environ if env is None else env
+    configured = (environ.get("FFMPEG_PATH") or environ.get("GSV_FFMPEG") or "").strip()
+    if configured:
+        path = Path(configured).expanduser()
+        if path.is_dir():
+            found = _executable(path, "ffmpeg")
+            if found is not None:
+                paired = _with_ffprobe(found)
+                if paired:
+                    return paired
+        else:
+            paired = _with_ffprobe(path)
+            if paired:
+                return paired
+    project = _project_root() if root is None else root
+    if project is not None:
+        found = _executable(project / ".tools" / "ffmpeg" / "bin", "ffmpeg")
+        if found is not None:
+            paired = _with_ffprobe(found)
+            if paired:
+                return paired
+    locate = which if which is not None else which_tool
+    on_path = locate("ffmpeg")
+    if on_path:
+        paired = _with_ffprobe(Path(on_path))
+        if paired:
+            return paired
+    return None
+
+
 def _require_ffmpeg() -> str:
-    path = which_tool("ffmpeg")
+    path = resolve_ffmpeg()
     if path:
         return path
     raise CaptureError(
         "ffmpeg_missing",
-        "FFmpeg is not on PATH. Install it so captured audio can be encoded to MP3.",
+        "FFmpeg is not available yet. Run the desktop app again so it can download FFmpeg into .tools.",
     )
 
 

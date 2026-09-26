@@ -192,6 +192,9 @@ and an unreadable row is skipped instead of putting a broken root on the neck.
   `src-tauri/sidecars/chordsync/.venv`, installs `requirements.txt` (including
   rapidfuzz), and points both Vite and Tauri at that `python.exe`. The first
   launch after this fix downloads those packages.
+- **Saving a song says FFmpeg is not available:** run `npm.cmd run desktop` again.
+  The launcher downloads FFmpeg into `.tools/ffmpeg` and uses it to encode MP3.
+  A separate FFmpeg install is not required.
 - **`link.exe` or Windows SDK errors:** install the Visual Studio C++ workload
   and Windows SDK, then reopen PowerShell.
 - **Audio detection is unavailable in the browser:** launch with

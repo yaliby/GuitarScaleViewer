@@ -19,6 +19,12 @@ $env:CHORDSYNC_PYTHON = Join-Path $PSScriptRoot 'src-tauri/sidecars/chordsync/.v
 if (-not (Test-Path $env:CHORDSYNC_PYTHON)) {
     throw "ChordSync Python is missing at $env:CHORDSYNC_PYTHON"
 }
+$ffmpegBin = Join-Path $PSScriptRoot '.tools/ffmpeg/bin'
+$ffmpegExe = Join-Path $ffmpegBin 'ffmpeg.exe'
+if (Test-Path $ffmpegExe) {
+    $env:Path = $ffmpegBin + ';' + $env:Path
+    $env:FFMPEG_PATH = $ffmpegExe
+}
 if (-not (Test-Path 'node_modules')) {
     npm.cmd ci --no-audit --no-fund
     if ($LASTEXITCODE -ne 0) { throw 'Frontend dependency installation failed.' }

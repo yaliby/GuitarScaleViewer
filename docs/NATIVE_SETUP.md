@@ -15,6 +15,8 @@ The setup script uses `.tools/cargo`, `.tools/rustup` and `.tools/analyzer-venv`
 
 Play Along and song memory use a separate environment at `src-tauri/sidecars/chordsync/.venv`. `dev.ps1` creates it (or `./setup-native.ps1 -ChordSyncOnly`) and sets `CHORDSYNC_PYTHON` to `Scripts\python.exe`. That install includes `rapidfuzz` from `src-tauri/sidecars/chordsync/requirements.txt`. The analyzer venv does not, and pointing ChordSync at it fails at startup.
 
+Saving a captured song encodes MP3 with FFmpeg. `dev.ps1` downloads a GPL build into `.tools/ffmpeg` when `ffmpeg.exe` and `ffprobe.exe` are not already there, and puts that directory on `PATH` for Vite and Tauri. The binary is not part of the git checkout.
+
 Keep the Tauri npm API/CLI and Rust runtime in the same 2.10 minor-version family. Their manifest ranges are constrained to this family so an unrelated dependency refresh does not break desktop packaging.
 
 The analyzer is packaged as a PyInstaller directory in `src-tauri/sidecars/key_analyzer/dist/key_analyzer`. Tauri includes this directory under `analyzer` in its resource directory. Discovery first honors `KEY_ANALYZER_SIDECAR`, then uses Tauri's resource directory, followed by development paths. The installed application does not depend on the working directory or a developer's Python/WSL paths.

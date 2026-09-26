@@ -20,7 +20,9 @@ from track_capture import (  # noqa: E402
     lookup_track,
     metadata_cache_id,
     plan_capture,
+    resolve_ffmpeg,
     youtube_video_id,
+    _require_ffmpeg,
 )
 
 
@@ -162,6 +164,45 @@ class StoreShapeTest(unittest.TestCase):
         self.assertEqual(row["webpageUrl"], track.webpage_url)
         self.assertEqual(row["durationMs"], 185000)
         self.assertEqual(row["sourceApp"], "spotify")
+
+
+class FfmpegResolveTest(unittest.TestCase):
+    def test_project_local_binary_does_not_need_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bin_dir = root / ".tools" / "ffmpeg" / "bin"
+            bin_dir.mkdir(parents=True)
+            ffmpeg = bin_dir / "ffmpeg.exe"
+            ffprobe = bin_dir / "ffprobe.exe"
+            ffmpeg.write_bytes(b"")
+            ffprobe.write_bytes(b"")
+            found = resolve_ffmpeg(env={}, root=root, which=lambda _name: None)
+            self.assertEqual(found, str(ffmpeg))
+
+    def test_env_path_wins_over_a_path_binary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            chosen = root / "chosen"
+            chosen.mkdir()
+            ffmpeg = chosen / "ffmpeg.exe"
+            (chosen / "ffprobe.exe").write_bytes(b"")
+            ffmpeg.write_bytes(b"")
+            other = root / "other" / "ffmpeg.exe"
+            other.parent.mkdir()
+            other.write_bytes(b"")
+            found = resolve_ffmpeg(
+                env={"FFMPEG_PATH": str(ffmpeg)},
+                root=root,
+                which=lambda _name: str(other),
+            )
+            self.assertEqual(found, str(ffmpeg))
+
+    def test_missing_ffmpeg_tells_the_launcher_to_download_it(self) -> None:
+        with patch("track_capture.resolve_ffmpeg", return_value=None):
+            with self.assertRaises(CaptureError) as caught:
+                _require_ffmpeg()
+        self.assertEqual(caught.exception.reason, "ffmpeg_missing")
+        self.assertIn(".tools", caught.exception.message)
 
 
 if __name__ == "__main__":

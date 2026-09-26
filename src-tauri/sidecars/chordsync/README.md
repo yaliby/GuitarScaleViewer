@@ -53,4 +53,4 @@ Windows (`dev.ps1` does this and exports `CHORDSYNC_PYTHON`):
 
 That environment is not the key-analyzer venv. ChordSync needs `rapidfuzz` from `requirements.txt`.
 
-Song capture also needs **FFmpeg** on PATH and **yt-dlp** (pulled in by that requirements file). Audio files land in `~/.local/share/fretboard-studio/captures` (or `$GSV_CAPTURE_DIR`).
+Song capture encodes MP3 with FFmpeg. The desktop launcher downloads it into `.tools/ffmpeg` (or uses one already on PATH that includes `libmp3lame` and `ffprobe`). **yt-dlp** comes from `requirements.txt`. Audio files land in `~/.local/share/fretboard-studio/captures` (or `$GSV_CAPTURE_DIR`).

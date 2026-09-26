@@ -128,5 +128,56 @@ if [[ "$port" != "1420" ]]; then
   echo "dev.sh: port 1420 is busy; using $port for the dev server and the webview"
 fi
 
+ensure_ffmpeg() {
+  local dest="$root/.tools/ffmpeg/bin"
+  if [[ -x "$dest/ffmpeg" && -x "$dest/ffprobe" ]]; then
+    export FFMPEG_PATH="$dest/ffmpeg"
+    export PATH="$dest:$PATH"
+    return
+  fi
+  if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then
+    if ffmpeg -hide_banner -encoders 2>/dev/null | grep -q libmp3lame; then
+      return
+    fi
+  fi
+  if [[ "$(uname -m)" != "x86_64" ]]; then
+    echo "dev.sh: no bundled FFmpeg build for $(uname -m). Capture needs ffmpeg and ffprobe on PATH." >&2
+    return
+  fi
+  local url="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linux64-gpl-8.1.tar.xz"
+  local archive="$root/.tools/ffmpeg-linux64-gpl.tar.xz"
+  local extract="$root/.tools/ffmpeg-extract"
+  mkdir -p "$root/.tools"
+  echo "dev.sh: downloading FFmpeg so saved songs can be encoded to MP3..."
+  curl -L --fail --retry 3 -o "$archive" "$url"
+  rm -rf "$extract"
+  mkdir -p "$extract"
+  tar -xJf "$archive" -C "$extract"
+  local found
+  found="$(find "$extract" -type f -name ffmpeg -path '*/bin/ffmpeg' -print -quit)"
+  if [[ -z "$found" ]]; then
+    echo "dev.sh: FFmpeg archive did not contain bin/ffmpeg" >&2
+    exit 1
+  fi
+  rm -rf "$root/.tools/ffmpeg"
+  mkdir -p "$dest"
+  cp -a "$(dirname "$found")/." "$dest/"
+  chmod +x "$dest/ffmpeg" "$dest/ffprobe"
+  rm -f "$archive"
+  rm -rf "$extract"
+  if [[ ! -x "$dest/ffmpeg" || ! -x "$dest/ffprobe" ]]; then
+    echo "dev.sh: FFmpeg setup did not produce ffmpeg and ffprobe" >&2
+    exit 1
+  fi
+  if ! "$dest/ffmpeg" -hide_banner -encoders 2>/dev/null | grep -q libmp3lame; then
+    echo "dev.sh: downloaded FFmpeg cannot encode MP3 (libmp3lame missing)" >&2
+    exit 1
+  fi
+  export FFMPEG_PATH="$dest/ffmpeg"
+  export PATH="$dest:$PATH"
+}
+
+ensure_ffmpeg
+
 echo "dev.sh: starting tauri dev on http://127.0.0.1:$port ..."
 exec npx tauri dev --config "{\"build\":{\"devUrl\":\"http://127.0.0.1:$port\"}}" "$@"
