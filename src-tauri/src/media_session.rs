@@ -1,6 +1,6 @@
 //! OS now-playing metadata.
 //!
-//! * Windows: Global System Media Transport Controls (GSMTC)
+//! * Windows: Global System Media Transport Controls (GSMTC), then `WinBridge`
 //! * Linux: MPRIS v2 over the session D-Bus
 //!
 //! Exposes the current session to the React UI via Tauri events. Future phases
@@ -85,6 +85,7 @@ impl From<&SessionCandidate> for MediaSessionPayload {
 
 /// Normalized player snapshot used to pick the “current” session on Linux (and in tests).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 struct SessionCandidate {
     bus_name: String,
     source_app: Option<String>,
@@ -98,6 +99,7 @@ struct SessionCandidate {
     artwork_url: Option<String>,
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn normalize_playback_status(raw: &str) -> String {
     match raw.trim().to_ascii_lowercase().as_str() {
         "playing" => "playing".to_string(),
@@ -111,6 +113,7 @@ fn normalize_playback_status(raw: &str) -> String {
     }
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn duration_ms_from_mpris_length_us(length_us: i64) -> Option<u64> {
     if length_us <= 0 {
         None
@@ -119,6 +122,7 @@ fn duration_ms_from_mpris_length_us(length_us: i64) -> Option<u64> {
     }
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn position_ms_from_us(position_us: i64) -> Option<u64> {
     if position_us < 0 {
         None
@@ -172,18 +176,22 @@ fn overlay_seek_position(
 }
 
 /// MPRIS `Seek` takes a signed microsecond offset. `i64::saturating_sub` keeps rewinds negative.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn mpris_seek_offset_us(target_us: i64, current_us: i64) -> i64 {
     target_us.saturating_sub(current_us)
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 const MPRIS_POSITION_SLACK_US: u64 = 750_000;
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn mpris_position_reached(actual_us: i64, target_us: i64) -> bool {
     actual_us.abs_diff(target_us) <= MPRIS_POSITION_SLACK_US
 }
 
 /// Chromium/Brave `Seek` ignores the requested magnitude and only steps about ±5s.
 /// Keep stepping while error shrinks; stop on a no-op or an overshoot.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn should_repeat_mpris_seek(before_us: i64, after_us: i64, target_us: i64) -> bool {
     if after_us == before_us || mpris_position_reached(after_us, target_us) {
         return false;
@@ -192,6 +200,7 @@ fn should_repeat_mpris_seek(before_us: i64, after_us: i64, target_us: i64) -> bo
 }
 
 /// Browsers often advertise `/` or `.../NoTrack`, which accept SetPosition and then do nothing.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn track_id_allows_set_position(path: &str) -> bool {
     let trimmed = path.trim();
     if trimmed.is_empty() || trimmed == "/" {
@@ -255,6 +264,7 @@ fn emit_session(app: &AppHandle, payload: &MediaSessionPayload) {
     }
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn join_artists(artists: &[String]) -> Option<String> {
     let joined = artists
         .iter()
@@ -269,6 +279,7 @@ fn join_artists(artists: &[String]) -> Option<String> {
     }
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn source_app_from(
     identity: Option<String>,
     desktop_entry: Option<String>,
@@ -288,11 +299,13 @@ fn source_app_from(
     })
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn is_playerctld(bus_name: &str) -> bool {
     bus_name == "org.mpris.MediaPlayer2.playerctld"
         || bus_name.starts_with("org.mpris.MediaPlayer2.playerctld.")
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn is_internal_harness(session: &SessionCandidate) -> bool {
     session
         .source_app
@@ -305,6 +318,7 @@ fn is_internal_harness(session: &SessionCandidate) -> bool {
 /// Skip `playerctld` (it multiplexes other players and its Position is often
 /// stale) and the internal key-engine harness. Prefer Playing with a title,
 /// then Playing, then Paused with a title, then any titled session.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn select_current_session(sessions: &[SessionCandidate]) -> Option<&SessionCandidate> {
     if sessions.is_empty() {
         return None;
@@ -331,6 +345,7 @@ fn select_current_session(sessions: &[SessionCandidate]) -> Option<&SessionCandi
         .or_else(|| sessions.iter().find(usable))
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn debug_entries_from_sessions(
     sessions: &[SessionCandidate],
     current_bus: Option<&str>,
@@ -348,9 +363,454 @@ fn debug_entries_from_sessions(
         .collect()
 }
 
+/// A forward jump smaller than this, while paused, is GSMTC writing the timeline
+/// again after Pause. A larger jump is a seek.
+#[cfg(any(windows, test))]
+const WIN_SEEK_MS: i64 = 1_500;
+/// How long an empty GSMTC read can last before the current song is cleared.
+#[cfg(any(windows, test))]
+const WIN_GAP_HOLD_MS: i64 = 4_500;
+/// `Position + (now - LastUpdatedTime)` may run this far past the song's end before
+/// the anchor is treated as bogus.
+#[cfg(any(windows, test))]
+const WIN_TIMELINE_OVERRUN_MS: u64 = 30_000;
+/// With no duration to bound it, an anchor older than this is treated as bogus.
+#[cfg(any(windows, test))]
+const WIN_MAX_UNBOUNDED_LAG_MS: u64 = 3 * 60 * 60 * 1_000;
+/// After a user seek, ignore a stale Windows timeline for this long.
+#[cfg(any(windows, test))]
+const WIN_SEEK_HOLD_MS: i64 = 2_000;
+
+/// One raw GSMTC read. Linux never builds this; MPRIS is already stable.
+#[cfg(any(windows, test))]
+#[derive(Debug, Clone)]
+struct WinRawSample {
+    present: bool,
+    title: Option<String>,
+    artist: Option<String>,
+    album: Option<String>,
+    source_app: Option<String>,
+    playback_status: String,
+    position_ms: Option<u64>,
+    duration_ms: Option<u64>,
+    /// Unix milliseconds when the player last wrote `position_ms`.
+    timeline_updated_unix_ms: Option<i64>,
+    observed_unix_ms: i64,
+}
+
+#[cfg(any(windows, test))]
+impl WinRawSample {
+    fn absent(observed_unix_ms: i64) -> Self {
+        Self {
+            present: false,
+            title: None,
+            artist: None,
+            album: None,
+            source_app: None,
+            playback_status: "none".to_string(),
+            position_ms: None,
+            duration_ms: None,
+            timeline_updated_unix_ms: None,
+            observed_unix_ms,
+        }
+    }
+}
+
+/// Turns noisy GSMTC samples into the session shape MPRIS already has:
+/// a live position while playing, a frozen position while paused, one duration
+/// per song, and the previous song across a short empty read.
+#[cfg(any(windows, test))]
+#[derive(Debug)]
+struct WinBridge {
+    have_track: bool,
+    source: String,
+    title: String,
+    artist: String,
+    album: String,
+    duration_ms: Option<u64>,
+    logged_duration_revision: bool,
+    frozen_position_ms: Option<u64>,
+    last_position_ms: Option<u64>,
+    last_status: String,
+    last_observed_unix_ms: Option<i64>,
+    last_payload: Option<MediaSessionPayload>,
+    seek_hold_position_ms: Option<u64>,
+    seek_hold_until_unix_ms: i64,
+    gap_since_unix_ms: Option<i64>,
+    /// The newest timeline write seen, on any song.
+    last_timeline_unix_ms: Option<i64>,
+    /// Set when a new song arrives still carrying the previous song's timeline write:
+    /// Edge switches the title first and rewrites Position and duration a moment later.
+    inherited_timeline_unix_ms: Option<i64>,
+}
+
+#[cfg(any(windows, test))]
+impl WinBridge {
+    fn new() -> Self {
+        Self {
+            have_track: false,
+            source: String::new(),
+            title: String::new(),
+            artist: String::new(),
+            album: String::new(),
+            duration_ms: None,
+            logged_duration_revision: false,
+            frozen_position_ms: None,
+            last_position_ms: None,
+            last_status: String::new(),
+            last_observed_unix_ms: None,
+            last_payload: None,
+            seek_hold_position_ms: None,
+            seek_hold_until_unix_ms: 0,
+            gap_since_unix_ms: None,
+            last_timeline_unix_ms: None,
+            inherited_timeline_unix_ms: None,
+        }
+    }
+
+    fn push(&mut self, sample: &WinRawSample) -> MediaSessionPayload {
+        if !sample.present || owned_text(&sample.title).is_empty() {
+            return self.hold_gap(sample.observed_unix_ms);
+        }
+
+        let raw_status = canonical_status(&sample.playback_status);
+        if self.same_track(sample) {
+            if !self.timeline_is_inherited(sample) {
+                self.inherited_timeline_unix_ms = None;
+            }
+            self.absorb_metadata(sample);
+            self.gap_since_unix_ms = None;
+            if is_soft_status(&raw_status) {
+                if let Some(kept) = self.republish() {
+                    return kept;
+                }
+            }
+        } else {
+            self.begin_track(sample);
+        }
+
+        let cap = position_cap(sample.duration_ms, self.duration_ms);
+        let position = if self.timeline_is_inherited(sample) {
+            // The previous song's position; Play Along keeps its own clock until Edge rewrites it.
+            None
+        } else if is_live_status(&raw_status) {
+            self.frozen_position_ms = None;
+            self.playing_position(sample, cap)
+        } else if is_still_status(&raw_status) {
+            self.seek_hold_position_ms = None;
+            self.paused_position(sample, cap)
+        } else {
+            sample
+                .position_ms
+                .map(|position| clamp_position(position, cap))
+                .or(self.last_position_ms)
+        };
+
+        if position.is_some() {
+            self.last_position_ms = position;
+        }
+        self.last_status = raw_status.clone();
+        self.last_observed_unix_ms = Some(sample.observed_unix_ms);
+        if sample.timeline_updated_unix_ms.is_some() {
+            self.last_timeline_unix_ms = sample.timeline_updated_unix_ms;
+        }
+        let payload = self.snapshot(&raw_status, position);
+        self.last_payload = Some(payload.clone());
+        payload
+    }
+
+    /// Remember a seek the user just confirmed, so the next stale timeline
+    /// read does not pull the clock back.
+    fn note_seek(&mut self, position_ms: u64, observed_unix_ms: i64) {
+        self.seek_hold_position_ms = Some(position_ms);
+        self.seek_hold_until_unix_ms = observed_unix_ms.saturating_add(WIN_SEEK_HOLD_MS);
+        self.frozen_position_ms = Some(position_ms);
+        self.last_position_ms = Some(position_ms);
+        self.last_observed_unix_ms = Some(observed_unix_ms);
+        if let Some(payload) = self.last_payload.as_mut() {
+            payload.position_ms = Some(position_ms);
+        }
+    }
+
+    fn same_track(&self, sample: &WinRawSample) -> bool {
+        if !self.have_track || owned_text(&sample.title) != self.title {
+            return false;
+        }
+        let source = owned_text(&sample.source_app);
+        if !source.is_empty() && source != self.source {
+            return false;
+        }
+        let artist = owned_text(&sample.artist);
+        if !artist.is_empty() && !self.artist.is_empty() && artist != self.artist {
+            return false;
+        }
+        let album = owned_text(&sample.album);
+        if !album.is_empty() && !self.album.is_empty() && album != self.album {
+            return false;
+        }
+        true
+    }
+
+    fn absorb_metadata(&mut self, sample: &WinRawSample) {
+        let source = owned_text(&sample.source_app);
+        if self.source.is_empty() && !source.is_empty() {
+            self.source = source;
+        }
+        let artist = owned_text(&sample.artist);
+        if self.artist.is_empty() && !artist.is_empty() {
+            self.artist = artist;
+        }
+        let album = owned_text(&sample.album);
+        if self.album.is_empty() && !album.is_empty() {
+            self.album = album;
+        }
+        if self.timeline_is_inherited(sample) {
+            return;
+        }
+        let Some(duration) = positive_ms(sample.duration_ms) else {
+            return;
+        };
+        if self.duration_ms.is_none() {
+            self.duration_ms = Some(duration);
+            return;
+        }
+        if self.duration_ms != Some(duration) && !self.logged_duration_revision {
+            let latched = self.duration_ms;
+            log::info!(
+                "media_session: windows kept duration_ms={latched:?} and ignored revised duration_ms={duration}"
+            );
+            self.logged_duration_revision = true;
+        }
+    }
+
+    fn begin_track(&mut self, sample: &WinRawSample) {
+        self.have_track = true;
+        self.source = owned_text(&sample.source_app);
+        self.title = owned_text(&sample.title);
+        self.artist = owned_text(&sample.artist);
+        self.album = owned_text(&sample.album);
+        self.inherited_timeline_unix_ms = sample
+            .timeline_updated_unix_ms
+            .filter(|&updated| Some(updated) == self.last_timeline_unix_ms);
+        self.duration_ms = if self.inherited_timeline_unix_ms.is_some() {
+            log::info!(
+                "media_session: windows ignored the previous song's timeline for {}",
+                self.title
+            );
+            None
+        } else {
+            positive_ms(sample.duration_ms)
+        };
+        self.frozen_position_ms = None;
+        self.last_position_ms = None;
+        self.last_status.clear();
+        self.last_observed_unix_ms = None;
+        self.seek_hold_position_ms = None;
+        self.seek_hold_until_unix_ms = 0;
+        self.gap_since_unix_ms = None;
+        self.logged_duration_revision = false;
+        self.last_payload = None;
+    }
+
+    fn playing_position(&mut self, sample: &WinRawSample, cap: Option<u64>) -> Option<u64> {
+        let projected = projected_position(sample, cap);
+        let Some(hold) = self.seek_hold_position_ms else {
+            return projected.or(self.last_position_ms);
+        };
+        if sample.observed_unix_ms > self.seek_hold_until_unix_ms {
+            self.seek_hold_position_ms = None;
+            return projected.or(Some(hold));
+        }
+        match projected {
+            Some(position) if position.abs_diff(hold) <= WIN_SEEK_MS as u64 => {
+                self.seek_hold_position_ms = None;
+                Some(position)
+            }
+            _ => Some(hold),
+        }
+    }
+
+    fn paused_position(&mut self, sample: &WinRawSample, cap: Option<u64>) -> Option<u64> {
+        let reported = sample
+            .position_ms
+            .map(|position| clamp_position(position, cap));
+        let next = if is_still_status(&self.last_status) {
+            match (self.frozen_position_ms, reported) {
+                (Some(frozen), Some(reported))
+                    if (reported as i64 - frozen as i64).abs() > WIN_SEEK_MS =>
+                {
+                    Some(reported)
+                }
+                (Some(frozen), Some(reported)) => {
+                    if reported != frozen {
+                        log::debug!(
+                            "media_session: windows froze paused position_ms={frozen} and ignored timeline position_ms={reported}"
+                        );
+                    }
+                    Some(frozen)
+                }
+                (Some(frozen), None) => Some(frozen),
+                (None, reported) => reported.or(self.last_position_ms),
+            }
+        } else {
+            reported.or(self.last_position_ms)
+        };
+        self.frozen_position_ms = next;
+        next
+    }
+
+    fn republish(&mut self) -> Option<MediaSessionPayload> {
+        let status = self.last_status.clone();
+        if status.is_empty() {
+            return None;
+        }
+        let payload = self.snapshot(&status, self.last_position_ms);
+        self.last_payload = Some(payload.clone());
+        Some(payload)
+    }
+
+    fn hold_gap(&mut self, now: i64) -> MediaSessionPayload {
+        if !self.have_track {
+            return MediaSessionPayload::empty_session();
+        }
+        if self.gap_since_unix_ms.is_none() {
+            log::info!(
+                "media_session: windows holding {} through an empty session",
+                self.title
+            );
+            self.gap_since_unix_ms = Some(now);
+        }
+        let started = self.gap_since_unix_ms.unwrap_or(now);
+        if now.saturating_sub(started) <= WIN_GAP_HOLD_MS {
+            return self
+                .last_payload
+                .clone()
+                .unwrap_or_else(MediaSessionPayload::empty_session);
+        }
+        log::info!(
+            "media_session: windows cleared {} after an empty session",
+            self.title
+        );
+        self.clear();
+        MediaSessionPayload::empty_session()
+    }
+
+    fn timeline_is_inherited(&self, sample: &WinRawSample) -> bool {
+        self.inherited_timeline_unix_ms.is_some()
+            && sample.timeline_updated_unix_ms == self.inherited_timeline_unix_ms
+    }
+
+    fn clear(&mut self) {
+        *self = Self {
+            last_timeline_unix_ms: self.last_timeline_unix_ms,
+            ..Self::new()
+        };
+    }
+
+    fn snapshot(&self, status: &str, position_ms: Option<u64>) -> MediaSessionPayload {
+        MediaSessionPayload {
+            title: published_text(&self.title),
+            artist: published_text(&self.artist),
+            album: published_text(&self.album),
+            source_app: published_text(&self.source),
+            playback_status: status.to_string(),
+            position_ms,
+            duration_ms: self.duration_ms,
+            track_url: None,
+            artwork_url: None,
+        }
+    }
+}
+
+#[cfg(any(windows, test))]
+fn owned_text(value: &Option<String>) -> String {
+    value.as_deref().unwrap_or("").trim().to_string()
+}
+
+#[cfg(any(windows, test))]
+fn published_text(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+#[cfg(any(windows, test))]
+fn positive_ms(value: Option<u64>) -> Option<u64> {
+    value.filter(|duration| *duration > 0)
+}
+
+#[cfg(any(windows, test))]
+fn position_cap(raw: Option<u64>, latched: Option<u64>) -> Option<u64> {
+    match (positive_ms(raw), positive_ms(latched)) {
+        (Some(raw), Some(latched)) => Some(raw.max(latched)),
+        (Some(raw), None) => Some(raw),
+        (None, Some(latched)) => Some(latched),
+        (None, None) => None,
+    }
+}
+
+#[cfg(any(windows, test))]
+fn clamp_position(position: u64, cap: Option<u64>) -> u64 {
+    match cap {
+        Some(limit) if limit > 0 => position.min(limit),
+        _ => position,
+    }
+}
+
+#[cfg(any(windows, test))]
+fn projected_position(sample: &WinRawSample, cap: Option<u64>) -> Option<u64> {
+    let base = sample.position_ms?;
+    let lag = sample
+        .timeline_updated_unix_ms
+        .and_then(|updated| sample.observed_unix_ms.checked_sub(updated))
+        .and_then(|elapsed| u64::try_from(elapsed).ok())
+        .filter(|&lag| timeline_lag_plausible(base, lag, cap))
+        .unwrap_or(0);
+    Some(clamp_position(base.saturating_add(lag), cap))
+}
+
+/// Edge writes the timeline only on play, pause and seek (measured: one write at play, then
+/// none for the whole song), so while a song plays the lag grows for its full length. An anchor
+/// is only bogus when projecting from it runs well past the song's end.
+#[cfg(any(windows, test))]
+fn timeline_lag_plausible(base: u64, lag: u64, cap: Option<u64>) -> bool {
+    match positive_ms(cap) {
+        Some(limit) => base.saturating_add(lag) <= limit.saturating_add(WIN_TIMELINE_OVERRUN_MS),
+        None => lag <= WIN_MAX_UNBOUNDED_LAG_MS,
+    }
+}
+
+#[cfg(any(windows, test))]
+fn canonical_status(status: &str) -> String {
+    let status = status.trim().to_ascii_lowercase();
+    if status.is_empty() {
+        "unknown".to_string()
+    } else {
+        status
+    }
+}
+
+#[cfg(any(windows, test))]
+fn is_live_status(status: &str) -> bool {
+    matches!(status, "playing" | "opened")
+}
+
+#[cfg(any(windows, test))]
+fn is_still_status(status: &str) -> bool {
+    matches!(status, "paused" | "stopped" | "closed")
+}
+
+#[cfg(any(windows, test))]
+fn is_soft_status(status: &str) -> bool {
+    matches!(status, "changing" | "unknown" | "none")
+}
+
 #[cfg(windows)]
 mod win {
-    use super::{MediaSessionDebugEntry, MediaSessionPayload};
+    use super::{MediaSessionDebugEntry, MediaSessionPayload, WinBridge, WinRawSample};
     use std::sync::{Mutex, OnceLock};
     use std::time::{Duration, Instant};
     use windows::Media::Control::{
@@ -369,11 +829,49 @@ mod win {
 
     fn timespan_to_ms(ts: windows::Foundation::TimeSpan) -> Option<u64> {
         let ticks = ts.Duration;
-        if ticks <= 0 {
+        if ticks < 0 {
             return None;
         }
-        // WinRT TimeSpan: Duration is 100-nanosecond ticks.
+        // WinRT TimeSpan: Duration is 100-nanosecond ticks. Zero is a real position.
         Some((ticks as u64) / 10_000)
+    }
+
+    fn unix_now_ms() -> i64 {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        match SystemTime::now().duration_since(UNIX_EPOCH) {
+            Ok(elapsed) => i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX),
+            Err(_) => 0,
+        }
+    }
+
+    fn datetime_unix_ms(dt: windows::Foundation::DateTime) -> Option<i64> {
+        // WinRT DateTime is 100-nanosecond ticks since 1601-01-01 UTC.
+        const UNIX_EPOCH_MS: i64 = 11_644_473_600_000;
+        let unix_ms = dt
+            .UniversalTime
+            .checked_div(10_000)?
+            .checked_sub(UNIX_EPOCH_MS)?;
+        if unix_ms <= 0 {
+            None
+        } else {
+            Some(unix_ms)
+        }
+    }
+
+    fn bridge_mut() -> std::sync::MutexGuard<'static, WinBridge> {
+        static BRIDGE: OnceLock<Mutex<WinBridge>> = OnceLock::new();
+        BRIDGE
+            .get_or_init(|| Mutex::new(WinBridge::new()))
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+    }
+
+    fn publish(sample: WinRawSample) -> MediaSessionPayload {
+        bridge_mut().push(&sample)
+    }
+
+    fn note_user_seek(position_ms: u64) {
+        bridge_mut().note_seek(position_ms, unix_now_ms());
     }
 
     fn playback_status_str(s: GlobalSystemMediaTransportControlsSessionPlaybackStatus) -> String {
@@ -533,26 +1031,44 @@ mod win {
         if !accepted {
             return Err("the player declined the seek request".to_string());
         }
-        Ok(super::overlay_seek_position(fetch_payload().await, clamped))
+        let payload = super::overlay_seek_position(fetch_payload().await, clamped);
+        if let Some(position_ms) = payload.position_ms {
+            note_user_seek(position_ms);
+        }
+        Ok(payload)
+    }
+
+    pub async fn current_payload() -> MediaSessionPayload {
+        match tokio::time::timeout(Duration::from_secs(2), read_sample()).await {
+            Ok(sample) => publish(sample),
+            Err(_) => {
+                log::warn!("media_session: metadata lookup deadline exceeded");
+                publish(WinRawSample::absent(unix_now_ms()))
+            }
+        }
     }
 
     pub async fn fetch_payload() -> MediaSessionPayload {
+        publish(read_sample().await)
+    }
+
+    async fn read_sample() -> WinRawSample {
         let manager = match GlobalSystemMediaTransportControlsSessionManager::RequestAsync() {
             Ok(op) => match op.await {
-                Ok(m) => m,
-                Err(e) => {
-                    log::debug!("media_session: RequestAsync: {e}");
-                    return MediaSessionPayload::empty_session();
+                Ok(manager) => manager,
+                Err(err) => {
+                    log::debug!("media_session: RequestAsync: {err}");
+                    return WinRawSample::absent(unix_now_ms());
                 }
             },
-            Err(e) => {
-                log::debug!("media_session: RequestAsync (sync): {e}");
-                return MediaSessionPayload::empty_session();
+            Err(err) => {
+                log::debug!("media_session: RequestAsync (sync): {err}");
+                return WinRawSample::absent(unix_now_ms());
             }
         };
 
         let session: GlobalSystemMediaTransportControlsSession = match manager.GetCurrentSession() {
-            Ok(s) => s,
+            Ok(session) => session,
             Err(_) => {
                 if should_log_snapshot() {
                     let sessions = enumerate_sessions().await;
@@ -570,67 +1086,57 @@ mod win {
                             .collect::<Vec<_>>()
                     );
                 }
-                return MediaSessionPayload::empty_session();
+                return WinRawSample::absent(unix_now_ms());
             }
         };
 
         let media = match session.TryGetMediaPropertiesAsync() {
             Ok(op) => match op.await {
-                Ok(m) => m,
-                Err(e) => {
-                    log::debug!("media_session: TryGetMediaPropertiesAsync: {e}");
-                    return MediaSessionPayload::empty_session();
+                Ok(media) => media,
+                Err(err) => {
+                    log::debug!("media_session: TryGetMediaPropertiesAsync: {err}");
+                    return WinRawSample::absent(unix_now_ms());
                 }
             },
-            Err(e) => {
-                log::debug!("media_session: TryGetMediaPropertiesAsync (sync): {e}");
-                return MediaSessionPayload::empty_session();
+            Err(err) => {
+                log::debug!("media_session: TryGetMediaPropertiesAsync (sync): {err}");
+                return WinRawSample::absent(unix_now_ms());
             }
         };
 
-        let title = media.Title().ok().and_then(hstring_opt);
-        let artist = media.Artist().ok().and_then(hstring_opt);
-        let album = media.AlbumTitle().ok().and_then(hstring_opt);
-        let source_app = session.SourceAppUserModelId().ok().and_then(hstring_opt);
-
-        let playback_status = session
-            .GetPlaybackInfo()
-            .ok()
-            .and_then(|info| info.PlaybackStatus().ok())
-            .map(playback_status_str)
-            .unwrap_or_else(|| "unknown".to_string());
-
-        let (position_ms, duration_ms) = session
+        let (position_ms, duration_ms, timeline_updated_unix_ms) = session
             .GetTimelineProperties()
             .ok()
-            .map(|t| {
-                let pos = t.Position().ok().and_then(timespan_to_ms);
-                let dur = match (t.StartTime(), t.EndTime()) {
-                    (Ok(start), Ok(end)) => {
-                        let a = start.Duration;
-                        let b = end.Duration;
-                        if b > a {
-                            Some(((b - a) as u64) / 10_000)
-                        } else {
-                            None
-                        }
+            .map(|timeline| {
+                let position_ms = timeline.Position().ok().and_then(timespan_to_ms);
+                let duration_ms = match (timeline.StartTime(), timeline.EndTime()) {
+                    (Ok(start), Ok(end)) if end.Duration > start.Duration => {
+                        Some(((end.Duration - start.Duration) as u64) / 10_000)
                     }
                     _ => None,
                 };
-                (pos, dur)
+                let timeline_updated_unix_ms =
+                    timeline.LastUpdatedTime().ok().and_then(datetime_unix_ms);
+                (position_ms, duration_ms, timeline_updated_unix_ms)
             })
-            .unwrap_or((None, None));
+            .unwrap_or((None, None, None));
 
-        MediaSessionPayload {
-            title,
-            artist,
-            album,
-            source_app,
-            playback_status,
+        WinRawSample {
+            present: true,
+            title: media.Title().ok().and_then(hstring_opt),
+            artist: media.Artist().ok().and_then(hstring_opt),
+            album: media.AlbumTitle().ok().and_then(hstring_opt),
+            source_app: session.SourceAppUserModelId().ok().and_then(hstring_opt),
+            playback_status: session
+                .GetPlaybackInfo()
+                .ok()
+                .and_then(|info| info.PlaybackStatus().ok())
+                .map(playback_status_str)
+                .unwrap_or_else(|| "unknown".to_string()),
             position_ms,
             duration_ms,
-            track_url: None,
-            artwork_url: None,
+            timeline_updated_unix_ms,
+            observed_unix_ms: unix_now_ms(),
         }
     }
 }
@@ -1032,7 +1538,7 @@ mod linux {
 pub async fn get_current_media_payload() -> MediaSessionPayload {
     #[cfg(windows)]
     {
-        media_with_deadline(win::fetch_payload(), Duration::from_secs(2)).await
+        win::current_payload().await
     }
     #[cfg(target_os = "linux")]
     {
@@ -1045,6 +1551,7 @@ pub async fn get_current_media_payload() -> MediaSessionPayload {
 }
 
 #[cfg(windows)]
+#[cfg_attr(not(test), allow(dead_code))]
 async fn media_with_deadline(
     poll: impl std::future::Future<Output = MediaSessionPayload>,
     deadline: Duration,
@@ -1059,7 +1566,7 @@ async fn media_with_deadline(
 }
 
 #[cfg(all(test, windows))]
-mod tests {
+mod windows_tests {
     use super::*;
 
     #[tokio::test]
@@ -1476,6 +1983,371 @@ mod tests {
         assert!(debug
             .iter()
             .any(|e| !e.is_current && e.source_app.as_deref() == Some("VLC")));
+    }
+    fn windows_sample(
+        title: &str,
+        status: &str,
+        position_ms: Option<u64>,
+        duration_ms: Option<u64>,
+        observed_unix_ms: i64,
+        timeline_updated_unix_ms: Option<i64>,
+    ) -> WinRawSample {
+        WinRawSample {
+            present: true,
+            title: Some(title.to_string()),
+            artist: Some("Queen".to_string()),
+            album: Some("Sheer Heart Attack".to_string()),
+            source_app: Some("Chrome".to_string()),
+            playback_status: status.to_string(),
+            position_ms,
+            duration_ms,
+            timeline_updated_unix_ms,
+            observed_unix_ms,
+        }
+    }
+
+    #[test]
+    fn windows_bridge_projects_a_live_position_while_playing() {
+        let mut bridge = WinBridge::new();
+        let observed = 5_000_800;
+        let payload = bridge.push(&windows_sample(
+            "Killer Queen",
+            "playing",
+            Some(10_000),
+            Some(182_000),
+            observed,
+            Some(5_000_000),
+        ));
+        assert_eq!(payload.playback_status, "playing");
+        assert_eq!(payload.position_ms, Some(10_800));
+        assert_eq!(payload.duration_ms, Some(182_000));
+    }
+
+    #[test]
+    fn windows_bridge_ignores_an_absurd_timeline_anchor() {
+        let mut bridge = WinBridge::new();
+        let payload = bridge.push(&windows_sample(
+            "Killer Queen",
+            "playing",
+            Some(10_000),
+            Some(182_000),
+            5_000_000,
+            Some(0),
+        ));
+        assert_eq!(payload.position_ms, Some(10_000));
+
+        let future = bridge.push(&windows_sample(
+            "Killer Queen",
+            "playing",
+            Some(11_000),
+            Some(182_000),
+            5_001_500,
+            Some(5_002_000),
+        ));
+        assert_eq!(future.position_ms, Some(11_000));
+    }
+
+    #[test]
+    fn windows_bridge_pause_freezes_creep_and_accepts_a_seek() {
+        let mut bridge = WinBridge::new();
+        bridge.push(&windows_sample(
+            "Killer Queen",
+            "playing",
+            Some(50_000),
+            Some(182_000),
+            1_000_000,
+            Some(1_000_000),
+        ));
+        let paused = bridge.push(&windows_sample(
+            "Killer Queen",
+            "paused",
+            Some(51_200),
+            Some(182_000),
+            1_001_500,
+            Some(1_001_500),
+        ));
+        assert_eq!(paused.playback_status, "paused");
+        assert_eq!(paused.position_ms, Some(51_200));
+
+        let creep = bridge.push(&windows_sample(
+            "Killer Queen",
+            "paused",
+            Some(51_600),
+            Some(182_000),
+            1_003_000,
+            Some(1_003_000),
+        ));
+        assert_eq!(creep.playback_status, "paused");
+        assert_eq!(creep.position_ms, Some(51_200));
+
+        let seek = bridge.push(&windows_sample(
+            "Killer Queen",
+            "paused",
+            Some(80_000),
+            Some(182_000),
+            1_004_500,
+            Some(1_004_500),
+        ));
+        assert_eq!(seek.playback_status, "paused");
+        assert_eq!(seek.position_ms, Some(80_000));
+
+        let resumed = bridge.push(&windows_sample(
+            "Killer Queen",
+            "playing",
+            Some(80_000),
+            Some(182_000),
+            1_006_000,
+            Some(1_005_600),
+        ));
+        assert_eq!(resumed.playback_status, "playing");
+        assert_eq!(resumed.position_ms, Some(80_400));
+    }
+
+    #[test]
+    fn windows_bridge_holds_an_empty_session_then_clears_it() {
+        let mut bridge = WinBridge::new();
+        let playing = bridge.push(&windows_sample(
+            "Killer Queen",
+            "playing",
+            Some(12_000),
+            Some(182_000),
+            2_000_000,
+            Some(2_000_000),
+        ));
+        let held = bridge.push(&WinRawSample::absent(2_001_000));
+        assert_eq!(held, playing);
+        let still = bridge.push(&WinRawSample::absent(2_001_000 + WIN_GAP_HOLD_MS));
+        assert_eq!(still.title.as_deref(), Some("Killer Queen"));
+        let cleared = bridge.push(&WinRawSample::absent(2_001_000 + WIN_GAP_HOLD_MS + 1));
+        assert_eq!(cleared.playback_status, "none");
+        assert_eq!(cleared.title, None);
+    }
+
+    #[test]
+    fn windows_bridge_keeps_the_first_duration_for_the_same_song() {
+        let mut bridge = WinBridge::new();
+        bridge.push(&windows_sample(
+            "Killer Queen",
+            "playing",
+            Some(10_000),
+            Some(182_000),
+            3_000_000,
+            Some(3_000_000),
+        ));
+        let mut revised = windows_sample(
+            "Killer Queen",
+            "playing",
+            Some(12_000),
+            Some(192_000),
+            3_002_000,
+            Some(3_001_200),
+        );
+        revised.album = None;
+        revised.artist = None;
+        let payload = bridge.push(&revised);
+        assert_eq!(payload.title.as_deref(), Some("Killer Queen"));
+        assert_eq!(payload.artist.as_deref(), Some("Queen"));
+        assert_eq!(payload.album.as_deref(), Some("Sheer Heart Attack"));
+        assert_eq!(payload.duration_ms, Some(182_000));
+        assert_eq!(payload.position_ms, Some(12_800));
+
+        let next = bridge.push(&windows_sample(
+            "Bohemian Rhapsody",
+            "playing",
+            Some(1_000),
+            Some(355_000),
+            3_010_000,
+            Some(3_010_000),
+        ));
+        assert_eq!(next.duration_ms, Some(355_000));
+        assert_eq!(next.position_ms, Some(1_000));
+    }
+
+    #[test]
+    fn windows_bridge_changing_status_keeps_the_current_playback() {
+        let mut bridge = WinBridge::new();
+        bridge.push(&windows_sample(
+            "Killer Queen",
+            "playing",
+            Some(10_000),
+            Some(182_000),
+            4_000_000,
+            Some(4_000_000),
+        ));
+        let changing = bridge.push(&windows_sample(
+            "Killer Queen",
+            "changing",
+            Some(99_000),
+            Some(192_000),
+            4_001_500,
+            Some(4_001_500),
+        ));
+        assert_eq!(changing.playback_status, "playing");
+        assert_eq!(changing.position_ms, Some(10_000));
+        assert_eq!(changing.duration_ms, Some(182_000));
+    }
+
+    #[test]
+    fn windows_bridge_opened_projects_like_playback() {
+        let mut bridge = WinBridge::new();
+        let payload = bridge.push(&windows_sample(
+            "Killer Queen",
+            "opened",
+            Some(1_000),
+            Some(182_000),
+            6_000_500,
+            Some(6_000_000),
+        ));
+        assert_eq!(payload.playback_status, "opened");
+        assert_eq!(payload.position_ms, Some(1_500));
+    }
+
+    #[test]
+    fn windows_bridge_keeps_a_user_seek_until_the_timeline_catches_up() {
+        let mut bridge = WinBridge::new();
+        bridge.push(&windows_sample(
+            "Killer Queen",
+            "playing",
+            Some(10_000),
+            Some(182_000),
+            8_000_000,
+            Some(8_000_000),
+        ));
+        bridge.note_seek(40_000, 8_000_000);
+        let stale = bridge.push(&windows_sample(
+            "Killer Queen",
+            "playing",
+            Some(10_500),
+            Some(182_000),
+            8_000_500,
+            Some(8_000_500),
+        ));
+        assert_eq!(stale.position_ms, Some(40_000));
+        let caught_up = bridge.push(&windows_sample(
+            "Killer Queen",
+            "playing",
+            Some(40_100),
+            Some(182_000),
+            8_001_000,
+            Some(8_001_000),
+        ));
+        assert_eq!(caught_up.position_ms, Some(40_100));
+    }
+
+    #[test]
+    fn windows_bridge_projects_past_a_short_latched_duration() {
+        let mut bridge = WinBridge::new();
+        bridge.push(&windows_sample(
+            "Killer Queen",
+            "playing",
+            Some(181_000),
+            Some(182_000),
+            9_000_000,
+            Some(9_000_000),
+        ));
+        let later = bridge.push(&windows_sample(
+            "Killer Queen",
+            "playing",
+            Some(190_000),
+            Some(192_000),
+            9_001_000,
+            Some(9_001_000),
+        ));
+        assert_eq!(later.duration_ms, Some(182_000));
+        assert_eq!(later.position_ms, Some(190_000));
+    }
+
+    #[test]
+    fn windows_bridge_keeps_projecting_through_a_long_uninterrupted_play() {
+        // Measured on Edge: one timeline write at play (pos 38 309), then none while playing.
+        let mut bridge = WinBridge::new();
+        let anchor = 7_000_000;
+        for elapsed in [769, 29_428, 30_937, 43_007, 120_000] {
+            let payload = bridge.push(&windows_sample(
+                "Killer Queen",
+                "playing",
+                Some(38_309),
+                Some(191_981),
+                anchor + elapsed,
+                Some(anchor),
+            ));
+            assert_eq!(payload.position_ms, Some(38_309 + elapsed as u64));
+        }
+    }
+
+    #[test]
+    fn windows_bridge_ignores_an_absurd_anchor_without_a_duration() {
+        let mut bridge = WinBridge::new();
+        let payload = bridge.push(&windows_sample(
+            "Killer Queen",
+            "playing",
+            Some(10_000),
+            None,
+            1_790_000_000_000,
+            Some(0),
+        ));
+        assert_eq!(payload.position_ms, Some(10_000));
+    }
+
+    #[test]
+    fn windows_bridge_ignores_the_previous_songs_timeline_on_a_track_change() {
+        // Seen on Edge: the title switches first, still carrying the previous song's
+        // timeline write (duration 245 261); the real one (191 981) follows a moment later.
+        let mut bridge = WinBridge::new();
+        let old_write = 5_000_000;
+        bridge.push(&windows_sample(
+            "Shaar HaRachamim",
+            "paused",
+            Some(56_995),
+            Some(245_261),
+            old_write + 60_000,
+            Some(old_write),
+        ));
+        let switched = bridge.push(&windows_sample(
+            "Killer Queen",
+            "paused",
+            Some(56_995),
+            Some(245_261),
+            old_write + 120_000,
+            Some(old_write),
+        ));
+        assert_eq!(switched.title.as_deref(), Some("Killer Queen"));
+        assert_eq!(switched.position_ms, None);
+        assert_eq!(switched.duration_ms, None);
+
+        let rewritten = bridge.push(&windows_sample(
+            "Killer Queen",
+            "playing",
+            Some(0),
+            Some(191_981),
+            old_write + 121_500,
+            Some(old_write + 121_210),
+        ));
+        assert_eq!(rewritten.duration_ms, Some(191_981));
+        assert_eq!(rewritten.position_ms, Some(290));
+    }
+
+    #[test]
+    fn windows_bridge_trusts_a_new_songs_own_timeline_write() {
+        let mut bridge = WinBridge::new();
+        bridge.push(&windows_sample(
+            "Killer Queen",
+            "playing",
+            Some(10_000),
+            Some(182_000),
+            3_000_000,
+            Some(3_000_000),
+        ));
+        let next = bridge.push(&windows_sample(
+            "Bohemian Rhapsody",
+            "playing",
+            Some(1_000),
+            Some(355_000),
+            3_010_500,
+            Some(3_010_000),
+        ));
+        assert_eq!(next.duration_ms, Some(355_000));
+        assert_eq!(next.position_ms, Some(1_500));
     }
 }
 
