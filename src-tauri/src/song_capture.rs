@@ -40,9 +40,9 @@ struct CaptureProgress {
 }
 
 fn capture_script() -> Option<PathBuf> {
-    sidecar_script().and_then(|sidecar| {
-        sidecar.parent().map(|dir| dir.join("track_capture.py"))
-    }).filter(|path| path.is_file())
+    sidecar_script()
+        .and_then(|sidecar| sidecar.parent().map(|dir| dir.join("track_capture.py")))
+        .filter(|path| path.is_file())
 }
 
 fn capture_command(flag: &str, body: &Value) -> Result<Command, String> {
@@ -53,7 +53,10 @@ fn capture_command(flag: &str, body: &Value) -> Result<Command, String> {
     args.push(serde_json::to_string(body).map_err(|error| error.to_string())?);
 
     let mut command = Command::new(&program);
-    command.args(&args).stdout(Stdio::piped()).stderr(Stdio::piped());
+    command
+        .args(&args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     if let Some(dir) = script.parent() {
         let package_root = chordsync_package_root(&script);
         command.env("PYTHONPATH", &package_root);
@@ -95,7 +98,12 @@ fn emit_progress(app: Option<&AppHandle>, progress: u32, stage: &str) {
     }
 }
 
-fn run_sidecar(flag: &str, body: &Value, timeout: Duration, app: Option<&AppHandle>) -> Result<Value, String> {
+fn run_sidecar(
+    flag: &str,
+    body: &Value,
+    timeout: Duration,
+    app: Option<&AppHandle>,
+) -> Result<Value, String> {
     let mut command = capture_command(flag, body)?;
     let mut child = command
         .spawn()
@@ -103,10 +111,13 @@ fn run_sidecar(flag: &str, body: &Value, timeout: Duration, app: Option<&AppHand
     if let Some(stderr) = child.stderr.take() {
         let handle = app.cloned();
         std::thread::spawn(move || {
+            // Skip an undecodable line and keep draining, so the sidecar never blocks on a full pipe.
+            #[allow(clippy::lines_filter_map_ok)]
             for line in BufReader::new(stderr).lines().flatten() {
                 if let Ok(parsed) = serde_json::from_str::<Value>(&line) {
                     if parsed.get("gsvCapture").and_then(|v| v.as_bool()) == Some(true) {
-                        let progress = parsed.get("progress").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                        let progress =
+                            parsed.get("progress").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                         let stage = parsed
                             .get("stage")
                             .and_then(|v| v.as_str())
@@ -178,6 +189,7 @@ fn request_from_args(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn capture_track(
     app: AppHandle,
     query: Option<String>,
@@ -190,7 +202,12 @@ pub fn capture_track(
 ) -> Result<Value, String> {
     let req = request_from_args(query, title, artist, album, source_app, track_url, force);
     emit_progress(Some(&app), 1, "start");
-    let value = run_sidecar("--capture", &request_body(&req, "capture"), CAPTURE_TIMEOUT, Some(&app))?;
+    let value = run_sidecar(
+        "--capture",
+        &request_body(&req, "capture"),
+        CAPTURE_TIMEOUT,
+        Some(&app),
+    )?;
     if value.get("status").and_then(|v| v.as_str()) == Some("ready") {
         emit_progress(Some(&app), 100, "done");
     }
@@ -207,7 +224,12 @@ pub fn lookup_track_capture(
     track_url: Option<String>,
 ) -> Result<Value, String> {
     let req = request_from_args(query, title, artist, album, source_app, track_url, None);
-    run_sidecar("--lookup", &request_body(&req, "lookup"), LOOKUP_TIMEOUT, None)
+    run_sidecar(
+        "--lookup",
+        &request_body(&req, "lookup"),
+        LOOKUP_TIMEOUT,
+        None,
+    )
 }
 
 #[tauri::command]

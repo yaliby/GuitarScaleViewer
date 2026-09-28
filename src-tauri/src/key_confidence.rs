@@ -75,6 +75,7 @@ const WEIGHTS: [f32; FEATURE_COUNT] = [
     0.052666,  // run
     14.065217, // note_set_margin_x_log_span
 ];
+#[allow(clippy::excessive_precision)] // as the fitting script printed it
 const INTERCEPT: f32 = -2.399680;
 
 /// What the model reads about one reading.
@@ -165,6 +166,7 @@ fn earlier_newest_first<'a>(
         .iter()
         .filter(|w| w.window_end_ms < newest.window_end_ms)
         .collect();
+    #[allow(clippy::unnecessary_sort_by)]
     earlier.sort_by(|a, b| b.window_end_ms.cmp(&a.window_end_ms));
     earlier.into_iter()
 }

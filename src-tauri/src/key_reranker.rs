@@ -66,6 +66,7 @@ pub const FEATURE_COUNT: usize = 3 + CHORD_FEATURE_COUNT;
 /// key at all (+0.29), and the plagal and authentic cadences (+0.20, +0.17). That is the order a
 /// musician would give, which is the best evidence available that it is reading music and not
 /// noise, and the refit onto 396 clips did not disturb it.
+#[allow(clippy::excessive_precision)] // weights as the fitting script printed them
 const WEIGHTS: [f32; FEATURE_COUNT] = [
     119.733771, // score_gap_to_leader
     -0.635209,  // shortlist_position

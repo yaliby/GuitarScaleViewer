@@ -218,6 +218,9 @@ fn cli_path() -> PathBuf {
         .join("sidecars/libkeyfinder_cli/build/gsv-libkeyfinder-cli")
 }
 
+/// A key as the scoreboard names it: tonic pitch class and mode.
+type Key = (u8, &'static str);
+
 fn analyze(cli: &Path, wav: &Path) -> Option<((u8, &'static str), Option<Claim>)> {
     let out = Command::new(cli)
         .arg(wav)
@@ -848,7 +851,7 @@ fn analyse_corpus(
     max_seconds: usize,
 ) -> Vec<((u8, &'static str), Vec<CycleInput>)> {
     let next = AtomicUsize::new(0);
-    let done: Mutex<Vec<(usize, (u8, &'static str), Vec<CycleInput>)>> = Mutex::new(Vec::new());
+    let done: Mutex<Vec<(usize, Key, Vec<CycleInput>)>> = Mutex::new(Vec::new());
     let threads = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4)
@@ -1295,8 +1298,7 @@ fn key_engine_time_to_answer_curve() {
             "buffer", "streak", "locked", "median", "home", "decoy", "other", "decoy shown"
         );
 
-        let mut moving: Vec<((u8, &'static str), Option<(u8, &'static str)>, Vec<Cycle>)> =
-            Vec::new();
+        let mut moving: Vec<(Key, Option<Key>, Vec<Cycle>)> = Vec::new();
         for clip in &moving_clips {
             let wav = moving_root.join(&clip.path);
             assert!(
@@ -1977,11 +1979,7 @@ fn score_gate_with(
             }
         }
         // Where the last cycle stood, so a clip that never opens still says what stopped it.
-        if let Some(last) = cycles
-            .iter()
-            .filter(|c| c.heard_seconds >= required_seconds)
-            .next_back()
-        {
+        if let Some(last) = cycles.iter().rfind(|c| c.heard_seconds >= required_seconds) {
             if let Some(reason) = last.gate_block {
                 *blockers.entry(reason).or_insert(0) += 1;
             }

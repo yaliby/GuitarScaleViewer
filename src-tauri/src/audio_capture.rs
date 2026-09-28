@@ -153,7 +153,7 @@ mod win {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc::{self, Receiver, SyncSender};
     use std::sync::Arc;
-    use std::thread::{self, JoinHandle};
+    use std::thread;
     use std::time::Duration;
 
     use super::{CapturePacket, CaptureWorkerHandle, CAPTURE_CHANNEL_CAPACITY};
@@ -476,17 +476,16 @@ mod win {
                     *b = sample_queue.pop_front().unwrap_or(0);
                 }
                 let mono = decode_frames_to_mono(&chunk, &init_wave);
-                if !mono.is_empty() {
-                    if tx
+                if !mono.is_empty()
+                    && tx
                         .send(CapturePacket {
                             sample_rate_hz: capture_rate_hz,
                             mono_samples: mono,
                         })
                         .is_err()
-                    {
-                        let _ = audio_client.stop_stream();
-                        return Ok(());
-                    }
+                {
+                    let _ = audio_client.stop_stream();
+                    return Ok(());
                 }
             }
 

@@ -64,7 +64,9 @@ impl Default for PlayAlongSidecar {
     }
 }
 
-pub(crate) fn hide_console(#[cfg_attr(not(windows), allow(unused_variables))] command: &mut Command) {
+pub(crate) fn hide_console(
+    #[cfg_attr(not(windows), allow(unused_variables))] command: &mut Command,
+) {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -246,6 +248,8 @@ fn spawn_worker() -> Result<SidecarWorker, String> {
         .ok_or_else(|| "chordsync sidecar stdout unavailable".to_string())?;
     if let Some(stderr) = child.stderr.take() {
         std::thread::spawn(move || {
+            // Skip an undecodable line and keep draining, so the sidecar never blocks on a full pipe.
+            #[allow(clippy::lines_filter_map_ok)]
             for line in BufReader::new(stderr).lines().flatten() {
                 log::info!("chordsync sidecar: {line}");
             }
@@ -411,6 +415,7 @@ pub fn resolve_playalong(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn follow_playalong(
     title: Option<String>,
     artist: Option<String>,

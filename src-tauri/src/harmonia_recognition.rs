@@ -293,9 +293,6 @@ pub async fn recognition_run(
 }
 
 #[tauri::command]
-pub fn recognition_cancel(
-    request_id: String,
-    state: tauri::State<'_, Arc<RecognitionService>>,
-) {
+pub fn recognition_cancel(request_id: String, state: tauri::State<'_, Arc<RecognitionService>>) {
     state.cancel(&request_id);
 }

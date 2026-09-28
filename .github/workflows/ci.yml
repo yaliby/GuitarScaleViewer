@@ -17,7 +17,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
       - run: npm ci
       - name: G1 type-check
@@ -43,7 +43,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: chordsync-api/package-lock.json
       - run: npm ci
@@ -69,6 +69,11 @@ jobs:
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
             libgtk-3-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev
+      - name: Placeholder libkeyfinder bundle resources
+        # tauri.conf.json bundles the locally built CLI, which is gitignored. tauri-build only
+        # checks the paths exist; this job never packages a bundle.
+        working-directory: src-tauri/sidecars/libkeyfinder_cli
+        run: mkdir -p build && touch build/gsv-libkeyfinder-cli build/libkeyfinder.so.2
       - name: G5 cargo check
         working-directory: src-tauri
         run: cargo check --all-targets
@@ -175,7 +180,8 @@ jobs:
         run: |
           set -euo pipefail
           emitted=$(grep -rhoE 'emit[_a-z]*\("[^"]*"' src-tauri/src/ | sed 's/.*("//;s/"//' | sort -u)
-          listened=$(grep -rhoE "listen[^(]*\('[^']*'" src/ | sed "s/.*('//;s/'//" | sort -u)
+          # -z so a listen( call that Prettier wrapped onto the next line still matches.
+          listened=$(grep -rhozP "listen[^(\n]*\(\s*'\K[^']*" src/ | tr '\0' '\n' | sort -u)
           if [ "$emitted" != "$listened" ]; then
             echo "::error::emit/listen mismatch"
             diff <(echo "$emitted") <(echo "$listened") || true
