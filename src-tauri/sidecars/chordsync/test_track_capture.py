@@ -23,6 +23,7 @@ from track_capture import (  # noqa: E402
     resolve_ffmpeg,
     youtube_video_id,
     _require_ffmpeg,
+    _search_attempts,
 )
 
 
@@ -66,6 +67,30 @@ class PlanCaptureTest(unittest.TestCase):
         plan = plan_capture(title="Numb", artist="Linkin Park", source_app="spotify")
         self.assertEqual(plan.engine, "youtube_search")
         self.assertEqual(plan.target, "ytsearch1:Linkin Park Numb")
+
+    def test_empty_search_retries_with_the_title_alone(self) -> None:
+        # Edge reports the YouTube channel as the artist; channel + title finds nothing.
+        plan = plan_capture(title="Shaar HaRachamim", artist="Keshet 12", source_app="msedge.exe")
+        attempts = _search_attempts(plan, "Shaar HaRachamim")
+        self.assertEqual(
+            [a.target for a in attempts],
+            ["ytsearch1:Keshet 12 Shaar HaRachamim", "ytsearch1:Shaar HaRachamim"],
+        )
+
+    def test_emoji_title_is_also_searched_without_the_emoji(self) -> None:
+        plan = plan_capture(title="HaKochav HaBa 2022 ⭐ Shaar", artist="Keshet 12")
+        self.assertEqual(
+            [a.target for a in _search_attempts(plan, "HaKochav HaBa 2022 ⭐ Shaar")],
+            [
+                "ytsearch1:Keshet 12 HaKochav HaBa 2022 ⭐ Shaar",
+                "ytsearch1:HaKochav HaBa 2022 ⭐ Shaar",
+                "ytsearch1:HaKochav HaBa 2022 Shaar",
+            ],
+        )
+
+    def test_direct_link_is_not_retried_as_a_search(self) -> None:
+        plan = plan_capture(query="https://youtu.be/dQw4w9WgXcQ", title="A video")
+        self.assertEqual(_search_attempts(plan, "A video"), [plan])
 
     def test_session_youtube_url_beats_the_search_fallback(self) -> None:
         plan = plan_capture(

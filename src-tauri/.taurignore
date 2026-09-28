@@ -1,0 +1,7 @@
+# `tauri dev` restarts the app when anything under src-tauri changes. The Python sidecars write
+# bytecode and touch their venv while the app runs, which restarted it mid-capture.
+__pycache__/
+*.pyc
+sidecars/chordsync/.venv/
+sidecars/key_analyzer/dist/
+sidecars/libkeyfinder_cli/build/

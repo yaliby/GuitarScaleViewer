@@ -1,0 +1,8 @@
+# CPU inference for Windows x64. Same pins as requirements-unix.txt; verified with Python 3.12
+# on Windows 10 (torch 2.14 CPU wheel from PyPI, lv-chordia weights under .venv/share).
+lv-chordia==1.1.0
+numpy>=2.3,<3
+scipy>=1.16,<2
+soundfile>=0.13,<1
+psutil>=7,<8
+audioop-lts==0.2.2; python_version >= "3.13"

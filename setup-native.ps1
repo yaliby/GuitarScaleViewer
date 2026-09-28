@@ -42,6 +42,34 @@ function Install-ChordSyncVenv {
     Set-Content -Path $stampPath -Value $stamp -NoNewline
 }
 
+function Install-HarmoniaVenv {
+    # Whole-song chord analysis. harmonia_recognition.rs looks for harmonia/ml/.venv/Scripts/python.exe.
+    $venvDir = Join-Path $PSScriptRoot 'harmonia/ml/.venv'
+    $pythonExe = Join-Path $venvDir 'Scripts/python.exe'
+    $requirements = Join-Path $PSScriptRoot 'harmonia/ml/requirements-windows.txt'
+    $stampPath = Join-Path $venvDir '.requirements.sha256'
+    $stamp = (Get-FileHash -Algorithm SHA256 -Path $requirements).Hash
+    if ((Test-Path $pythonExe) -and (Test-Path $stampPath) -and
+        ((Get-Content -Raw -Path $stampPath).Trim() -eq $stamp)) {
+        return
+    }
+    Write-Host 'Installing the whole-song chord analysis environment (downloads PyTorch once)...'
+    if (-not (Test-Path $pythonExe)) {
+        python -m venv $venvDir
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path $pythonExe)) { throw 'Harmonia virtual environment creation failed.' }
+    }
+    & $pythonExe -m pip install --disable-pip-version-check -r $requirements
+    if ($LASTEXITCODE -ne 0) { throw 'Harmonia dependency installation failed.' }
+    & $pythonExe -c "import lv_chordia, torch, librosa"
+    if ($LASTEXITCODE -ne 0) { throw 'Harmonia environment cannot import lv_chordia.' }
+    Set-Content -Path $stampPath -Value $stamp -NoNewline
+}
+
+function Install-HarmoniaVenvOrWarn {
+    # Chord analysis is optional; the app still starts without it.
+    try { Install-HarmoniaVenv } catch { Write-Warning "Whole-song chord analysis stays unavailable: $_" }
+}
+
 function Install-BundledFfmpeg {
     $binDir = Join-Path $toolsDir 'ffmpeg/bin'
     $ffmpeg = Join-Path $binDir 'ffmpeg.exe'
@@ -91,6 +119,7 @@ Install-BundledFfmpeg
 
 if ($ChordSyncOnly) {
     Install-ChordSyncVenv
+    Install-HarmoniaVenvOrWarn
     Write-Host 'ChordSync Python environment is ready.'
     $global:LASTEXITCODE = 0
     return
@@ -112,5 +141,6 @@ if ($LASTEXITCODE -ne 0) { throw 'Analyzer dependency installation failed.' }
 & $analyzerPython -m PyInstaller --noconfirm --clean --onedir --name key_analyzer --distpath src-tauri/sidecars/key_analyzer/dist --workpath .tools/analyzer-build --specpath .tools src-tauri/sidecars/key_analyzer/key_analyzer.py
 if ($LASTEXITCODE -ne 0) { throw 'Analyzer packaging failed.' }
 Install-ChordSyncVenv
+Install-HarmoniaVenvOrWarn
 $global:LASTEXITCODE = 0
 Write-Host 'Native dependencies, ChordSync environment, and standalone analyzer are ready. Run ./dev.ps1.'

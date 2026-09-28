@@ -15,8 +15,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import unicodedata
 import urllib.parse
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -655,6 +656,33 @@ def _download_with_cli(
     return info
 
 
+def _without_symbols(text: str) -> str:
+    """Drop emoji and pictographs; YouTube search returns nothing for a query holding "⭐"."""
+    kept = [
+        " " if ch == "️" or unicodedata.category(ch) in {"So", "Sk", "Cs", "Co", "Cf"} else ch
+        for ch in text
+    ]
+    return re.sub(r"\s+", " ", "".join(kept)).strip()
+
+
+def _search_attempts(plan: CapturePlan, title: str | None) -> list[CapturePlan]:
+    """The plan, then narrower searches for when artist + title finds nothing.
+
+    A browser reports a YouTube channel ("Keshet 12 - ...") as the artist, and YouTube returns
+    zero results for channel name + video title; the title alone, without emoji, finds the video.
+    """
+    attempts = [plan]
+    if plan.engine != "youtube_search":
+        return attempts
+    title_text = (title or "").strip()
+    seen = {plan.search_query}
+    for query in (title_text, _without_symbols(title_text)):
+        if query and query not in seen:
+            seen.add(query)
+            attempts.append(replace(plan, target=f"ytsearch1:{query}", search_query=query))
+    return attempts
+
+
 def _capture_remote(
     plan: CapturePlan,
     *,
@@ -670,12 +698,22 @@ def _capture_remote(
     try:
         if progress:
             progress(2, "extract")
-        if yt_dlp is not None:
-            info = _download_with_module(yt_dlp, plan, work, ffmpeg, progress)
-        else:
-            info = _download_with_cli(_require_ytdlp_cli(), plan, work, ffmpeg, progress)
-        audio = _pick_audio_file(work)
+        audio = None
+        info: dict[str, Any] = {}
+        for attempt in _search_attempts(plan, title):
+            if yt_dlp is not None:
+                info = _download_with_module(yt_dlp, attempt, work, ffmpeg, progress)
+            else:
+                info = _download_with_cli(_require_ytdlp_cli(), attempt, work, ffmpeg, progress)
+            audio = _pick_audio_file(work)
+            if audio is not None:
+                break
         if audio is None:
+            if plan.engine == "youtube_search":
+                raise CaptureError(
+                    "extract_failed",
+                    f"YouTube search found no video for: {plan.search_query or title}",
+                )
             raise CaptureError("extract_failed", "yt-dlp did not produce an audio file.")
         if audio.suffix.lower() != ".mp3":
             encoded = work / f"{audio.stem}.mp3"
