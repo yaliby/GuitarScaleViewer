@@ -170,7 +170,9 @@ let activeTrack: FollowTrack | null = null;
 let resolvedKey = "";
 let mediaRef: MediaSessionUiState | null = null;
 let lastMediaKey = "\0unset";
-let seq = 0;
+// Also the resolve `gen`: the sidecar outlives a webview reload and ignores any gen below the
+// highest it has seen, so counting from 0 again left the lyric clock empty for the new song.
+let seq = Date.now();
 let epoch = 0;
 let inflight = false;
 let followSerial = 0;

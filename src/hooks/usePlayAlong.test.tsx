@@ -185,6 +185,26 @@ describe("usePlayAlong", () => {
     expect(api.follow).not.toHaveBeenCalled();
   });
 
+  it("keeps the resolve gen rising after the webview reloads", async () => {
+    // The sidecar outlives the page and skips loading any gen below the highest it has seen.
+    const lastGenOfPageLoadedAt = async (nowMs: number): Promise<number> => {
+      vi.resetModules();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(nowMs);
+      const { usePlayAlong: fresh } = await import("./usePlayAlong");
+      clock.mockRestore();
+      api.resolve.mockClear();
+      const page = renderHook(() => fresh(media()));
+      await waitFor(() => expect(api.resolve).toHaveBeenCalled());
+      page.unmount();
+      return api.resolve.mock.lastCall?.[0].gen as number;
+    };
+
+    const before = await lastGenOfPageLoadedAt(1_000_000);
+    const after = await lastGenOfPageLoadedAt(1_005_000);
+
+    expect(after).toBeGreaterThan(before);
+  });
+
   it("keeps the resolved song and follow loop after one screen unmounts", async () => {
     const keepAlive = renderHook(() => usePlayAlong(media()));
     const screen = renderHook(() => usePlayAlong(media()));
