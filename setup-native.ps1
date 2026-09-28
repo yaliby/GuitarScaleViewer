@@ -65,6 +65,31 @@ function Install-HarmoniaVenv {
     Set-Content -Path $stampPath -Value $stamp -NoNewline
 }
 
+function Install-LiveListening {
+    # Play Along's ear on Windows (chordsync/live/engine.py): speaker loopback + Whisper.
+    $sidecar = Join-Path $PSScriptRoot 'src-tauri/sidecars/chordsync'
+    $pythonExe = Join-Path $sidecar '.venv/Scripts/python.exe'
+    $files = @(Join-Path $sidecar 'requirements-windows-live.txt')
+    if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) { $files += Join-Path $sidecar 'requirements-windows-cuda.txt' }
+    $stampPath = Join-Path $sidecar '.venv/.live-requirements.sha256'
+    $stamp = ($files | ForEach-Object { (Get-FileHash -Algorithm SHA256 -Path $_).Hash }) -join ''
+    if ((Test-Path $stampPath) -and ((Get-Content -Raw -Path $stampPath).Trim() -eq $stamp)) { return }
+    Write-Host 'Installing live listening (Whisper) for Play Along...'
+    foreach ($file in $files) {
+        & $pythonExe -m pip install --disable-pip-version-check -r $file
+        if ($LASTEXITCODE -ne 0) { throw "Live listening dependency installation failed ($file)." }
+    }
+    Write-Host 'Downloading the Whisper models once (about 1.6 GB each)...'
+    & $pythonExe -c "import sys; sys.path.insert(0, r'$sidecar'); from chordsync.config import load_config; from huggingface_hub import snapshot_download; c = load_config(); [snapshot_download(m) for m in (c.live_lyrics_model, c.live_lyrics_model_he)]"
+    if ($LASTEXITCODE -ne 0) { throw 'Whisper model download failed.' }
+    Set-Content -Path $stampPath -Value $stamp -NoNewline
+}
+
+function Install-LiveListeningOrWarn {
+    # Play Along works without it; it just cannot time lyrics by ear.
+    try { Install-LiveListening } catch { Write-Warning "Play Along live listening stays unavailable: $_" }
+}
+
 function Install-HarmoniaVenvOrWarn {
     # Chord analysis is optional; the app still starts without it.
     try { Install-HarmoniaVenv } catch { Write-Warning "Whole-song chord analysis stays unavailable: $_" }
@@ -119,6 +144,7 @@ Install-BundledFfmpeg
 
 if ($ChordSyncOnly) {
     Install-ChordSyncVenv
+    Install-LiveListeningOrWarn
     Install-HarmoniaVenvOrWarn
     Write-Host 'ChordSync Python environment is ready.'
     $global:LASTEXITCODE = 0
@@ -141,6 +167,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Analyzer dependency installation failed.' }
 & $analyzerPython -m PyInstaller --noconfirm --clean --onedir --name key_analyzer --distpath src-tauri/sidecars/key_analyzer/dist --workpath .tools/analyzer-build --specpath .tools src-tauri/sidecars/key_analyzer/key_analyzer.py
 if ($LASTEXITCODE -ne 0) { throw 'Analyzer packaging failed.' }
 Install-ChordSyncVenv
+Install-LiveListeningOrWarn
 Install-HarmoniaVenvOrWarn
 $global:LASTEXITCODE = 0
 Write-Host 'Native dependencies, ChordSync environment, and standalone analyzer are ready. Run ./dev.ps1.'

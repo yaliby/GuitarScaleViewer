@@ -5,4 +5,7 @@
 - ``transcript``: heard words on the track clock, grouped into lyric lines.
 - ``whisper_asr``: faster-whisper models (GPU when available).
 - ``engine``: threads that tie it together for the controller.
+
+Linux loads these from the ChordSync companion repo. This vendored copy carries the Windows
+engine (WASAPI loopback in ``audio_capture``), used only where that repo is absent.
 """

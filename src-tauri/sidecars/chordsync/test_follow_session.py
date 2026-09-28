@@ -5,6 +5,8 @@ from __future__ import annotations
 import sys
 import unittest
 from pathlib import Path
+from typing import NamedTuple
+from unittest.mock import patch
 
 SIDECAR = Path(__file__).resolve().parent
 ROOTS = [SIDECAR, SIDECAR.parents[3] / "ChordSync"]
@@ -34,6 +36,39 @@ WORLD = "we were never really friends"
 
 
 class FollowSyncRulesTest(unittest.TestCase):
+    """The Linux rules. Windows listens more (see WindowsEarEverywhereTest)."""
+
+    def setUp(self) -> None:
+        patcher = patch("follow_session._EAR_EVERYWHERE", False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_explicit_pause_beats_a_moving_position(self) -> None:
+        session = FollowSession()
+        session.last_provider_pos = 10_000
+        paused = {
+            "playing": False,
+            "playbackStatus": "paused",
+            "positionMs": 10_400,
+        }
+        self.assertFalse(session._effective_playing(paused))
+        stopped = {
+            "playing": False,
+            "playbackStatus": "stopped",
+            "positionMs": 50_000,
+        }
+        self.assertFalse(session._effective_playing(stopped))
+
+    def test_a_moving_position_still_counts_without_an_explicit_pause(self) -> None:
+        session = FollowSession()
+        session.last_provider_pos = 10_000
+        self.assertTrue(
+            session._effective_playing(
+                {"playing": False, "playbackStatus": "unknown", "positionMs": 10_400}
+            )
+        )
+        self.assertTrue(session._effective_playing({"playing": False, "positionMs": 10_400}))
+
     def _session(self, *, app: str, player_ms: int, lrc_ms: int) -> FollowSession:
         parsed = ParsedLrc(lines=(_line(0, 10_000, HELLO), _line(1, 20_000, WORLD)))
         session = FollowSession()
@@ -660,6 +695,120 @@ class FollowSyncRulesTest(unittest.TestCase):
         )
         self.assertEqual(session.lrc_offset_source, "captions")
         self.assertEqual(session.lrc_offset_ms, 4_000)
+
+
+VERSES = (
+    "the river runs beneath the bridge tonight",
+    "a thousand lanterns floating on the water",
+    "my mother sang these words when I was young",
+    "and every road still leads me back to you",
+    "so hold the light until the morning comes",
+)
+
+
+class _HeardLine(NamedTuple):
+    """The fields FollowSession reads from a live transcript line."""
+
+    start_ms: int
+    end_ms: int
+    text: str
+
+
+def _heard(offset_ms: int) -> list[_HeardLine]:
+    """The five VERSES as the live transcriber hears them, ``offset_ms`` after the LRC."""
+    return [
+        _HeardLine(10_000 * (i + 1) + offset_ms, 10_000 * (i + 1) + offset_ms + 3_000, t)
+        for i, t in enumerate(VERSES)
+    ]
+
+
+class WindowsEarEverywhereTest(unittest.TestCase):
+    """Windows: the ear times every synced song, keeps listening, and re-checks memory."""
+
+    def _session(self, *, app: str = "brave") -> FollowSession:
+        session = FollowSession()
+        session.ear_everywhere = True
+        session.load(
+            parsed=ParsedLrc(lines=tuple(_line(i, 10_000 * (i + 1), t) for i, t in enumerate(VERSES))),
+            lines=list(VERSES),
+            lrc_duration_ms=180_000,
+            app_name=app,
+            track_id=f"song|{app}",
+            lyrics_state="synced",
+            chart_view="lyrics",
+            player_duration_ms=180_000,
+        )
+        session._live_key = session.track_id
+        return session
+
+    def _plan(self, session: FollowSession, *, captions_state: str, video_like: bool = True):
+        session.captions_state = captions_state
+        return session._live_plan(duration_ms=180_000, video_like=video_like, snap=_snap(captions_state=captions_state))
+
+    def test_spotify_synced_lrc_is_timed_by_ear(self) -> None:
+        session = self._session(app="spotify")
+        plan = self._plan(session, captions_state="none", video_like=False)
+        self.assertEqual(plan and plan.get("action"), "activate")
+        self.assertEqual(session._live_purpose, "ear_sync")
+
+    def test_ear_starts_without_waiting_for_captions(self) -> None:
+        session = self._session()
+        plan = self._plan(session, captions_state="pending")
+        self.assertEqual(plan and plan.get("action"), "activate")
+
+    def test_captions_locked_in_this_play_still_end_the_ear(self) -> None:
+        session = self._session()
+        session.lrc_offset_source = "captions"
+        plan = self._plan(session, captions_state="lyrics")
+        self.assertEqual(plan and plan.get("action"), "end")
+
+    def test_a_remembered_caption_offset_is_checked_by_ear(self) -> None:
+        session = self._session()
+        session.lrc_offset_source = "captions"
+        session._timing_remembered = True
+        plan = self._plan(session, captions_state="lyrics")
+        self.assertEqual(plan and plan.get("action"), "activate")
+
+    def test_the_ear_keeps_listening_after_its_lock(self) -> None:
+        session = self._session()
+        self._plan(session, captions_state="none")
+        session._live_lines = _heard(3_000)
+        session._ear_sync()
+        self.assertEqual((session.lrc_offset_ms, session.lrc_offset_source), (3_000, "live"))
+        self.assertFalse(session._ear_done)
+        self.assertTrue(session._ear_locked)
+
+        # A small disagreement does not move a lock...
+        session._live_lines = _heard(4_000)
+        session._ear_sync()
+        self.assertEqual(session.lrc_offset_ms, 3_000)
+        # ...a firm lock clearly elsewhere (a cut in the clip) does.
+        session._live_lines = _heard(9_000)
+        session._ear_sync()
+        self.assertEqual(session.lrc_offset_ms, 9_000)
+
+    def test_the_ear_does_not_give_up_on_a_noisy_start(self) -> None:
+        # A burst of misheard words must not retire the ear before the verses arrive.
+        session = self._session()
+        self._plan(session, captions_state="none")
+        session._live_lines = [_HeardLine(i * 1_000, i * 1_000 + 900, "la la la la la") for i in range(40)]
+        session._ear_sync()
+        self.assertFalse(session._ear_done)
+        session._live_lines = _heard(3_000)
+        session._ear_sync()
+        self.assertEqual(session.lrc_offset_ms, 3_000)
+
+    def test_a_remembered_offset_is_replaced_when_the_ear_hears_another_clip(self) -> None:
+        session = self._session()
+        session.lrc_offset_ms = 0
+        session.lrc_offset_source = "live"
+        session._timing_remembered = True
+        session._ear_done = False
+        self._plan(session, captions_state="none")
+        session._live_lines = _heard(6_000)
+        session._ear_sync()
+        self.assertEqual((session.lrc_offset_ms, session.lrc_offset_source), (6_000, "live"))
+        self.assertFalse(session._timing_remembered)
 
 
 def _snap(*, captions_state: str, youtube_parsed: ParsedLrc | None = None) -> SourceSnapshot:

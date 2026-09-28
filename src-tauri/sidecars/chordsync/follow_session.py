@@ -29,6 +29,9 @@ _EAR_LOCK_LINES = 4
 _EAR_LOCK_SPREAD_MS = 2000
 _EAR_GIVE_UP_WORDS = 150
 _EAR_LOST_MISSES = 6
+# Windows only: the player clock (GSMTC) and a remembered offset are both weaker than on Linux,
+# so the ear times every synced song, never retires, and re-checks remembered timing.
+_EAR_EVERYWHERE = sys.platform == "win32"
 
 
 def _follow_log_path() -> Path | None:
@@ -106,6 +109,8 @@ class FollowSession:
         self._live_on = False
         self._live_purpose = "none"
         self._ear_done = False
+        self._ear_locked = False
+        self.ear_everywhere = _EAR_EVERYWHERE
         self._ear_cursor: int | None = None
         self._ear_misses = 0
         self._live_tail = ""
@@ -200,7 +205,7 @@ class FollowSession:
                 self.lrc_offset_source = str(remembered_offset_source)
                 self._timing_remembered = True
                 self._yt_offset_tried = True
-                self._ear_done = True
+                self._ear_done = not self.ear_everywhere
             if same and lines_changed:
                 # AppController._put_chart_on_screen: a new page resets the walk.
                 # Reloading the same chart must keep last_match_index.
@@ -309,6 +314,7 @@ class FollowSession:
         self._live_on = False
         self._live_purpose = "none"
         self._ear_done = False
+        self._ear_locked = False
         self._ear_cursor = None
         self._ear_misses = 0
         self._live_tail = ""
@@ -317,9 +323,13 @@ class FollowSession:
         self._timing_remembered = False
 
     def _effective_playing(self, req: dict[str, Any]) -> bool:
+        status = str(req.get("playbackStatus") or "").strip().lower()
+        # GSMTC can keep writing a slightly later position after Pause.
+        # An explicit pause or stop is the transport; position movement is not.
+        if status in {"paused", "stopped", "closed"}:
+            return False
         raw = req.get("playing")
         if raw is None:
-            status = str(req.get("playbackStatus") or "").strip().lower()
             raw = status in {"playing", "opened"}
         playing = bool(raw)
         pos = req.get("positionMs")
@@ -432,6 +442,24 @@ class FollowSession:
             self._live_key = None
             _log("live_lyrics_skipped_long_track", duration_ms=duration_ms)
             return {"action": "end"}
+        if self.lyrics_state == "synced" and self.ear_everywhere:
+            if self.lrc_offset_source == "captions" and not self._timing_remembered:
+                _log("live_lyrics_not_needed", lyrics=self.lyrics_state, offset_source="captions")
+                self._live_on = False
+                self._live_purpose = "none"
+                self._live_key = None
+                return {"action": "end"}
+            if self._live_on:
+                return None
+            self._live_on = True
+            self._live_purpose = "ear_sync"
+            _log(
+                "live_ear_sync_on",
+                captions=self.captions_state,
+                offset_ms=int(self.lrc_offset_ms),
+                everywhere=True,
+            )
+            return {"action": "activate", "track_id": self._live_key}
         if self.lyrics_state == "synced":
             if not video_like or self.lrc_offset_source == "captions":
                 _log(
@@ -478,7 +506,7 @@ class FollowSession:
     def _ear_sync(self) -> None:
         from chordsync.sync.caption_align import CaptionCue, lrc_offset_lock
 
-        if self._timing_remembered:
+        if self._timing_remembered and not self.ear_everywhere:
             return
         parsed = self.parsed
         heard = self._live_lines
@@ -498,7 +526,7 @@ class FollowSession:
         )
         if lock is None:
             words = sum(len(ln.text.split()) for ln in heard)
-            if self.lrc_offset_source != "live" and words >= _EAR_GIVE_UP_WORDS:
+            if self.lrc_offset_source != "live" and words >= _EAR_GIVE_UP_WORDS and not self.ear_everywhere:
                 _log("live_ear_sync_no_match", words=words, lines=len(heard))
                 self._ear_done = True
             return
@@ -506,6 +534,9 @@ class FollowSession:
         prev = int(self.lrc_offset_ms)
         steady = lock.spread_ms <= _EAR_LOCK_SPREAD_MS and lock.outliers <= max(1, lock.lines // 4)
         final = lock.lines >= _EAR_LOCK_LINES and steady
+        if self.ear_everywhere and (self._ear_locked or self._timing_remembered):
+            self._ear_recheck(off, prev, lock, final)
+            return
         move = _EAR_MOVE_MS
         if final:
             move = 250
@@ -526,8 +557,25 @@ class FollowSession:
                 spread_ms=lock.spread_ms,
                 outliers=lock.outliers,
             )
-            self._ear_done = True
+            if self.ear_everywhere:
+                self._ear_locked = True
+            else:
+                self._ear_done = True
             self._persist_locked_timing()
+
+    def _ear_recheck(self, off: int, prev: int, lock: Any, final: bool) -> None:
+        """Windows: a trusted offset (locked by ear, or remembered) moves only on a firm lock
+        clearly elsewhere — a cut in the clip, another upload of the song, a wrong first lock."""
+        if not final or abs(off - prev) < _EAR_JUMP_MS:
+            return
+        self.lrc_offset_ms = int(off)
+        self.lrc_offset_source = "live"
+        self.last_lyric_line_index = None
+        self.match_seek = True
+        self._ear_locked = True
+        _log("live_ear_sync_relocked", offset_ms=off, prev_ms=prev, lines=lock.lines, spread_ms=lock.spread_ms)
+        self._timing_remembered = False
+        self._persist_locked_timing()
 
     def _follow_chart_live(self, duration_ms: int | None) -> None:
         from chordsync.sync.ear_follow import MIN_WORDS as EAR_MIN_WORDS

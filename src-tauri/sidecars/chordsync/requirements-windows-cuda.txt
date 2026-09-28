@@ -1,0 +1,4 @@
+# CUDA 12 runtime for CTranslate2 on an NVIDIA GPU; whisper_asr.py puts these DLLs on the path.
+# Verified on an RTX 3060 Laptop GPU: a 20 s Whisper pass takes about 0.5 s.
+nvidia-cublas-cu12==12.9.2.10
+nvidia-cudnn-cu12==9.26.0.51

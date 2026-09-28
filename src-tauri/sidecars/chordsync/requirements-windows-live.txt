@@ -1,0 +1,4 @@
+# Windows live listening (chordsync/live/engine.py): speaker loopback + Whisper.
+# Linux gets its engine and dependencies from the ChordSync repo. Verified on Windows 10, Python 3.12.
+faster-whisper==1.2.1
+soundcard==0.4.6
