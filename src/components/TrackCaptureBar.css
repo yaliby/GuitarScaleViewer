@@ -230,12 +230,3 @@
 .listening-panel .track-capture {
   margin: 14px 0 4px;
 }
-
-.playalong-search .track-capture {
-  grid-column: 1 / -1;
-}
-
-.playalong-shell > .track-capture {
-  flex-shrink: 0;
-  margin: 0 0 clamp(8px, 1.1vh, 12px);
-}

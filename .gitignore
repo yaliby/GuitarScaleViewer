@@ -14,6 +14,7 @@ playwright-report/
 # CMake build output for the libkeyfinder sidecar
 src-tauri/sidecars/libkeyfinder_cli/build/
 src-tauri/sidecars/chordsync/.venv/
+src-tauri/sidecars/chordsync/.venv-linux/
 
 # Vendored Harmonia recognition environment (never commit weights/venv)
 harmonia/ml/.venv/

@@ -1,7 +1,15 @@
 import path from 'node:path';
 
-/** Both layouts, so a Windows Scripts venv is found even when the host check runs the same list. */
-export const CHORDSYNC_VENV_RELATIVE = ['.venv/bin/python', '.venv/Scripts/python.exe'] as const;
+/**
+ * Venv interpreters per platform. The checkout lives on a drive shared by Windows and Linux, so a
+ * Windows `.venv/Scripts/python.exe` can exist under Linux, where exec'ing it fails ("MZ...:
+ * Invalid argument") and takes Play Along down with it. Linux gets its own `.venv-linux`
+ * (made by dev.sh) so it never has to overwrite the Windows venv.
+ */
+export function chordsyncVenvRelative(platform: NodeJS.Platform): readonly string[] {
+  if (platform === 'win32') return ['.venv/Scripts/python.exe'];
+  return ['.venv/bin/python', '.venv-linux/bin/python'];
+}
 
 export function chordsyncPackageDir(root: string, siblingHasPackage: boolean): string {
   if (siblingHasPackage) return path.resolve(root, '../ChordSync');
@@ -32,7 +40,7 @@ export function resolveChordsyncPython(options: {
   for (const directory of directories) {
     if (seen.has(directory)) continue;
     seen.add(directory);
-    for (const relative of CHORDSYNC_VENV_RELATIVE) {
+    for (const relative of chordsyncVenvRelative(options.platform)) {
       const candidate = path.join(directory, relative);
       if (options.exists(candidate)) return candidate;
     }

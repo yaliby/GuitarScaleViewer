@@ -20,12 +20,11 @@ import {
   Expand,
   Guitar,
   Headphones,
+  Library,
   ListMusic,
   Menu,
-  Music2,
   RotateCcw,
   Save,
-  ScrollText,
   Trash2,
   X,
 } from "lucide-react";
@@ -39,7 +38,6 @@ import { Fretboard, musicalLabel } from "./components/Fretboard";
 import { ListeningPanel } from "./components/ListeningPanel";
 import { StudioScreens, type StudioView } from "./components/StudioScreens";
 import LiveJamScreen from "./LiveJamScreen";
-import PlayAlongScreen from "./PlayAlongScreen";
 import { Transport } from "./components/Transport";
 import { useCloudKeyResolution } from "./hooks/useCloudKeyResolution";
 import { useDetectedKey } from "./hooks/useDetectedKey";
@@ -181,7 +179,7 @@ export default function App() {
   const auditionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const media = useMediaSession();
-  /* Keeps lyric follow alive while Play Along is not on screen. */
+  /* Keeps lyric follow alive while Live Jam's chart is not on screen. */
   usePlayAlong(media);
   const capture = useTrackCapture(media);
   const { detectedKey, resetDetection } = useDetectedKey();
@@ -563,7 +561,7 @@ export default function App() {
   };
   const changeView = (next: StudioView) => {
     audio.stop();
-    if (view === "songs") {
+    if (view === "library") {
       void import("./harmonia/composition").then((mod) =>
         mod.pauseHarmoniaPlayback(),
       );
@@ -973,7 +971,7 @@ export default function App() {
     />
   );
   /* Live Jam is the whole window: the neck needs it, so the nav folds into the hamburger. */
-  const immersive = view === "jam" || view === "playalong" || view === "songs";
+  const immersive = view === "jam" || view === "library";
 
   return (
     <MotionConfig reducedMotion="user">
@@ -1005,21 +1003,12 @@ export default function App() {
               <i className="nav-dot" />
             </button>
             <button
-              className={`nav-item ${view === "playalong" ? "active" : ""}`}
-              aria-current={view === "playalong" ? "page" : undefined}
-              onClick={() => changeView("playalong")}
+              className={`nav-item ${view === "library" ? "active" : ""}`}
+              aria-current={view === "library" ? "page" : undefined}
+              onClick={() => changeView("library")}
             >
-              <ScrollText size={17} />
-              <span>Play Along</span>
-              <i className="nav-dot" />
-            </button>
-            <button
-              className={`nav-item ${view === "songs" ? "active" : ""}`}
-              aria-current={view === "songs" ? "page" : undefined}
-              onClick={() => changeView("songs")}
-            >
-              <Music2 size={17} />
-              <span>Songs</span>
+              <Library size={17} />
+              <span>Library</span>
               <i className="nav-dot" />
             </button>
             <button
@@ -1185,17 +1174,7 @@ export default function App() {
                 followSong={view === "jam"}
               />
             }
-            playalong={
-              <PlayAlongScreen
-                root={session.root}
-                scaleType={session.scaleType}
-                fused={fused}
-                menuOpen={sidebarOpen}
-                onToggleMenu={() => setSidebarOpen((open) => !open)}
-                onOpenJam={() => changeView("jam")}
-              />
-            }
-            songs={
+            library={
               <Suspense fallback={<div className="harmonia-empty">Opening the song library…</div>}>
                 <HarmoniaScreen
                   menuOpen={sidebarOpen}
@@ -1231,7 +1210,7 @@ export default function App() {
             onAudition={audition}
             onNavigate={changeView}
           />
-          {view !== "jam" && view !== "playalong" && view !== "songs" && (
+          {view !== "jam" && view !== "library" && (
             <Transport
               session={session}
               onChange={updateSession}

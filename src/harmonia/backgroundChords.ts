@@ -1,5 +1,6 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { trace } from "../services/debugLog";
+import { ensureLyricMap } from "../services/lyricMap";
 import { loadCapturedFile, type CapturedTrack } from "../services/trackCapture";
 import { analyzedCaptureIds, markCaptureAnalyzed } from "./analyzedCaptures";
 import { setChordJob, resetChordJobsForTests } from "./chordJobs";
@@ -9,8 +10,8 @@ const pending = new Set<string>();
 const aborts = new Map<string, AbortController>();
 
 /**
- * After a song file is on disk, read its chords with the local recognizer.
- * The open screen is left alone; opening that song later reuses the saved analysis.
+ * After a song file is on disk, read its chords with the local recognizer, then time its
+ * lyrics word by word. The open screen is left alone; opening that song later reuses both.
  */
 export function enqueueChordAnalysis(track: CapturedTrack): Promise<void> {
   if (!isTauri() || !track.id || pending.has(track.id) || analyzedCaptureIds().has(track.id)) {
@@ -51,6 +52,16 @@ async function run(track: CapturedTrack, controller: AbortController): Promise<v
     );
     if (controller.signal.aborted || !record?.analysis.fingerprint) return;
     markCaptureAnalyzed(track.id, record.analysis.fingerprint);
+    // Then every lyric word on the same file's clock, so the song opens with its chord sheet.
+    void ensureLyricMap(track.id).catch((error: unknown) => {
+      trace(
+        "harmonia",
+        "lyrics.fail",
+        `Lyric timing failed for ${track.title}`,
+        { id: track.id, error: error instanceof Error ? error.message : String(error) },
+        "fail",
+      );
+    });
   } catch (error) {
     if (controller.signal.aborted) return;
     const message = error instanceof Error ? error.message : String(error);

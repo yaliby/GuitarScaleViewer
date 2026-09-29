@@ -23,8 +23,7 @@ export type StudioView =
   | "practice"
   | "progressions"
   | "jam"
-  | "playalong"
-  | "songs";
+  | "library";
 type Props = {
   view: StudioView;
   context: ReactNode;
@@ -32,8 +31,7 @@ type Props = {
   chords: ReactNode;
   listening: ReactNode;
   jam: ReactNode;
-  playalong: ReactNode;
-  songs: ReactNode;
+  library: ReactNode;
   session: PracticeSession;
   notes: ScaleNote[];
   playing: string | null;
@@ -132,13 +130,8 @@ export function StudioScreens(p: Props) {
   if (view === "jam") {
     return <div className="workspace screen screen-jam">{p.jam}</div>;
   }
-  if (view === "playalong") {
-    return (
-      <div className="workspace screen screen-playalong">{p.playalong}</div>
-    );
-  }
-  if (view === "songs") {
-    return <div className="workspace screen screen-songs">{p.songs}</div>;
+  if (view === "library") {
+    return <div className="workspace screen screen-library">{p.library}</div>;
   }
   return (
     <AnimatePresence mode="wait" initial={false}>

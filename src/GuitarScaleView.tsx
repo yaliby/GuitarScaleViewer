@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Layers3, Menu, SlidersHorizontal, X } from 'lucide-react';
+import { Menu, SlidersHorizontal, X } from 'lucide-react';
 import type { ScaleContext, ScaleType } from './scaleDataProvider';
 import { ChordLibrarySection } from './ChordLibrarySection';
 import type { ScaleChordWithVoicings } from './chords/chordTypes';
@@ -25,10 +25,31 @@ import { ViewModeSwitch } from './ui/ViewModeSwitch';
 import { DevDrawer } from './ui/DevDrawer';
 import { useTrackCapture } from './hooks/useTrackCapture';
 import { rememberScale } from './services/songMemory';
+import { useJamPanel, useSheetFollow, type JamPanel } from './jamPanel';
+import { PlayAlongPanel } from './playalong/PlayAlongPanel';
+import { JamPanelSwitch } from './ui/JamPanelSwitch';
 import './ui/lab-jam.css';
+
+/* The analysis stack loads when the sheet is first opened, not with the neck. */
+const LiveSongSheet = lazy(() => import('./harmonia/LiveSongSheet'));
 
 /** Open + 24 fretted positions (extend via props later). */
 const DEFAULT_NUM_FRETS = 24;
+
+const PANEL_COPY: Record<JamPanel, { title: string; blurb: string }> = {
+  chords: {
+    title: 'Chords that live in this key.',
+    blurb: 'One module per degree of the scale, with every shape that fits your tuning and capo.',
+  },
+  chart: {
+    title: 'The chart, following the song.',
+    blurb: 'Synced lyrics from LRCLIB beside a Tab4U / Ultimate Guitar chart, on the clock of whatever is playing.',
+  },
+  sheet: {
+    title: 'This recording, read by ear.',
+    blurb: 'The chords the recognizer heard in the saved copy of this song, over every lyric word as it is sung.',
+  },
+};
 
 type Props = {
   scale: ScaleContext;
@@ -62,9 +83,11 @@ type Props = {
 
 /**
  * Live Jam itself: an editorial heading, a listening deck, toggle cards and one framed bay for the
- * neck, built in the Lab's own materials. It fills the window — the Studio navigation folds into
- * the hamburger for this screen — and the key, tuning and capo it works on are the session's, so
- * whatever the song turns out to be in is what the other screens practice.
+ * neck, built in the Lab's own materials. Under the neck sits the key's chord bank, or the song
+ * itself: the play-along chart, or the sheet read from its saved copy. It fills the window — the
+ * Studio navigation folds into the hamburger for this screen — and the key, tuning and capo it
+ * works on are the session's, so whatever the song turns out to be in is what the other screens
+ * practice.
  */
 export default function GuitarScaleView({
   scale,
@@ -106,6 +129,8 @@ export default function GuitarScaleView({
 
   const mediaSession = useMediaSession();
   const capture = useTrackCapture(mediaSession);
+  const { panel, autoSheet, choosePanel, setAutoSheet } = useJamPanel();
+  const sheetStatus = useSheetFollow(capture.track?.id ?? null);
   const { detectedKey, detectedKeyAb } = useDetectedKey();
   const cloudMediaInput = useMemo(
     () =>
@@ -521,25 +546,52 @@ export default function GuitarScaleView({
         </div>
       </div>
 
+      {/* Under the neck: the key's chord bank, or — Play Along folded in — the song itself. */}
       <section id="lab-chord-bank" className="lab-bank">
         <div className="lab-bank-heading">
           <div>
-            <h2>Chords that live in this key.</h2>
-            <p>One module per degree of the scale, with every shape that fits your tuning and capo.</p>
+            <h2>{PANEL_COPY[panel].title}</h2>
+            <p>{PANEL_COPY[panel].blurb}</p>
           </div>
-          <Layers3 size={27} />
+          <div className="lab-bank-actions">
+            <JamPanelSwitch value={panel} onChange={choosePanel} sheet={sheetStatus} />
+            <button
+              type="button"
+              className={`lab-auto ${autoSheet ? 'is-on' : ''}`}
+              aria-pressed={autoSheet}
+              title="When this song's background analysis finishes, switch to its song sheet"
+              onClick={() => setAutoSheet(!autoSheet)}
+            >
+              Sheet when ready
+              <i className="lab-switch" aria-hidden />
+            </button>
+          </div>
         </div>
-        <ChordLibrarySection
-          root={scale.root}
-          scaleType={scaleType}
-          tuningId={tuningId}
-          openStringPcs={tuning.openStringPcs}
-          tuningLabel={tuning.label}
-          stringLabels={tuning.stringLabels}
-          capo={capo}
-          selectedChord={selectedChord}
-          onChordSelect={setSelectedChord}
-        />
+        {panel === 'chords' ? (
+          <ChordLibrarySection
+            root={scale.root}
+            scaleType={scaleType}
+            tuningId={tuningId}
+            openStringPcs={tuning.openStringPcs}
+            tuningLabel={tuning.label}
+            stringLabels={tuning.stringLabels}
+            capo={capo}
+            selectedChord={selectedChord}
+            onChordSelect={setSelectedChord}
+          />
+        ) : panel === 'chart' ? (
+          <PlayAlongPanel />
+        ) : (
+          <Suspense
+            fallback={
+              <div className="jam-sheet-status" role="status">
+                <strong>Opening the song sheet…</strong>
+              </div>
+            }
+          >
+            <LiveSongSheet track={capture.track} positionMs={mediaSession.positionMs} playing={playing} />
+          </Suspense>
+        )}
       </section>
 
       <DevDrawer

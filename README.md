@@ -62,6 +62,8 @@ you want to stop the development process.
    the engine hears more: analysis is not instant chord recognition, so a new
    track improves over its first minute rather than arriving finished.
 4. The **chord bank** below the neck holds every shape that lives in the key.
+   Switch that bay to **Chart** to play along with synced lyrics and a chord
+   chart, or to **Song sheet** for the chords read from this recording.
    **Lock** freezes the neck where it is, and the setup row above the neck
    overrides it by hand — both optional.
 
@@ -77,8 +79,12 @@ manually chosen key.
 - Explore playable chord voicings and build progressions. Playback highlights the active chord and its notes on the fretboard.
 - Save named practice setups and restore your last session automatically on the same device.
 - Follow the media session and put the song's key on the neck automatically. Lock the practice key while a song continues playing.
-- **Live Jam:** the full-window neck — all 24 frets, a listening deck, the chord bank for the current key, and its own setup row — with the navigation folded into the hamburger menu. It plays the same key, tuning and capo as the rest of the workspace, so a key you land on here is the key you practice.
-- **Play Along:** synced lyrics (LRCLIB) and a Tab4U / Ultimate Guitar chord chart that follow the song. Desktop only; Whisper and the old Qt browser are not part of this screen.
+- **Live Jam:** the full-window neck — all 24 frets, a listening deck, and its own setup row — with the navigation folded into the hamburger menu. It plays the same key, tuning and capo as the rest of the workspace, so a key you land on here is the key you practice. The bay under the neck is a three-way switch:
+  - **Key chords:** the chord bank for the current key.
+  - **Chart** (what used to be Play Along): synced lyrics (LRCLIB) and a Tab4U / Ultimate Guitar chord chart that follow the song. Desktop only.
+  - **Song sheet:** the chords the recognizer read from the saved copy of the song now playing, over every lyric word, on the OS player's clock. It lines up exactly when the saved copy is the recording that is playing (a YouTube link or a local file); a YouTube search match can be another cut of the song and run early or late.
+  - **Sheet when ready** (off by default): when this song's background analysis finishes — chords read and lyric timing settled — the bay switches to the song sheet by itself, once per song. A new song without a sheet yet puts back the panel you were on; a panel you pick by hand stays.
+- **Library:** every saved song gets two analyses in the background — its chords from the local recognizer, and every lyric word timed on the file's own clock (LRCLIB for the words, Whisper for when each is sung). Opening the song plays it under a **song sheet**: the recognizer's chord changes sit over the words being sung when they happen, verses, choruses and instrumental bars are laid out, and the sheet follows the playback word by word. Click a word or a chord to jump there.
 
 The interface supports smaller screens, keyboard navigation, and the operating system's reduced-motion preference. Audio starts only after interaction. Practice sounds use synthesized tones.
 
@@ -134,7 +140,10 @@ GSMTC/WASAPI path on Windows.
 |---|---|
 | `src/` | React + Vite frontend (Studio shell, fretboard, chord library, key-resolution hooks) |
 | `src/LiveJamScreen.tsx` | Live Jam: the detailed neck chassis, driven by the workspace's shared session |
-| `src/PlayAlongScreen.tsx` | Play Along: synced lyrics + scraped chord chart, same now-playing session |
+| `src/jamPanel.ts` | What Live Jam shows under the neck, and the automatic move to the song sheet |
+| `src/playalong/PlayAlongPanel.tsx` | Live Jam's chart: synced lyrics + scraped chord chart, same now-playing session |
+| `src/harmonia/` | Library: saved songs, whole-song chords, and the song sheet (`chordSheet.ts` builds it, `SongSheet.tsx` plays it, `LiveSongSheet.tsx` puts it under the Live Jam neck) |
+| `src-tauri/sidecars/chordsync/lyric_map.py` | Times a saved song's lyrics word by word (LRCLIB + Whisper + in-order alignment) |
 | `src-tauri/sidecars/chordsync/` | Thin adapter that imports the sibling ChordSync checkout |
 | `src/services/keyFusion.ts` | The single decision: which key goes on the neck, and how certain it is |
 | `src/data/verifiedKeys.json` | Human-entered keys, bundled so they answer with no network call |
@@ -167,7 +176,7 @@ GSMTC/WASAPI path on Windows.
 | `KEY_ANALYZER_AB` | Run two backends side by side and emit `detected-key-ab-update` | unset |
 | `ALLOW_DEGRADED_ANALYZER` | Let `dev.sh`/`dev.ps1` start without an analyzer backend | `0` |
 | `GSV_LOG_DIR` | Where the Rust side writes logs | `logs/` |
-| `CHORDSYNC_PYTHON` | Interpreter for the Play Along sidecar | Windows: `src-tauri/sidecars/chordsync/.venv/Scripts/python.exe`, set by `dev.ps1`. Elsewhere: sibling ChordSync `.venv`, else that same sidecar `.venv`, else `python3` |
+| `CHORDSYNC_PYTHON` | Interpreter for the ChordSync sidecar (Live Jam's chart, lyric timing, saving songs) | Windows: `src-tauri/sidecars/chordsync/.venv/Scripts/python.exe`, set by `dev.ps1`. Elsewhere: sibling ChordSync `.venv`, else that same sidecar `.venv`, else `python3` |
 | `CHORDSYNC_ROOT` | Checkout that contains the live `chordsync/` package | sibling `../ChordSync`, else the vendored copy |
 | `CHORDSYNC_SIDECAR` | Explicit path to `chordsync_sidecar.py` | auto-discovered |
 
@@ -186,7 +195,7 @@ and an unreadable row is skipped instead of putting a broken root on the neck.
 - **`npm` is blocked by PowerShell policy:** use `npm.cmd`, as in the commands above.
 - **`python` is not found or opens the Microsoft Store:** install Python 3.13,
   ensure it is on PATH, and reopen PowerShell before retrying.
-- **Play Along or song memory fails with `No module named 'rapidfuzz'`, or Vite
+- **Live Jam's chart or song memory fails with `No module named 'rapidfuzz'`, or Vite
   says the Python command is unavailable:** the key-analyzer environment does not
   contain ChordSync. `npm.cmd run desktop` creates
   `src-tauri/sidecars/chordsync/.venv`, installs `requirements.txt` (including

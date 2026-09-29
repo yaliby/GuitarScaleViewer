@@ -1,39 +1,15 @@
-.playalong-shell {
+/* Play Along as Live Jam's chart. The screen scrolls, so the panel takes a fixed share of the
+   window and the lyrics and the chart scroll inside it, the way they did full-window. */
+.jam-chart {
   display: flex;
   flex-direction: column;
-  flex: 1;
-  min-height: 0;
-  height: 100%;
-  overflow: hidden;
-  padding: clamp(8px, 1.2vh, 14px) clamp(10px, 1.4vw, 16px) clamp(8px, 1.2vh, 14px);
-}
-
-.playalong-heading {
-  flex-shrink: 0;
-  margin: 0 0 clamp(6px, 1vh, 12px);
-}
-
-.playalong-keychip {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
+  height: clamp(440px, 78vh, 980px);
   min-width: 0;
-  padding: 6px 12px;
+  padding: 14px;
   border: 1px solid var(--lab-line, #2d2d35);
-  border-radius: 9px;
-  background: linear-gradient(180deg, #1c1c21, #141418);
-  color: var(--gear-legend, #8b8b95);
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.playalong-keychip strong {
-  color: var(--gear-text, #ecece8);
-  font-size: 13px;
-  letter-spacing: -0.02em;
-  text-transform: none;
-  white-space: nowrap;
+  border-radius: 15px;
+  background: linear-gradient(160deg, #1b1b20, #151519);
+  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.35);
 }
 
 .playalong-singing {
@@ -76,7 +52,7 @@
 
 .playalong-search {
   display: grid;
-  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) auto minmax(0, 1.3fr);
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) auto minmax(0, 1.3fr) auto;
   gap: 10px;
   margin: 0 0 clamp(8px, 1.1vh, 12px);
   align-items: end;
@@ -145,26 +121,6 @@
   min-height: 0;
   border: 0;
   background: #0e0d0c;
-}
-
-.playalong-jam {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  height: 34px;
-  padding: 0 12px;
-  border-radius: 9px;
-  border: 1px solid var(--lab-line, #2d2d35);
-  background: linear-gradient(180deg, #1c1c21, #141418);
-  color: var(--gear-legend, #8b8b95);
-  font-size: 12px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.playalong-jam:hover {
-  color: var(--gear-text, #ecece8);
-  border-color: #3d3d47;
 }
 
 .playalong-stage.has-dev {
@@ -311,9 +267,6 @@ body.playalong-dragging iframe {
 }
 
 @media (max-width: 900px) {
-  .playalong-heading {
-    gap: 10px;
-  }
   .playalong-search {
     grid-template-columns: 1fr 1fr auto;
   }
@@ -322,11 +275,7 @@ body.playalong-dragging iframe {
     flex-basis: min(40vh, 320px);
   }
   .playalong-status-line {
-    grid-column: 1 / -1;
-  }
-  .playalong-jam span,
-  .playalong-jam {
-    letter-spacing: 0;
+    grid-column: 1 / 3;
   }
 }
 
@@ -338,31 +287,5 @@ body.playalong-dragging iframe {
   .playalong-search label {
     font-size: 0;
     gap: 0;
-  }
-}
-
-@media (max-height: 620px) {
-  .playalong-search {
-    display: none;
-  }
-  .playalong-singing {
-    padding: 6px 12px;
-  }
-}
-
-@media (max-width: 640px) {
-  .lab-heading.playalong-heading {
-    grid-template-columns: auto 1fr auto;
-    gap: 8px;
-  }
-  .playalong-heading h1 {
-    font-size: 18px;
-  }
-  .playalong-jam {
-    padding: 0 8px;
-    font-size: 0;
-    gap: 0;
-    width: 34px;
-    justify-content: center;
   }
 }

@@ -8,6 +8,7 @@ Three sources, one singing cursor:
    by ear when captions miss, or *is* the lyrics when nobody else has them.
 
 Offset precedence (same as app_controller): duration guess < captions lock < ear lock.
+On Windows captions come last and win: duration guess < ear lock < captions lock.
 Duration is never reapplied after captions or live lock.
 """
 
@@ -31,6 +32,8 @@ _EAR_GIVE_UP_WORDS = 150
 _EAR_LOST_MISSES = 6
 # Windows only: the player clock (GSMTC) and a remembered offset are both weaker than on Linux,
 # so the ear times every synced song, never retires, and re-checks remembered timing.
+# YouTube captions are the strongest clock there: they replace a remembered or heard offset,
+# and once they lock a video the ear stops.
 _EAR_EVERYWHERE = sys.platform == "win32"
 
 
@@ -204,7 +207,8 @@ class FollowSession:
                 self.lrc_offset_ms = int(remembered_offset_ms)
                 self.lrc_offset_source = str(remembered_offset_source)
                 self._timing_remembered = True
-                self._yt_offset_tried = True
+                # Windows still lets this clip's captions replace it.
+                self._yt_offset_tried = not self.ear_everywhere
                 self._ear_done = not self.ear_everywhere
             if same and lines_changed:
                 # AppController._put_chart_on_screen: a new page resets the walk.
@@ -390,7 +394,7 @@ class FollowSession:
     def _maybe_apply_youtube_caption_offset(self) -> None:
         from chordsync.sync.caption_align import CaptionCue, caption_lrc_offset_ms
 
-        if self._timing_remembered:
+        if self._timing_remembered and not self.ear_everywhere:
             return
         parsed = self.parsed
         yt = self._youtube_parsed
@@ -402,9 +406,14 @@ class FollowSession:
             _log("youtube_caption_offset_miss", lines=len(getattr(yt, "lines", ()) or ()))
             return
         prev = int(self.lrc_offset_ms)
+        prev_source = self.lrc_offset_source
         self.lrc_offset_ms = int(off)
         self.lrc_offset_source = "captions"
-        _log("youtube_caption_offset", offset_ms=int(off), prev_ms=prev, cues=len(cues))
+        if int(off) != prev:
+            self.last_lyric_line_index = None
+        # Windows: fresh captions outrank a remembered offset, so memory learns them.
+        self._timing_remembered = False
+        _log("youtube_caption_offset", offset_ms=int(off), prev_ms=prev, prev_source=prev_source, cues=len(cues))
         self._persist_locked_timing()
 
     def _ingest_sources(self, snap: SourceSnapshot) -> bool:
@@ -443,8 +452,15 @@ class FollowSession:
             _log("live_lyrics_skipped_long_track", duration_ms=duration_ms)
             return {"action": "end"}
         if self.lyrics_state == "synced" and self.ear_everywhere:
-            if self.lrc_offset_source == "captions" and not self._timing_remembered:
-                _log("live_lyrics_not_needed", lyrics=self.lyrics_state, offset_source="captions")
+            # Captions outrank the ear. A remembered caption offset is only trusted on a video:
+            # memory is per song, and another player (Spotify) still needs the ear to check it.
+            if self.lrc_offset_source == "captions" and (video_like or not self._timing_remembered):
+                _log(
+                    "live_lyrics_not_needed",
+                    lyrics=self.lyrics_state,
+                    offset_source="captions",
+                    remembered=self._timing_remembered,
+                )
                 self._live_on = False
                 self._live_purpose = "none"
                 self._live_key = None

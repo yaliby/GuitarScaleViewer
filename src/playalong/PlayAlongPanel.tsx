@@ -1,26 +1,11 @@
 import { memo, useEffect, useRef, useState } from "react";
-import { Headphones, Menu, X } from "lucide-react";
-import type { FusedKey } from "./services/keyFusion";
-import { useMediaSession } from "./hooks/useMediaSession";
-import { usePlayAlong } from "./hooks/usePlayAlong";
-import { useTrackCapture } from "./hooks/useTrackCapture";
-import { TrackCaptureBar } from "./components/TrackCaptureBar";
-import { SCALE_TYPE_LABELS, type ScaleType } from "./scaleDataProvider";
-import { clockLabel } from "./ui/statusLabels";
-import { Led } from "./ui/gear";
-import { hasHebrew, scrollLineToCenter } from "./playalong/scroll";
-import type { DevSourcePanel, TimedLyricLine } from "./playalong/types";
-import "./ui/lab-jam.css";
-import "./playalong/playalong.css";
-
-type Props = {
-  root: string;
-  scaleType: ScaleType;
-  fused: FusedKey;
-  menuOpen: boolean;
-  onToggleMenu: () => void;
-  onOpenJam: () => void;
-};
+import { useMediaSession } from "../hooks/useMediaSession";
+import { usePlayAlong } from "../hooks/usePlayAlong";
+import { clockLabel } from "../ui/statusLabels";
+import { Led } from "../ui/gear";
+import { hasHebrew, scrollLineToCenter } from "./scroll";
+import type { DevSourcePanel, TimedLyricLine } from "./types";
+import "./playalong.css";
 
 const CHART_FIT_CSS = `
 body {
@@ -150,11 +135,11 @@ function NowSinging({
       dir={rtl ? "rtl" : "ltr"}
       aria-live="polite"
     >
-      <p className="playalong-singing-prev">{prev?.text || "\u00a0"}</p>
+      <p className="playalong-singing-prev">{prev?.text || " "}</p>
       <p className="playalong-singing-current">
         {current?.text || "Waiting for a sung line…"}
       </p>
-      <p className="playalong-singing-next">{next?.text || "\u00a0"}</p>
+      <p className="playalong-singing-next">{next?.text || " "}</p>
     </div>
   );
 }
@@ -303,17 +288,16 @@ function useSplit() {
   return { stageRef, ratio, vertical, onPointerDown };
 }
 
-export default function PlayAlongScreen({
-  root,
-  scaleType,
-  menuOpen,
-  onToggleMenu,
-  onOpenJam,
-}: Props) {
+/**
+ * Play Along, as Live Jam's chart: synced lyrics (LRCLIB) beside a Tab4U / Ultimate Guitar
+ * chart, both on the clock of whatever the OS is playing. The key, the deck and the save bar
+ * are Live Jam's own, so this is only the part that follows the words. The follow loop lives
+ * in `usePlayAlong`'s store, so switching the panel away and back picks the song up where it is.
+ */
+export function PlayAlongPanel() {
   const media = useMediaSession();
   const [devOpen, setDevOpen] = useState(false);
   const playalong = usePlayAlong(media);
-  const capture = useTrackCapture(media);
   const split = useSplit();
   const title =
     media.title || playalong.title || playalong.payload?.track?.title;
@@ -331,51 +315,7 @@ export default function PlayAlongScreen({
   const clock = `${clockLabel(playalong.positionMs)} / ${clockLabel(media.durationMs)}`;
 
   return (
-    <div
-      className="lab-shell playalong-shell flex flex-1 flex-col"
-      aria-label="Play Along workspace"
-      role="region"
-    >
-      <header className="lab-heading playalong-heading">
-        <button
-          type="button"
-          className="lab-menu"
-          aria-label={
-            menuOpen ? "Close navigation menu" : "Open navigation menu"
-          }
-          aria-expanded={menuOpen}
-          onClick={onToggleMenu}
-        >
-          {menuOpen ? <X size={16} /> : <Menu size={16} />}
-        </button>
-        <h1>
-          Play <em>along</em>
-        </h1>
-        <div className="lab-heading-actions">
-          <div className="playalong-keychip">
-            <span>Key</span>
-            <strong data-testid="playalong-key">
-              {root} {SCALE_TYPE_LABELS[scaleType]}
-            </strong>
-          </div>
-          <button
-            type="button"
-            className="lab-eng"
-            aria-pressed={devOpen}
-            onClick={() => setDevOpen((open) => !open)}
-          >
-            <Led tone={devOpen ? "data" : "off"} size={5} />
-            Dev
-          </button>
-          <button type="button" className="playalong-jam" onClick={onOpenJam}>
-            <Headphones size={15} />
-            Live Jam
-          </button>
-        </div>
-      </header>
-
-      <Singing lines={lines} activeIndex={playalong.lyricIndex} />
-
+    <div className="jam-chart" role="region" aria-label="Play along chart">
       <form
         className="playalong-search"
         onSubmit={(event) => {
@@ -416,8 +356,18 @@ export default function PlayAlongScreen({
             {status}
           </span>
         </p>
+        <button
+          type="button"
+          className="lab-eng"
+          aria-pressed={devOpen}
+          onClick={() => setDevOpen((open) => !open)}
+        >
+          <Led tone={devOpen ? "data" : "off"} size={5} />
+          Dev
+        </button>
       </form>
-      <TrackCaptureBar capture={capture} compact />
+
+      <Singing lines={lines} activeIndex={playalong.lyricIndex} />
 
       <div
         className={`playalong-stage${split.vertical ? " is-vertical" : ""}${devOpen ? " has-dev" : ""}`}

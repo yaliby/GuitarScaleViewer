@@ -94,6 +94,7 @@ vi.mock("./audio/usePracticeAudio", () => ({
 }));
 
 import App from "./App";
+import { resetJamPanelForTests } from "./jamPanel";
 import { resetNeckFollowForTests } from "./neckFollow";
 
 afterEach(() => cleanup());
@@ -102,6 +103,7 @@ beforeEach(() => {
   resetNeckFollowForTests();
   vi.spyOn(window, "scrollTo").mockImplementation(() => {});
   localStorage.clear();
+  resetJamPanelForTests();
   mocks.detected = {
     ...mocks.detected,
     primaryKey: null,
@@ -220,28 +222,39 @@ describe("practice studio shell", () => {
     expect(await screen.findByLabelText("Root note")).toHaveValue("G");
   });
 
-  it("opens play along full-window on the shared key", async () => {
+  it("plays along from under the Live Jam neck, not from a room of its own", async () => {
     render(<App />);
     fireEvent.change(screen.getByLabelText("Root note"), {
       target: { value: "Bb" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Play Along" }));
-    const playalong = await screen.findByRole("region", {
-      name: "Play Along workspace",
-    });
-    expect(playalong).toBeInTheDocument();
-    expect(screen.queryByLabelText("Tempo")).not.toBeInTheDocument();
-    expect(screen.getByTestId("playalong-key")).toHaveTextContent("Bb");
     expect(
-      screen.getByRole("button", { name: "Open navigation menu" }),
+      screen.queryByRole("button", { name: "Play Along" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Live Jam" }));
+    await screen.findByRole("region", { name: "Live Jam workspace" });
+    expect(
+      screen.getByRole("region", { name: /chord bank/i }),
     ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Chart" }));
+    expect(
+      screen.getByRole("region", { name: "Play along chart" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("region", { name: /chord bank/i }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByTestId("playalong-now-playing")).toHaveTextContent(
+      "Test song",
+    );
+    /* The chart sits under the same neck, on the same key. */
+    expect(screen.getByPlaceholderText("A")).toHaveValue("Bb");
   });
 
-  it("closes live jam and play along when another room opens", async () => {
+  it("closes live jam when another room opens", async () => {
     render(<App />);
-    fireEvent.click(screen.getByRole("button", { name: "Play Along" }));
+    fireEvent.click(screen.getByRole("button", { name: "Live Jam" }));
     expect(
-      await screen.findByRole("region", { name: "Play Along workspace" }),
+      await screen.findByRole("region", { name: "Live Jam workspace" }),
     ).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Open navigation menu" }));
     fireEvent.click(screen.getByRole("button", { name: "Explore" }));
@@ -249,18 +262,19 @@ describe("practice studio shell", () => {
       await screen.findByRole("region", { name: "Scale atlas" }),
     ).toBeVisible();
     expect(
-      screen.queryByRole("region", { name: "Play Along workspace" }),
-    ).not.toBeInTheDocument();
-    expect(
       screen.queryByRole("region", { name: "Live Jam workspace" }),
     ).not.toBeInTheDocument();
   });
 
-  it("opens the saved-song library from the Songs workspace", async () => {
+  it("opens the saved-song library from the Library workspace", async () => {
     render(<App />);
-    fireEvent.click(screen.getByRole("button", { name: "Songs" }));
-    const songs = await screen.findByRole("region", { name: "Songs workspace" });
-    expect(songs).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Songs" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Library" }));
+    // A lazy chunk: under a loaded machine its first import can outlast the default 1 s.
+    const library = await screen.findByRole("region", { name: "Library workspace" }, { timeout: 5000 });
+    expect(library).toBeInTheDocument();
     expect(screen.queryByLabelText("Tempo")).not.toBeInTheDocument();
     expect(
       screen.getByRole("heading", { level: 2, name: /songs this app has saved/i }),

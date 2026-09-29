@@ -505,6 +505,11 @@ def _handle(req: dict[str, Any]) -> dict[str, Any]:
         return handle_memory(req)
     if op == "follow":
         return ENGINE.follow(req)
+    if op == "lyrics":
+        # Whole-song Whisper: only the threaded HTTP server takes this; the desktop runs lyric_map.py once.
+        from lyric_map import handle_request as map_lyrics
+
+        return map_lyrics(req)
     if op in {"capture", "lookup", "status", "list", "plan"}:
         from track_capture import emit_progress_stderr, handle_request
 
@@ -639,7 +644,7 @@ def _http_serve(host: str, port: int) -> int:
 
         def do_POST(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
-            if parsed.path not in ("/resolve", "/follow", "/capture", "/lookup", "/memory"):
+            if parsed.path not in ("/resolve", "/follow", "/capture", "/lookup", "/memory", "/lyrics"):
                 return self._send(404, {"status": "error", "reason": "not_found"})
             length = int(self.headers.get("Content-Length") or 0)
             raw = self.rfile.read(length) if length else b"{}"

@@ -1,8 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import PlayAlongScreen, { ChordSyncChart } from "./PlayAlongScreen";
-import type { FusedKey } from "./services/keyFusion";
+import { ChordSyncChart, PlayAlongPanel } from "./PlayAlongPanel";
 
 vi.stubGlobal(
   "fetch",
@@ -19,7 +18,7 @@ const media = {
   durationMs: 180_000,
 };
 
-vi.mock("./hooks/useMediaSession", () => ({
+vi.mock("../hooks/useMediaSession", () => ({
   useMediaSession: () => media,
 }));
 
@@ -27,22 +26,7 @@ afterEach(() => {
   cleanup();
 });
 
-const fused: FusedKey = {
-  root: "A",
-  scale: "minor",
-  displayName: "A minor",
-  source: "detected",
-  certainty: "lone",
-  confidencePct: 70,
-  notesSettled: false,
-  tonicSettled: true,
-  relativeAlternative: null,
-  trackIdentity: "test",
-  noteSetP: null,
-  why: "test",
-};
-
-describe("PlayAlongScreen", () => {
+describe("PlayAlongPanel", () => {
   it("reloads a lyrics-only chart when its HTML changes under the same source", () => {
     const { rerender } = render(
       <ChordSyncChart
@@ -64,50 +48,23 @@ describe("PlayAlongScreen", () => {
     expect(frame.getAttribute("srcdoc")).toContain("Second song");
   });
 
-  it("mounts the play-along workspace on the same OS now-playing session as Live Jam", () => {
-    render(
-      <PlayAlongScreen
-        root="A"
-        scaleType="minor"
-        fused={fused}
-        menuOpen={false}
-        onToggleMenu={() => {}}
-        onOpenJam={() => {}}
-      />,
-    );
-    expect(
-      screen.getByRole("region", { name: "Play Along workspace" }),
-    ).toBeDefined();
-    expect(screen.getByTestId("playalong-key").textContent).toMatch(/A/);
-    expect(screen.getByRole("button", { name: "Live Jam" })).toBeDefined();
+  it("follows the same OS now-playing session as the rest of Live Jam", () => {
+    render(<PlayAlongPanel />);
+    expect(screen.getByRole("region", { name: "Play along chart" })).toBeDefined();
     expect(screen.getByLabelText("Song title")).toBeDefined();
     expect(screen.getByRole("button", { name: "Search" })).toBeDefined();
     expect(screen.getByText("Waiting for a sung line…")).toBeDefined();
-    expect(screen.getByTestId("playalong-now-playing").textContent).toMatch(
-      /Test song/,
-    );
-    expect(screen.getByTestId("playalong-now-playing").textContent).toMatch(
-      /Test artist/,
-    );
-    expect(screen.getByTestId("playalong-now-playing").textContent).toMatch(
-      /0:12 \/ 3:00/,
-    );
-    expect(screen.getByTestId("playalong-now-playing").textContent).toMatch(
-      /Test player/,
-    );
+    expect(screen.getByRole("region", { name: "Synced lyrics" })).toBeDefined();
+    expect(screen.getByRole("region", { name: "Chord chart" })).toBeDefined();
+    const nowPlaying = screen.getByTestId("playalong-now-playing").textContent;
+    expect(nowPlaying).toMatch(/Test song/);
+    expect(nowPlaying).toMatch(/Test artist/);
+    expect(nowPlaying).toMatch(/0:12 \/ 3:00/);
+    expect(nowPlaying).toMatch(/Test player/);
   });
 
   it("opens YouTube CC and Whisper lanes from the Dev toggle", () => {
-    render(
-      <PlayAlongScreen
-        root="A"
-        scaleType="minor"
-        fused={fused}
-        menuOpen={false}
-        onToggleMenu={() => {}}
-        onOpenJam={() => {}}
-      />,
-    );
+    render(<PlayAlongPanel />);
     expect(screen.queryByTestId("playalong-dev")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Dev" }));
     expect(screen.getByTestId("playalong-dev")).toBeDefined();

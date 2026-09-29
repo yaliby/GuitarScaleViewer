@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-map-track-lyrics"
+description = "Allows timing a saved song's lyrics word by word (LRCLIB + Whisper) and reading the saved timing."
+commands.allow = ["map_track_lyrics"]

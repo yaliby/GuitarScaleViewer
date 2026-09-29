@@ -12,6 +12,7 @@ pub mod key_detection;
 /// tonic-evidence gate rather than a copy of it that can drift away from the real one.
 pub mod key_engine;
 pub mod key_reranker;
+mod lyric_map;
 mod media_session;
 mod playalong;
 mod song_capture;
@@ -85,6 +86,7 @@ pub fn run() {
             song_capture::capture_track,
             song_capture::lookup_track_capture,
             song_capture::list_track_captures,
+            lyric_map::map_track_lyrics,
             harmonia_recognition::recognition_available,
             harmonia_recognition::recognition_run,
             harmonia_recognition::recognition_cancel,

@@ -42,10 +42,24 @@ analyzer_ok=0
 # while the app went on running a binary built six hours before it. The build is incremental, so
 # when nothing changed this costs a make that finds nothing to do.
 lkf_build_dir="$root/src-tauri/sidecars/libkeyfinder_cli/build"
-if [[ "$backend" == "libkeyfinder" && -z "${KEY_ANALYZER_LIBKEYFINDER_CLI:-}" \
-      && -f "$lkf_build_dir/CMakeCache.txt" ]] && command -v cmake >/dev/null 2>&1; then
-  if ! cmake --build "$lkf_build_dir" --parallel >/dev/null; then
-    echo "dev.sh: rebuilding the libkeyfinder CLI failed; probing whatever binary is there." >&2
+if [[ "$backend" == "libkeyfinder" && -z "${KEY_ANALYZER_LIBKEYFINDER_CLI:-}" ]] \
+    && command -v cmake >/dev/null 2>&1; then
+  # Zero-byte stand-ins for the bundled resources (tauri.conf.json lists both files) are newer than
+  # the sources, so make calls them up to date and never links a real binary over them.
+  for f in "$lkf_build_dir/gsv-libkeyfinder-cli" "$lkf_build_dir/libkeyfinder.so.2"; do
+    if [[ -f "$f" && ! -s "$f" ]]; then rm -f "$f"; fi
+  done
+  if [[ -f "$lkf_build_dir/CMakeCache.txt" && -f "$lkf_build_dir/libkeyfinder.so.2" ]]; then
+    if ! cmake --build "$lkf_build_dir" --parallel >/dev/null; then
+      echo "dev.sh: rebuilding the libkeyfinder CLI failed; probing whatever binary is there." >&2
+    fi
+  else
+    # Never configured on this machine (or the build dir came from another OS): run the full build,
+    # which also bundles libkeyfinder.so.2 next to the binary.
+    echo "dev.sh: building the libkeyfinder CLI..."
+    if ! bash "$root/src-tauri/sidecars/libkeyfinder_cli/build.sh" >/dev/null; then
+      echo "dev.sh: building the libkeyfinder CLI failed; see sidecars/libkeyfinder_cli/build.sh" >&2
+    fi
   fi
 fi
 
@@ -110,6 +124,72 @@ if [[ ! -d "$root/node_modules" ]]; then
   npm install
 fi
 
+# node_modules on this shared drive is often installed from Windows, which fetches only the win32
+# build of the Tauri CLI; npx tauri then dies with "Cannot find module './cli.linux-x64-gnu.node'".
+# Add this platform's build next to it without touching package.json or the lockfile.
+case "$(uname -s)-$(uname -m)" in
+  Linux-x86_64)  tauri_native="cli-linux-x64-gnu" ;;
+  Linux-aarch64) tauri_native="cli-linux-arm64-gnu" ;;
+  Darwin-arm64)  tauri_native="cli-darwin-arm64" ;;
+  Darwin-x86_64) tauri_native="cli-darwin-x64" ;;
+  *)             tauri_native="" ;;
+esac
+if [[ -n "$tauri_native" && ! -d "$root/node_modules/@tauri-apps/$tauri_native" ]]; then
+  tauri_version="$(node -p "require('./node_modules/@tauri-apps/cli/package.json').version")"
+  echo "dev.sh: adding @tauri-apps/$tauri_native@$tauri_version (node_modules was installed on another OS)"
+  npm install --no-save "@tauri-apps/$tauri_native@$tauri_version"
+fi
+
+# ChordSync (Play Along, lyrics, capture) needs its own venv with requirements.txt. The sidecar's
+# `.venv` is the Windows one on this shared drive, so Linux keeps `.venv-linux` beside it -- the
+# Linux equivalent of the venv dev.ps1 requires. Reinstalled whenever requirements.txt changes.
+chordsync_dir="$root/src-tauri/sidecars/chordsync"
+chordsync_venv="$chordsync_dir/.venv-linux"
+chordsync_stamp="$chordsync_venv/.requirements-installed"
+setup_chordsync_venv() {
+  local uv_bin
+  uv_bin="$(command -v uv || true)"
+  if [[ -z "$uv_bin" && -x "$HOME/.local/bin/uv" ]]; then uv_bin="$HOME/.local/bin/uv"; fi
+  if [[ -n "$uv_bin" ]]; then
+    if [[ ! -x "$chordsync_venv/bin/python" ]]; then
+      "$uv_bin" venv --python python3 "$chordsync_venv" || return 1
+    fi
+    "$uv_bin" pip install --python "$chordsync_venv/bin/python" -r "$chordsync_dir/requirements.txt"
+  elif python3 -c 'import ensurepip' 2>/dev/null; then
+    if [[ ! -x "$chordsync_venv/bin/python" ]]; then
+      python3 -m venv "$chordsync_venv" || return 1
+    fi
+    "$chordsync_venv/bin/python" -m pip install -r "$chordsync_dir/requirements.txt"
+  else
+    echo "dev.sh: cannot create the ChordSync venv: install uv (https://docs.astral.sh/uv/)" >&2
+    echo "dev.sh:   or python3-venv (sudo apt install python3-venv)." >&2
+    return 1
+  fi
+}
+if [[ -z "${CHORDSYNC_PYTHON:-}" ]]; then
+  if [[ ! -x "$chordsync_venv/bin/python" || ! -f "$chordsync_stamp" \
+        || "$chordsync_dir/requirements.txt" -nt "$chordsync_stamp" ]]; then
+    echo "dev.sh: setting up the ChordSync venv at $chordsync_venv ..."
+    if setup_chordsync_venv; then
+      touch "$chordsync_stamp"
+    else
+      echo "dev.sh: ChordSync venv setup failed; Play Along, lyrics and song capture will not work." >&2
+    fi
+  fi
+  if [[ -x "$chordsync_venv/bin/python" ]]; then
+    export CHORDSYNC_PYTHON="$chordsync_venv/bin/python"
+  fi
+fi
+
+# rustup installs cargo into ~/.cargo/bin, which only login shells put on PATH.
+if ! command -v cargo >/dev/null 2>&1 && [[ -x "$HOME/.cargo/bin/cargo" ]]; then
+  export PATH="$HOME/.cargo/bin:$PATH"
+fi
+if ! command -v cargo >/dev/null 2>&1; then
+  echo "dev.sh: cargo not found; install Rust from https://rustup.rs" >&2
+  exit 1
+fi
+
 # Vite and the webview have to agree on the port, so pick one free port and hand it to both.
 # strictPort is on, so a busy port is a hard failure rather than a silent shift -- and without
 # the matching devUrl override the webview would happily load whatever already held it.
@@ -136,7 +216,9 @@ ensure_ffmpeg() {
     return
   fi
   if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then
-    if ffmpeg -hide_banner -encoders 2>/dev/null | grep -q libmp3lame; then
+    # Not grep -q: it exits on the first match, ffmpeg dies of SIGPIPE, and pipefail turns a
+    # working build into a failed check.
+    if ffmpeg -hide_banner -encoders 2>/dev/null | grep libmp3lame >/dev/null; then
       return
     fi
   fi
@@ -169,7 +251,7 @@ ensure_ffmpeg() {
     echo "dev.sh: FFmpeg setup did not produce ffmpeg and ffprobe" >&2
     exit 1
   fi
-  if ! "$dest/ffmpeg" -hide_banner -encoders 2>/dev/null | grep -q libmp3lame; then
+  if ! "$dest/ffmpeg" -hide_banner -encoders 2>/dev/null | grep libmp3lame >/dev/null; then
     echo "dev.sh: downloaded FFmpeg cannot encode MP3 (libmp3lame missing)" >&2
     exit 1
   fi

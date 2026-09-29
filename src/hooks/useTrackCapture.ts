@@ -281,7 +281,7 @@ function subscribe(listener: Subscriber): () => void {
 }
 
 /**
- * Shared capture store: Explore, Live Jam and Play Along all see the same file.
+ * Shared capture store: Explore, Live Jam and the Library all see the same file.
  */
 export function useTrackCapture(media: MediaSessionUiState): TrackCaptureApi {
   const [state, setState] = useState<TrackCaptureState>(snapshot);

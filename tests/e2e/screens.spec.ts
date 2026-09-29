@@ -61,15 +61,22 @@ test("workspace navigation opens distinct screens and preserves the musical cont
     page.getByRole("button", { name: "Stop playback", exact: true }),
   ).toHaveCount(0);
   await expect(page.getByTestId("progression-step")).toHaveCount(4);
-  await page.getByRole("button", { name: "Play Along", exact: true }).click();
   await expect(
-    page.getByRole("region", { name: "Play Along workspace" }),
+    page.getByRole("button", { name: "Play Along", exact: true }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "Live Jam", exact: true }).click();
+  await expect(
+    page.getByRole("region", { name: "Live Jam workspace" }),
   ).toBeVisible();
-  await expect(page.getByTestId("playalong-key")).toContainText("D");
-  await page.getByRole("button", { name: "Open navigation menu" }).click();
-  await page.getByRole("button", { name: "Songs", exact: true }).click();
+  await expect(page.getByTestId("jam-key")).toHaveText("D");
+  await page.getByRole("button", { name: "Chart", exact: true }).click();
   await expect(
-    page.getByRole("region", { name: "Songs workspace" }),
+    page.getByRole("region", { name: "Play along chart" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Open navigation menu" }).click();
+  await page.getByRole("button", { name: "Library", exact: true }).click();
+  await expect(
+    page.getByRole("region", { name: "Library workspace" }),
   ).toBeVisible();
   await expect(
     page.getByRole("heading", { name: /songs this app has saved/i }),

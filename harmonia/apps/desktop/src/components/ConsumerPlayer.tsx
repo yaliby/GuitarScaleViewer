@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { useMemo, useState, useSyncExternalStore } from 'react';
+import { useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
 import { ArrowDownToLine, Heart, Pause, Play, RotateCcw, RotateCw } from 'lucide-react';
 import type { SavedTrack } from '../../../../packages/domain/types';
@@ -28,18 +28,32 @@ import { Timeline, timeLabel } from './Timeline';
 import { usePlaybackClock } from './usePlaybackClock';
 import { usePlaybackShortcuts } from './usePlaybackShortcuts';
 
+/** What the player hands a host-drawn panel that follows the song (the lyric sheet). */
+export interface PlayerSlot {
+  segments: SavedTrack['analysis']['segments'];
+  notation: ChordDisplayMode;
+  keyRoot: number | null;
+  time: number;
+  playing: boolean;
+  seekRevision: number;
+  seek(seconds: number): void;
+}
+
 export function ConsumerPlayer({
   record,
   controller,
   recording,
   preparationSeconds,
   onReanalyze,
+  sheet,
 }: {
   record: SavedTrack;
   controller: SessionController;
   recording?: CatalogRecording | null;
   preparationSeconds?: number | null;
   onReanalyze?(): void;
+  /** Drawn under the transport, on the player's clock. */
+  sheet?(slot: PlayerSlot): ReactNode;
 }) {
   const state = useSyncExternalStore(controller.subscribe, controller.snapshot);
   const source = recording ?? record.source;
@@ -188,6 +202,15 @@ export function ConsumerPlayer({
           Reopen this recording to listen. Your chords and corrections are saved.
         </p>
       )}
+      {sheet?.({
+        segments: analysis.segments,
+        notation,
+        keyRoot: analysis.key?.root ?? null,
+        time,
+        playing,
+        seekRevision,
+        seek,
+      })}
       <Timeline analysis={analysis} time={time} index={index} onSeek={seek} notation={notation} />
       <ChordProgression
         segments={analysis.segments}

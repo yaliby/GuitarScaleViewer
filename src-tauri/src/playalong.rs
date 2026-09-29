@@ -113,7 +113,8 @@ fn configured_chordsync_python() -> Option<String> {
 /// Program plus leading launcher args (`py -3` on Windows).
 ///
 /// `CHORDSYNC_PYTHON` is the interpreter `dev.ps1` selects. Otherwise the sidecar
-/// `.venv` (Windows `Scripts/python.exe` or Unix `bin/python`) is used. The key
+/// venv for this OS (Windows `.venv/Scripts/python.exe`, Unix `.venv/bin/python` or
+/// `.venv-linux/bin/python`) is used. The key
 /// analyzer environment is not a fallback: it never installs ChordSync's
 /// `requirements.txt`, so Play Along dies with `No module named 'rapidfuzz'`.
 pub(crate) fn chordsync_invocation(script: &Path) -> (String, Vec<String>) {
@@ -190,29 +191,30 @@ pub(crate) fn chordsync_package_root(script: &Path) -> PathBuf {
         .unwrap_or_else(|| script.to_path_buf())
 }
 
+/// Interpreters inside a venv directory's parent, for this OS only. The checkout sits on a drive
+/// shared with Windows, so `.venv/Scripts/python.exe` can exist on Linux, where exec'ing it fails
+/// and Play Along never starts. Linux uses `.venv-linux` (made by dev.sh) beside the Windows venv.
+fn venv_candidates(dir: &Path) -> Vec<PathBuf> {
+    if cfg!(windows) {
+        vec![dir.join(".venv").join("Scripts").join("python.exe")]
+    } else {
+        vec![
+            dir.join(".venv").join("bin").join("python"),
+            dir.join(".venv-linux").join("bin").join("python"),
+        ]
+    }
+}
+
 pub(crate) fn venv_python(script: &Path) -> Option<PathBuf> {
     let root = script.parent()?;
-    let unix = root.join(".venv").join("bin").join("python");
-    if unix.is_file() {
-        return Some(unix);
-    }
-    let windows = root.join(".venv").join("Scripts").join("python.exe");
-    if windows.is_file() {
-        return Some(windows);
+    if let Some(found) = venv_candidates(root).into_iter().find(|p| p.is_file()) {
+        return Some(found);
     }
     // Dev layout: ChordSync companion sitting next to this repo, already has the deps.
-    if let Some(projects) = script.ancestors().nth(5) {
-        let sibling = projects.join("ChordSync").join(".venv");
-        let unix = sibling.join("bin").join("python");
-        if unix.is_file() {
-            return Some(unix);
-        }
-        let windows = sibling.join("Scripts").join("python.exe");
-        if windows.is_file() {
-            return Some(windows);
-        }
-    }
-    None
+    let projects = script.ancestors().nth(5)?;
+    venv_candidates(&projects.join("ChordSync"))
+        .into_iter()
+        .find(|p| p.is_file())
 }
 
 fn spawn_worker() -> Result<SidecarWorker, String> {

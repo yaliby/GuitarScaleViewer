@@ -7,6 +7,7 @@ import { AnalysisProgress } from "../../harmonia/apps/desktop/src/components/Ses
 import { TrackCaptureBar } from "../components/TrackCaptureBar";
 import { useMediaSession } from "../hooks/useMediaSession";
 import { useTrackCapture } from "../hooks/useTrackCapture";
+import { getLyricJobs, lyricStageLabel, subscribeLyricJobs } from "../services/lyricMap";
 import {
   listTrackCaptures,
   loadCapturedFile,
@@ -23,6 +24,8 @@ import {
   pauseHarmoniaPlayback,
   prepareCapturedSong,
 } from "./composition";
+import { SongSheet } from "./SongSheet";
+import { useLyricMap } from "./useLyricMap";
 import "./HarmoniaScreen.css";
 
 type Props = {
@@ -87,6 +90,7 @@ export default function HarmoniaScreen({ menuOpen, onToggleMenu }: Props) {
   );
   const analyzed = useMemo(() => analyzedCaptureIds(), [analyzedRevision]);
   const chordJobs = useSyncExternalStore(subscribeChordJobs, getChordJobs, getChordJobs);
+  const lyricJobs = useSyncExternalStore(subscribeLyricJobs, getLyricJobs, getLyricJobs);
   const analysis = useSyncExternalStore(
     session ? session.subscribe : subscribeIdle,
     session ? session.snapshot : snapshotIdle,
@@ -130,6 +134,12 @@ export default function HarmoniaScreen({ menuOpen, onToggleMenu }: Props) {
   const busy =
     analysis.status === "preparing" || analysis.status === "analyzing";
   const current = analysis.status === "ready" ? analysis.current : null;
+  const playerOpen =
+    current !== null &&
+    selected !== null &&
+    openingId === null &&
+    current.track.fingerprint === analyzedFingerprint(selected.id);
+  const lyrics = useLyricMap(playerOpen ? selected.id : null);
   const openingJob = openingId ? chordJobs[openingId] : undefined;
   const stopOpening = () => {
     opener.current += 1;
@@ -176,7 +186,7 @@ export default function HarmoniaScreen({ menuOpen, onToggleMenu }: Props) {
     <div
       className="lab-screen harmonia-root harmonia-embed"
       role="region"
-      aria-label="Songs workspace"
+      aria-label="Library workspace"
     >
       <header className="lab-heading">
         <button
@@ -206,10 +216,7 @@ export default function HarmoniaScreen({ menuOpen, onToggleMenu }: Props) {
           </div>
         )}
 
-        {current &&
-        selected &&
-        openingId === null &&
-        current.track.fingerprint === analyzedFingerprint(selected.id) ? (
+        {playerOpen ? (
           <>
             <button type="button" className="harmonia-back" onClick={backToLibrary}>
               <ArrowLeft size={16} />
@@ -221,6 +228,19 @@ export default function HarmoniaScreen({ menuOpen, onToggleMenu }: Props) {
               controller={session!}
               recording={asRecording(selected)}
               onReanalyze={() => void openTrack(selected, true)}
+              sheet={(slot) => (
+                <SongSheet
+                  lyrics={lyrics.state}
+                  segments={slot.segments}
+                  notation={slot.notation}
+                  keyRoot={slot.keyRoot}
+                  time={slot.time}
+                  playing={slot.playing}
+                  seekRevision={slot.seekRevision}
+                  onSeek={slot.seek}
+                  onRetime={lyrics.retime}
+                />
+              )}
             />
           </>
         ) : busy || openingId !== null ? (
@@ -234,9 +254,10 @@ export default function HarmoniaScreen({ menuOpen, onToggleMenu }: Props) {
             <div className="harmonia-library-copy">
               <h2>Songs this app has saved</h2>
               <p>
-                Capture a track from Live Jam, Play Along, or Explore. Chord
-                extraction starts in the background as soon as the download
-                finishes, and the song is ready the next time you open it.
+                Capture a track from Live Jam or Explore. As soon as the
+                download finishes, its chords are read and every lyric word is
+                timed in the background, so the song opens ready with a chord
+                sheet that follows it — here, or under the neck in Live Jam.
               </p>
             </div>
             <TrackCaptureBar capture={capture} compact />
@@ -250,6 +271,7 @@ export default function HarmoniaScreen({ menuOpen, onToggleMenu }: Props) {
                 {tracks.map((track) => {
                   const ready = analyzed.has(track.id);
                   const job = chordJobs[track.id];
+                  const lyricJob = lyricJobs[track.id];
                   return (
                     <button
                       key={track.id}
@@ -274,8 +296,11 @@ export default function HarmoniaScreen({ menuOpen, onToggleMenu }: Props) {
                             .join(" · ")}
                         </small>
                       </span>
-                      <span className="harmonia-song-state" title={job?.stage}>
-                        {job ? "Chords…" : ready ? "Ready" : "Analyze"}
+                      <span
+                        className="harmonia-song-state"
+                        title={job?.stage ?? (lyricJob ? lyricStageLabel(lyricJob.stage) : undefined)}
+                      >
+                        {job ? "Chords…" : lyricJob ? "Lyrics…" : ready ? "Ready" : "Analyze"}
                       </span>
                     </button>
                   );

@@ -1,0 +1,334 @@
+/* The song sheet: lyrics on the recording's clock, the recognizer's chords over the words.
+   Harmonia's tokens (mint accent on deep teal-grey); chords wear one hue per root, the
+   same wheel as the Play Along chart. */
+
+.song-sheet {
+  --sheet-dim: #6f7f7d;
+  --sheet-sung: #d7d3c8;
+  --sheet-word: clamp(18px, 1.35vw + 0.45vh, 25px);
+  --sheet-chord: clamp(12px, 0.8vw + 0.3vh, 15px);
+  --sheet-chord-row: clamp(19px, 1.2vw + 0.4vh, 24px);
+  margin: 6px 0 30px;
+  padding: 18px 0 0;
+  border: 1px solid var(--line, #303b3e);
+  border-radius: 16px;
+  background:
+    radial-gradient(ellipse 70% 40% at 50% 0%, #bce7ce0d, transparent 70%),
+    linear-gradient(180deg, #161f22, #111719);
+  overflow: hidden;
+}
+
+.song-sheet-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 22px;
+}
+
+.song-sheet-head h2 {
+  margin: 4px 0 0;
+  font-size: 22px;
+  font-weight: 560;
+  letter-spacing: -0.03em;
+}
+
+.song-sheet-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.song-sheet-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.song-sheet-now {
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid #415c4c;
+  border-radius: 999px;
+  background: #25372e;
+  color: var(--accent, #bce7ce);
+}
+
+.song-sheet-source,
+.song-sheet-status {
+  margin: 10px 22px 0;
+  color: var(--muted, #99a7aa);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.song-sheet-status {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.song-sheet-status.is-error {
+  display: block;
+  color: var(--warning, #e6bc82);
+}
+
+.song-sheet-meter {
+  flex: 1;
+  max-width: 280px;
+  height: 4px;
+  border-radius: 4px;
+  background: #25312f;
+  overflow: hidden;
+}
+
+.song-sheet-meter i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent, #bce7ce);
+  transition: width 400ms ease;
+}
+
+.song-sheet-scroll {
+  position: relative;
+  max-height: min(64vh, 700px);
+  min-height: 220px;
+  margin-top: 12px;
+  padding: 18px 22px 40vh;
+  overflow-y: auto;
+  scrollbar-color: #415c4c #111719;
+  -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 36px, #000 calc(100% - 56px), transparent);
+  mask-image: linear-gradient(180deg, transparent 0, #000 36px, #000 calc(100% - 56px), transparent);
+}
+
+.song-sheet-empty {
+  color: var(--muted, #99a7aa);
+}
+
+.sheet-section {
+  margin: 0 0 22px;
+}
+
+.sheet-section h3 {
+  display: inline-block;
+  margin: 10px 0 12px;
+  padding: 3px 10px;
+  border: 1px solid #2c3a3b;
+  border-radius: 999px;
+  color: var(--muted, #99a7aa);
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.sheet-section.is-chorus h3 {
+  border-color: #3f5e4d;
+  color: var(--accent, #bce7ce);
+  background: #bce7ce0f;
+}
+
+.sheet-row {
+  position: relative;
+  margin: 0 0 clamp(8px, 1.1vh, 14px);
+  padding: 6px 12px 8px;
+  border-radius: 12px;
+  cursor: pointer;
+  transform-origin: left center;
+  transition:
+    background-color 260ms ease,
+    box-shadow 300ms ease,
+    transform 380ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 300ms ease;
+}
+
+.sheet-row[dir="rtl"] {
+  transform-origin: right center;
+}
+
+.sheet-row:hover {
+  background: #bce7ce08;
+}
+
+.sheet-row:focus-visible {
+  outline: 2px solid var(--accent, #bce7ce);
+  outline-offset: 2px;
+}
+
+.sheet-row.is-past {
+  opacity: 0.62;
+}
+
+.sheet-row.is-now {
+  background: #bce7ce12;
+  box-shadow:
+    inset 0 0 0 1px #bce7ce3a,
+    0 12px 32px #0000004d;
+  transform: scale(1.012);
+}
+
+.sheet-row.is-now::before {
+  content: "";
+  position: absolute;
+  inset-block: 10px;
+  inset-inline-start: 0;
+  width: 3px;
+  border-radius: 3px;
+  background: var(--accent, #bce7ce);
+  animation: sheet-accent-in 380ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes sheet-accent-in {
+  from {
+    transform: scaleY(0.15);
+    opacity: 0;
+  }
+  to {
+    transform: scaleY(1);
+    opacity: 1;
+  }
+}
+
+/* A word with the chord row above it; the pair is as wide as the wider of the two. */
+.sheet-word {
+  display: inline-block;
+  vertical-align: bottom;
+  margin-inline-end: 0.32em;
+}
+
+.sheet-chords {
+  display: block;
+  height: var(--sheet-chord-row);
+  white-space: nowrap;
+}
+
+.sheet-text {
+  display: block;
+  white-space: pre;
+  color: var(--sheet-dim);
+  font-size: var(--sheet-word);
+  line-height: 1.32;
+  letter-spacing: -0.012em;
+  /* No colour transition: the sung word's fill is text-clipped over a transparent colour,
+     and fading back from transparent would blink the word out as the next one starts. */
+  unicode-bidi: plaintext;
+}
+
+.sheet-row.is-now .sheet-text {
+  color: #8e9c98;
+}
+
+.sheet-word.sung .sheet-text {
+  color: var(--sheet-sung);
+}
+
+.sheet-row.is-now .sheet-word.sung .sheet-text {
+  color: #f6f2e8;
+}
+
+/* The word being sung fills from its first letter to its last. */
+.sheet-word.now .sheet-text {
+  color: transparent;
+  background-image: linear-gradient(90deg, var(--accent, #bce7ce) var(--fill, 0%), #8e9c98 var(--fill, 0%));
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+
+[dir="rtl"] .sheet-word.now .sheet-text {
+  background-image: linear-gradient(270deg, var(--accent, #bce7ce) var(--fill, 0%), #8e9c98 var(--fill, 0%));
+}
+
+.sheet-mark {
+  display: inline-block;
+  margin-inline-end: 0.55em;
+  padding: 0 0.28em;
+  border-radius: 6px;
+  direction: ltr;
+  unicode-bidi: isolate;
+  color: oklch(0.8 0.11 var(--h, 150));
+  font-family: "JetBrains Mono", "Cascadia Mono", "Noto Sans Mono", ui-monospace, monospace;
+  font-size: var(--sheet-chord);
+  font-weight: 700;
+  line-height: var(--sheet-chord-row);
+  letter-spacing: -0.01em;
+  cursor: pointer;
+  transition:
+    background-color 200ms ease,
+    color 200ms ease,
+    box-shadow 240ms ease;
+}
+
+.sheet-mark:hover {
+  background: oklch(0.8 0.11 var(--h, 150) / 0.14);
+}
+
+.sheet-mark.carried {
+  opacity: 0.45;
+  font-weight: 500;
+}
+
+.sheet-mark.on {
+  opacity: 1;
+  background: oklch(0.8 0.11 var(--h, 150) / 0.2);
+  color: oklch(0.9 0.12 var(--h, 150));
+  box-shadow: 0 0 0 1px oklch(0.8 0.11 var(--h, 150) / 0.55), 0 0 18px oklch(0.8 0.11 var(--h, 150) / 0.28);
+}
+
+.sheet-tail .sheet-mark {
+  opacity: 0.85;
+}
+
+/* Rows of chords where nobody sings: bars, like a hand-written chart. */
+.sheet-chords-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  padding-block: 10px;
+}
+
+.sheet-bar {
+  display: inline-flex;
+  align-items: center;
+  min-width: 64px;
+  padding: 0 12px;
+  border-inline-start: 1px solid #3a4a4a;
+}
+
+.sheet-bar:last-child {
+  border-inline-end: 1px solid #3a4a4a;
+}
+
+.sheet-bar .sheet-mark {
+  margin: 0;
+  font-size: calc(var(--sheet-chord) * 1.18);
+}
+
+@media (max-width: 720px) {
+  .song-sheet-head {
+    padding: 0 14px;
+  }
+  .song-sheet-scroll {
+    padding-inline: 12px;
+  }
+  .song-sheet-source,
+  .song-sheet-status {
+    margin-inline: 14px;
+  }
+  .sheet-bar {
+    min-width: 48px;
+    padding: 0 8px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sheet-row,
+  .sheet-row.is-now {
+    transform: none;
+    transition: none;
+  }
+  .sheet-row.is-now::before {
+    animation: none;
+  }
+}

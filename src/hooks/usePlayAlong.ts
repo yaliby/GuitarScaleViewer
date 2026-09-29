@@ -405,7 +405,8 @@ function search(nextTitle?: string, nextArtist?: string): void {
 /**
  * ChordSync resolve + follow, driven by the OS media session.
  * The snapshot lives for the whole app session: App keeps one subscriber,
- * so leaving Play Along does not drop the lyrics or the follow loop.
+ * so switching Live Jam's chart away, or leaving the room, does not drop the
+ * lyrics or the follow loop.
  */
 export function usePlayAlong(media: MediaSessionUiState): PlayAlongState {
   const [snap, setSnap] = useState(snapshot);

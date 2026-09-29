@@ -39,14 +39,17 @@ struct CaptureProgress {
     stage: String,
 }
 
-fn capture_script() -> Option<PathBuf> {
+/// Receives `(progress, stage)` from a one-shot script's stderr progress lines.
+pub(crate) type ProgressSink = Box<dyn Fn(u32, &str) + Send + 'static>;
+
+fn one_shot_script(name: &str) -> Option<PathBuf> {
     sidecar_script()
-        .and_then(|sidecar| sidecar.parent().map(|dir| dir.join("track_capture.py")))
+        .and_then(|sidecar| sidecar.parent().map(|dir| dir.join(name)))
         .filter(|path| path.is_file())
 }
 
-fn capture_command(flag: &str, body: &Value) -> Result<Command, String> {
-    let script = capture_script().ok_or_else(|| "track capture script not found".to_string())?;
+fn one_shot_command(name: &str, flag: &str, body: &Value) -> Result<Command, String> {
+    let script = one_shot_script(name).ok_or_else(|| format!("{name} not found"))?;
     let (program, mut args) = chordsync_invocation(&script);
     args.push(script.to_string_lossy().to_string());
     args.push(flag.to_string());
@@ -98,55 +101,60 @@ fn emit_progress(app: Option<&AppHandle>, progress: u32, stage: &str) {
     }
 }
 
-fn run_sidecar(
+/// Run a sidecar script once (`<name> <flag> <json>`) and read its one-line JSON reply.
+///
+/// `progress` is the stderr marker key the script sets on its progress lines
+/// (`{"<marker>": true, "progress": n, "stage": "..."}`) and where they go.
+pub(crate) fn run_one_shot(
+    name: &str,
     flag: &str,
     body: &Value,
     timeout: Duration,
-    app: Option<&AppHandle>,
+    progress: Option<(&'static str, ProgressSink)>,
 ) -> Result<Value, String> {
-    let mut command = capture_command(flag, body)?;
+    let mut command = one_shot_command(name, flag, body)?;
     let mut child = command
         .spawn()
-        .map_err(|error| format!("spawn capture sidecar: {error}"))?;
+        .map_err(|error| format!("spawn {name}: {error}"))?;
     if let Some(stderr) = child.stderr.take() {
-        let handle = app.cloned();
+        let label = name.to_string();
         std::thread::spawn(move || {
             // Skip an undecodable line and keep draining, so the sidecar never blocks on a full pipe.
             #[allow(clippy::lines_filter_map_ok)]
             for line in BufReader::new(stderr).lines().flatten() {
-                if let Ok(parsed) = serde_json::from_str::<Value>(&line) {
-                    if parsed.get("gsvCapture").and_then(|v| v.as_bool()) == Some(true) {
-                        let progress =
-                            parsed.get("progress").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                        let stage = parsed
-                            .get("stage")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("download");
-                        emit_progress(handle.as_ref(), progress, stage);
-                        continue;
+                if let Some((marker, sink)) = progress.as_ref() {
+                    if let Ok(parsed) = serde_json::from_str::<Value>(&line) {
+                        if parsed.get(*marker).and_then(|v| v.as_bool()) == Some(true) {
+                            let value =
+                                parsed.get("progress").and_then(|v| v.as_u64()).unwrap_or(0);
+                            let stage = parsed.get("stage").and_then(|v| v.as_str()).unwrap_or("");
+                            sink(value as u32, stage);
+                            continue;
+                        }
                     }
                 }
-                log::info!("capture sidecar: {line}");
+                log::info!("{label}: {line}");
             }
         });
     }
     let stdout = child
         .stdout
         .take()
-        .ok_or_else(|| "capture sidecar stdout unavailable".to_string())?;
+        .ok_or_else(|| format!("{name} stdout unavailable"))?;
+    let label = name.to_string();
     let reader = std::thread::spawn(move || {
         BufReader::new(stdout)
             .lines()
             .next()
             .transpose()
-            .map_err(|error| format!("read capture sidecar: {error}"))
+            .map_err(|error| format!("read {label}: {error}"))
     });
     let started = std::time::Instant::now();
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
                 if !status.success() {
-                    log::warn!("capture sidecar exited {status}");
+                    log::warn!("{name} exited {status}");
                 }
                 break;
             }
@@ -154,18 +162,34 @@ fn run_sidecar(
                 if started.elapsed() > timeout {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return Err("capture sidecar deadline exceeded".to_string());
+                    return Err(format!("{name} deadline exceeded"));
                 }
                 std::thread::sleep(Duration::from_millis(40));
             }
-            Err(error) => return Err(format!("wait capture sidecar: {error}")),
+            Err(error) => return Err(format!("wait {name}: {error}")),
         }
     }
     let line = reader
         .join()
-        .map_err(|_| "capture sidecar stdout thread panicked".to_string())??
-        .ok_or_else(|| "capture sidecar returned no JSON".to_string())?;
-    serde_json::from_str(&line).map_err(|error| format!("capture sidecar JSON: {error}: {line}"))
+        .map_err(|_| format!("{name} stdout thread panicked"))??
+        .ok_or_else(|| format!("{name} returned no JSON"))?;
+    serde_json::from_str(&line).map_err(|error| format!("{name} JSON: {error}: {line}"))
+}
+
+fn run_capture(
+    flag: &str,
+    body: &Value,
+    timeout: Duration,
+    app: Option<&AppHandle>,
+) -> Result<Value, String> {
+    let progress = app.cloned().map(|handle| {
+        let sink: ProgressSink = Box::new(move |progress, stage| {
+            let stage = if stage.is_empty() { "download" } else { stage };
+            emit_progress(Some(&handle), progress, stage)
+        });
+        ("gsvCapture", sink)
+    });
+    run_one_shot("track_capture.py", flag, body, timeout, progress)
 }
 
 fn request_from_args(
@@ -202,7 +226,7 @@ pub fn capture_track(
 ) -> Result<Value, String> {
     let req = request_from_args(query, title, artist, album, source_app, track_url, force);
     emit_progress(Some(&app), 1, "start");
-    let value = run_sidecar(
+    let value = run_capture(
         "--capture",
         &request_body(&req, "capture"),
         CAPTURE_TIMEOUT,
@@ -224,7 +248,7 @@ pub fn lookup_track_capture(
     track_url: Option<String>,
 ) -> Result<Value, String> {
     let req = request_from_args(query, title, artist, album, source_app, track_url, None);
-    run_sidecar(
+    run_capture(
         "--lookup",
         &request_body(&req, "lookup"),
         LOOKUP_TIMEOUT,
@@ -234,7 +258,7 @@ pub fn lookup_track_capture(
 
 #[tauri::command]
 pub fn list_track_captures() -> Result<Value, String> {
-    run_sidecar(
+    run_capture(
         "--list",
         &serde_json::json!({ "op": "list" }),
         LOOKUP_TIMEOUT,

@@ -174,7 +174,7 @@ function subscribe(listener: Subscriber): () => void {
 }
 
 /**
- * The OS now-playing session Live Jam and Play Along both read.
+ * The OS now-playing session Live Jam and its play-along chart both read.
  * One Rust poller (`get_current_media` + `media-session-update`); one frontend subscription.
  */
 export function useMediaSession(): MediaSessionUiState {

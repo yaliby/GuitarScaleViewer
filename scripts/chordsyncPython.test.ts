@@ -66,6 +66,22 @@ describe('resolveChordsyncPython', () => {
     ).toBe(siblingPython);
   });
 
+  it('never hands Linux the Windows python.exe from a shared checkout', () => {
+    const linuxPython = path.join(sidecar, '.venv-linux/bin/python');
+    expect(
+      resolve({
+        platform: 'linux',
+        present: [path.join(sidecar, '.venv/Scripts/python.exe'), linuxPython],
+      }),
+    ).toBe(linuxPython);
+    expect(
+      resolve({
+        platform: 'linux',
+        present: [path.join(sidecar, '.venv/Scripts/python.exe')],
+      }),
+    ).toBe('python3');
+  });
+
   it('falls back to the platform launcher only when no venv exists', () => {
     expect(resolve({ platform: 'win32', present: [] })).toBe('py');
     expect(resolve({ platform: 'linux', present: [] })).toBe('python3');

@@ -463,6 +463,18 @@ input::-webkit-inner-spin-button {
   min-height: 0;
   height: 100%;
 }
+/*
+  The shell is window-high with nothing to scroll, which the library wants: it scrolls inside
+  its own pane. Live Jam (deck, neck, and the chord bank or the chart under it) is taller than
+  the window, so its screen is the scroller and the chassis grows with what it holds.
+*/
+.studio-shell.shell-immersive .workspace.screen-jam {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.studio-shell.shell-immersive .workspace.screen-jam > .lab-shell {
+  flex: 1 0 auto;
+}
 .page-heading {
   display: flex;
   align-items: center;

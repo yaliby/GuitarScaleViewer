@@ -872,11 +872,52 @@
 }
 .lab-bank-heading {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
-  gap: 20px;
+  gap: 14px 20px;
   margin-bottom: 18px;
   color: var(--gear-engrave);
+}
+.lab-bank-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+/* The switch for the automatic move to the song sheet: the control strip's switch, on its own. */
+.lab-auto {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px 7px 12px;
+  border-radius: 7px;
+  border: 1px solid var(--lab-line);
+  background: linear-gradient(180deg, #1c1c21, #141418);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--gear-engrave);
+}
+.lab-auto:hover {
+  color: var(--gear-legend);
+  border-color: #3d3d47;
+}
+.lab-auto .lab-switch {
+  margin-left: 0;
+}
+.lab-auto.is-on {
+  border-color: #5a4622;
+  color: var(--lab);
+}
+.lab-auto.is-on .lab-switch {
+  background: #7a5314;
+}
+.lab-auto.is-on .lab-switch::after {
+  transform: translateX(11px);
+  background: #ffd894;
 }
 .lab-bank-heading h2 {
   margin: 9px 0 6px;
@@ -895,8 +936,110 @@
 .lab-bank .gear-panel {
   border-radius: 15px;
 }
-.lab-bank section {
+/* The chord bank's own gutters; the chart and the sheet keep theirs. */
+.lab-bank > section {
   padding: 0;
+}
+
+/* ------------------------------------------------------------- song sheet -- */
+/* Where the saved copy stands, while there is no sheet to show. */
+.jam-sheet-status {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 26px 24px;
+  border: 1px solid var(--lab-line);
+  border-radius: 15px;
+  background: linear-gradient(160deg, #1b1b20, #151519);
+  color: var(--lab-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.jam-sheet-status strong {
+  color: var(--gear-text);
+  font-size: 15px;
+  font-weight: 560;
+}
+.jam-sheet-status .lab-eng {
+  margin-top: 6px;
+}
+.jam-sheet-meter {
+  width: min(320px, 100%);
+  height: 4px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--gear-recess);
+  box-shadow: var(--bevel-inset);
+}
+.jam-sheet-meter > i {
+  display: block;
+  height: 100%;
+  background: var(--led-data);
+  transition: width 400ms ease;
+}
+.jam-sheet-source {
+  margin: 0 0 10px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--gear-engrave);
+}
+/* The Library's sheet, re-cut in the Lab's greys. What is being sung is warm white — amber stays
+   the root's — and the chords keep their one hue per root. */
+.lab-bank .song-sheet {
+  --accent: #f3efe6;
+  --line: var(--lab-line);
+  --muted: var(--gear-legend);
+  --warning: #e6bc82;
+  --sheet-dim: #6f6f78;
+  --sheet-sung: #d9d6cf;
+  margin: 0;
+  background:
+    radial-gradient(ellipse 70% 40% at 50% 0%, rgba(255, 255, 255, 0.03), transparent 70%),
+    linear-gradient(160deg, #1b1b20, #151519);
+  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.35);
+}
+.lab-bank .song-sheet-now {
+  border-color: #4a4a55;
+  background: #25252c;
+}
+.lab-bank .song-sheet-meter {
+  background: var(--gear-recess);
+}
+.lab-bank .song-sheet-scroll {
+  scrollbar-color: #3a3a44 #151519;
+}
+.lab-bank .sheet-section h3 {
+  border-color: var(--lab-line);
+}
+.lab-bank .sheet-section.is-chorus h3 {
+  border-color: #4a4a55;
+  background: rgba(255, 255, 255, 0.04);
+}
+.lab-bank .sheet-row:hover {
+  background: rgba(255, 255, 255, 0.025);
+}
+.lab-bank .sheet-row.is-now {
+  background: rgba(255, 255, 255, 0.045);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.09),
+    0 12px 32px rgba(0, 0, 0, 0.3);
+}
+.lab-bank .sheet-row.is-now .sheet-text {
+  color: #8e8e98;
+}
+.lab-bank .sheet-row.is-now .sheet-word.sung .sheet-text {
+  color: #f6f2e8;
+}
+.lab-bank .sheet-word.now .sheet-text {
+  color: transparent;
+  background-image: linear-gradient(90deg, var(--accent) var(--fill, 0%), #8e8e98 var(--fill, 0%));
+}
+.lab-bank [dir='rtl'] .sheet-word.now .sheet-text {
+  background-image: linear-gradient(270deg, var(--accent) var(--fill, 0%), #8e8e98 var(--fill, 0%));
+}
+.lab-bank .sheet-bar {
+  border-color: #3a3a44;
 }
 
 /* ------------------------------------------------------------------ misc -- */

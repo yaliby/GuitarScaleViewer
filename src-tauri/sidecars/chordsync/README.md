@@ -26,6 +26,18 @@ One-shot capture (does not hold the play-along worker):
 
 `chordsync_sidecar.py --capture '{"title":"Numb","artist":"Linkin Park"}'`
 
+One-shot lyric timing for a saved song (also `POST /lyrics` on the HTTP server):
+
+`lyric_map.py --map '{"id":"meta-…","force":false}'` · `lyric_map.py --lookup '{"id":"meta-…"}'`
+
+LRCLIB (through the resolver) gives the words, Whisper (`WhisperAsr`, the Play Along ear) hears
+the whole file with word times, and an in-order alignment pairs them. Unheard words are placed
+between heard neighbours or on the LRC line clock, moved onto the file by `lrc_offset_lock`.
+With no lyrics online the map is the heard words; with no Whisper it is the LRC lines. The map is
+saved as `<capture id>.lyrics.json` next to the MP3. Progress goes to stderr as
+`{"gsvLyrics": true, "progress": n, "stage": "lyrics|decode|load|listen|align|done"}`; stdout
+carries only the reply line.
+
 HTTP: `--http 127.0.0.1:18766` with `POST /resolve` and `POST /follow`.
 
 ## Setup

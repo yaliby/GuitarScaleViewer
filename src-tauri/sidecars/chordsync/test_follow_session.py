@@ -105,6 +105,25 @@ class FollowSyncRulesTest(unittest.TestCase):
         self.assertEqual(session.lrc_offset_source, "captions")
         self.assertTrue(session._timing_remembered)
 
+    def test_a_remembered_ear_offset_is_kept_over_new_captions(self) -> None:
+        # Linux trusts memory; only Windows lets fresh captions replace it.
+        session = self._session(app="brave", player_ms=180_000, lrc_ms=180_000)
+        session.load(
+            parsed=session.parsed,
+            lines=[HELLO, WORLD],
+            lrc_duration_ms=180_000,
+            app_name="brave",
+            track_id=session.track_id,
+            lyrics_state="synced",
+            chart_view="chords",
+            player_duration_ms=180_000,
+            remembered_offset_ms=2_000,
+            remembered_offset_source="live",
+        )
+        captions = ParsedLrc(lines=(_line(0, 14_000, HELLO), _line(1, 24_000, WORLD)))
+        session._ingest_sources(_snap(captions_state="lyrics", youtube_parsed=captions))
+        self.assertEqual((session.lrc_offset_ms, session.lrc_offset_source), (2_000, "live"))
+
     def test_track_identity_includes_source_like_app_controller(self) -> None:
         brave = playalong_track_key(
             title="Song",
@@ -722,6 +741,11 @@ def _heard(offset_ms: int) -> list[_HeardLine]:
     ]
 
 
+def _captions(offset_ms: int) -> ParsedLrc:
+    """The five VERSES as a YouTube clip captions them, ``offset_ms`` after the LRC."""
+    return ParsedLrc(lines=tuple(_line(i, 10_000 * (i + 1) + offset_ms, t) for i, t in enumerate(VERSES)))
+
+
 class WindowsEarEverywhereTest(unittest.TestCase):
     """Windows: the ear times every synced song, keeps listening, and re-checks memory."""
 
@@ -762,12 +786,54 @@ class WindowsEarEverywhereTest(unittest.TestCase):
         plan = self._plan(session, captions_state="lyrics")
         self.assertEqual(plan and plan.get("action"), "end")
 
-    def test_a_remembered_caption_offset_is_checked_by_ear(self) -> None:
+    def test_a_remembered_caption_offset_on_a_video_ends_the_ear(self) -> None:
         session = self._session()
         session.lrc_offset_source = "captions"
         session._timing_remembered = True
         plan = self._plan(session, captions_state="lyrics")
+        self.assertEqual(plan and plan.get("action"), "end")
+
+    def test_a_remembered_caption_offset_is_checked_by_ear_off_video(self) -> None:
+        # Memory is per song: a YouTube clip's offset replayed on Spotify still needs the ear.
+        session = self._session(app="spotify")
+        session.lrc_offset_source = "captions"
+        session._timing_remembered = True
+        plan = self._plan(session, captions_state="none", video_like=False)
         self.assertEqual(plan and plan.get("action"), "activate")
+
+    def test_captions_replace_a_remembered_ear_offset(self) -> None:
+        session = self._session()
+        session._ingest_sources(_snap(captions_state="pending"))
+        # The saved chord page loads after the first tick, carrying an ear lock from an earlier play.
+        session.load(
+            parsed=session.parsed,
+            lines=list(VERSES),
+            lrc_duration_ms=180_000,
+            app_name="brave",
+            track_id=session.track_id,
+            lyrics_state="synced",
+            chart_view="chords",
+            player_duration_ms=180_000,
+            remembered_offset_ms=0,
+            remembered_offset_source="live",
+        )
+        self.assertEqual((session.lrc_offset_ms, session.lrc_offset_source), (0, "live"))
+        session._ingest_sources(_snap(captions_state="lyrics", youtube_parsed=_captions(3_000)))
+        self.assertEqual((session.lrc_offset_ms, session.lrc_offset_source), (3_000, "captions"))
+        self.assertFalse(session._timing_remembered)
+        plan = self._plan(session, captions_state="lyrics")
+        self.assertEqual(plan and plan.get("action"), "end")
+
+    def test_captions_replace_an_ear_lock_from_this_play(self) -> None:
+        session = self._session()
+        self._plan(session, captions_state="pending")
+        session._live_lines = _heard(6_000)
+        session._ear_sync()
+        self.assertEqual((session.lrc_offset_ms, session.lrc_offset_source), (6_000, "live"))
+        session._ingest_sources(_snap(captions_state="lyrics", youtube_parsed=_captions(3_000)))
+        self.assertEqual((session.lrc_offset_ms, session.lrc_offset_source), (3_000, "captions"))
+        plan = self._plan(session, captions_state="lyrics")
+        self.assertEqual(plan and plan.get("action"), "end")
 
     def test_the_ear_keeps_listening_after_its_lock(self) -> None:
         session = self._session()

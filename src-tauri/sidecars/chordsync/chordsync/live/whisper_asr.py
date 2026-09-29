@@ -10,7 +10,7 @@ import gc
 import os
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 
@@ -115,10 +115,13 @@ class WhisperAsr:
         audio: np.ndarray,
         *,
         language: str | None,
+        on_progress: Callable[[float], None] | None = None,
     ) -> tuple[list[HeardWord], str | None, float]:
         """Words with times in seconds from the start of ``audio``, and the language heard.
 
-        No prompt from the words already heard: over music it sent Whisper into loops."""
+        No prompt from the words already heard: over music it sent Whisper into loops.
+        ``on_progress`` receives how far into ``audio`` (seconds) each finished segment reaches,
+        so a whole song can report progress."""
         if self._model is None:
             raise RuntimeError("Whisper model is not loaded")
         segments, info = self._model.transcribe(
@@ -133,6 +136,8 @@ class WhisperAsr:
         )
         words: list[HeardWord] = []
         for segment in segments:
+            if on_progress is not None:
+                on_progress(float(segment.end))
             if segment.no_speech_prob > _NO_SPEECH_PROB and segment.avg_logprob < _MIN_AVG_LOGPROB:
                 continue
             if " ".join(word_key(w) for w in segment.text.split()).strip() in _HALLUCINATED:
