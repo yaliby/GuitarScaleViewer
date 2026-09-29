@@ -17,6 +17,8 @@ use tokio::{
 const MAX_PCM: usize = 22050 * 1200 * 4;
 const MAX_RESPONSE: usize = 16 * 1024 * 1024 + 1;
 const MAX_STDERR: usize = 4096;
+/// A twenty-minute file on a slow laptop: five networks plus the beat tracker, two threads each.
+const RECOGNITION_TIMEOUT: Duration = Duration::from_secs(480);
 const UNAVAILABLE: &str =
     "Whole-song recognition is unavailable. Check the local recognition runtime.";
 
@@ -32,12 +34,26 @@ fn gsv_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..")
 }
 
+/// Where `dev.sh` builds the Linux environment: on the native filesystem, because the repository's
+/// own `harmonia/ml/.venv` on a shared NTFS drive is the Windows one.
+fn linux_data_venv() -> Option<PathBuf> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    let base = std::env::var_os("XDG_DATA_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))?;
+    Some(base.join("fretboard-studio/harmonia-venv/bin/python"))
+}
+
 fn python_candidates(root: &Path) -> Vec<PathBuf> {
     let mut list = Vec::new();
     if let Some(over) = std::env::var_os("HARMONIA_RECOGNITION_PYTHON") {
         list.push(PathBuf::from(over));
     }
     list.push(venv_python(root));
+    list.extend(linux_data_venv());
     let sibling = gsv_root().join("../Harmonia");
     list.push(venv_python(&sibling));
     list
@@ -147,7 +163,7 @@ impl RecognitionService {
         };
         let result = tokio::select! {
             _ = receiver.changed() => Err("Recognition cancelled".into()),
-            result = tokio::time::timeout(Duration::from_secs(240), self.run(bytes)) =>
+            result = tokio::time::timeout(RECOGNITION_TIMEOUT, self.run(bytes)) =>
                 result.unwrap_or_else(|_| Err("Whole-song recognition timed out".into())),
         };
         if let Ok(mut requests) = self.requests.lock() {

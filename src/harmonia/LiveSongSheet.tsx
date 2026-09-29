@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
 import { isTauri } from "@tauri-apps/api/core";
 import type { SessionController } from "../../harmonia/packages/application/session";
+import { NATIVE_MODEL_VERSION } from "../../harmonia/packages/audio/native-whole";
 import type { SavedTrack } from "../../harmonia/packages/domain/types";
 import { useMediaClock } from "../hooks/useMediaClock";
 import { engineLabel, type CapturedTrack } from "../services/trackCapture";
@@ -8,7 +9,7 @@ import { analyzedFingerprint, getAnalyzedRevision, subscribeAnalyzed } from "./a
 import { enqueueChordAnalysis } from "./backgroundChords";
 import { getChordJobs, subscribeChordJobs } from "./chordJobs";
 import { getHarmoniaSession } from "./composition";
-import { SongSheet } from "./SongSheet";
+import { SongSheet, sheetRhythm } from "./SongSheet";
 import { useLyricMap } from "./useLyricMap";
 
 type Props = {
@@ -19,6 +20,13 @@ type Props = {
 };
 
 const EMPTY_LIBRARY: readonly SavedTrack[] = [];
+
+/** Songs already sent back to the recognizer this session, so a failing re-read is not retried. */
+const refreshed = new Set<string>();
+
+export function forgetRefreshesForTests(): void {
+  refreshed.clear();
+}
 
 function subscribeNone() {
   return () => undefined;
@@ -54,14 +62,17 @@ function Sheet({
   record,
   positionMs,
   playing,
+  notice,
 }: {
   track: CapturedTrack;
   record: SavedTrack;
   positionMs: number | null;
   playing: boolean;
+  notice?: ReactNode;
 }) {
   const lyrics = useLyricMap(track.id);
   const clock = useMediaClock(positionMs, playing);
+  const rhythm = useMemo(() => sheetRhythm(record.analysis), [record.analysis]);
   return (
     <div className="jam-sheet">
       <p className="jam-sheet-source">
@@ -71,6 +82,7 @@ function Sheet({
           ? ". A search match: if another cut of the song is playing, the sheet runs early or late."
           : ""}
       </p>
+      {notice}
       <SongSheet
         lyrics={lyrics.state}
         segments={record.analysis.segments}
@@ -81,6 +93,7 @@ function Sheet({
         seekRevision={clock.seekRevision}
         onSeek={clock.seek}
         onRetime={lyrics.retime}
+        rhythm={rhythm}
       />
     </div>
   );
@@ -108,6 +121,15 @@ export default function LiveSongSheet({ track, positionMs, playing }: Props) {
   const fingerprint = useMemo(() => (id ? analyzedFingerprint(id) : null), [id, analyzedRevision]);
   const record = useMemo(() => latestFor(library, fingerprint), [library, fingerprint]);
   const job = id ? jobs[id] : undefined;
+  // Read before bars, tempo and tuning were: read it again, unless somebody corrected it by hand.
+  const outdated = Boolean(record && record.analysis.modelVersion !== NATIVE_MODEL_VERSION);
+  const corrected = Boolean(record?.corrections.length);
+
+  useEffect(() => {
+    if (!track || !outdated || corrected || job || refreshed.has(track.id) || !isTauri()) return;
+    refreshed.add(track.id);
+    void enqueueChordAnalysis(track, { refresh: true });
+  }, [track, outdated, corrected, job]);
 
   useEffect(() => {
     let live = true;
@@ -131,6 +153,22 @@ export default function LiveSongSheet({ track, positionMs, playing }: Props) {
           lyric word is timed in the background, and the sheet opens here.
         </span>
       </Status>
+    );
+  }
+  if (job && record) {
+    return (
+      <Sheet
+        track={track}
+        record={record}
+        positionMs={positionMs}
+        playing={playing}
+        notice={
+          <p className="jam-sheet-refresh" role="status">
+            Reading this recording again with the new recognizer (bars, tempo and tuning) ·{" "}
+            {Math.max(1, Math.min(99, Math.round(job.progress * 100)))}%
+          </p>
+        }
+      />
     );
   }
   if (job) {
@@ -172,5 +210,23 @@ export default function LiveSongSheet({ track, positionMs, playing }: Props) {
       </Status>
     );
   }
-  return <Sheet track={track} record={record} positionMs={positionMs} playing={playing} />;
+  return (
+    <Sheet
+      track={track}
+      record={record}
+      positionMs={positionMs}
+      playing={playing}
+      notice={
+        outdated && corrected && isTauri() ? (
+          <p className="jam-sheet-refresh">
+            Read by the older recognizer, and corrected by hand. Read it again for bars, tempo and
+            tuning; your corrections stay with the older reading in the Library.{" "}
+            <button type="button" className="lab-eng" onClick={() => void enqueueChordAnalysis(track, { refresh: true })}>
+              Read again
+            </button>
+          </p>
+        ) : undefined
+      }
+    />
+  );
 }

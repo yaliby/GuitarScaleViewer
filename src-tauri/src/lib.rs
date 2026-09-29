@@ -16,6 +16,8 @@ mod lyric_map;
 mod media_session;
 mod playalong;
 mod song_capture;
+/// Public for the tempo replay harness (`tests/tempo_replay.rs`), like `key_engine`.
+pub mod tempo;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {

@@ -42,6 +42,33 @@ function Install-ChordSyncVenv {
     Set-Content -Path $stampPath -Value $stamp -NoNewline
 }
 
+function Install-BeatTrackerCheckpoint([string]$venvDir) {
+    # Beat This! final0 (MIT), read by harmonia_ml/rhythm/beat_this.py, which checks the same hash.
+    $dir = Join-Path $venvDir 'share/beat-this'
+    $checkpoint = Join-Path $dir 'final0.ckpt'
+    $expected = '8C328B45F59D8DD3DFF219253FF6A8D6482BE57D0133A29140E2FEBBF8EB8331'
+    if ((Test-Path $checkpoint) -and ((Get-FileHash -Algorithm SHA256 -Path $checkpoint).Hash -eq $expected)) {
+        return
+    }
+    Write-Host 'Downloading the beat tracker for chord and tempo analysis (80 MB, once)...'
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    $partial = "$checkpoint.partial"
+    $url = 'https://cloud.cp.jku.at/public.php/dav/files/7ik4RrBKTS273gp/final0.ckpt'
+    $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+    if ($curl) {
+        & curl.exe -L --fail --retry 3 -o $partial $url
+        if ($LASTEXITCODE -ne 0) { throw 'Beat tracker download failed.' }
+    } else {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        Invoke-WebRequest -Uri $url -OutFile $partial -UseBasicParsing
+    }
+    if ((Get-FileHash -Algorithm SHA256 -Path $partial).Hash -ne $expected) {
+        Remove-Item -Force $partial -ErrorAction SilentlyContinue
+        throw 'Beat tracker checkpoint does not match its pinned SHA-256.'
+    }
+    Move-Item -Force $partial $checkpoint
+}
+
 function Install-HarmoniaVenv {
     # Whole-song chord analysis. harmonia_recognition.rs looks for harmonia/ml/.venv/Scripts/python.exe.
     $venvDir = Join-Path $PSScriptRoot 'harmonia/ml/.venv'
@@ -49,20 +76,21 @@ function Install-HarmoniaVenv {
     $requirements = Join-Path $PSScriptRoot 'harmonia/ml/requirements-windows.txt'
     $stampPath = Join-Path $venvDir '.requirements.sha256'
     $stamp = (Get-FileHash -Algorithm SHA256 -Path $requirements).Hash
-    if ((Test-Path $pythonExe) -and (Test-Path $stampPath) -and
-        ((Get-Content -Raw -Path $stampPath).Trim() -eq $stamp)) {
-        return
+    if (-not ((Test-Path $pythonExe) -and (Test-Path $stampPath) -and
+        ((Get-Content -Raw -Path $stampPath).Trim() -eq $stamp))) {
+        Write-Host 'Installing the whole-song chord analysis environment (downloads PyTorch once)...'
+        if (-not (Test-Path $pythonExe)) {
+            python -m venv $venvDir
+            if ($LASTEXITCODE -ne 0 -or -not (Test-Path $pythonExe)) { throw 'Harmonia virtual environment creation failed.' }
+        }
+        & $pythonExe -m pip install --disable-pip-version-check -r $requirements
+        if ($LASTEXITCODE -ne 0) { throw 'Harmonia dependency installation failed.' }
+        & $pythonExe -c "import lv_chordia, torch, librosa, einops, rotary_embedding_torch"
+        if ($LASTEXITCODE -ne 0) { throw 'Harmonia environment cannot import lv_chordia and the beat tracker.' }
+        Set-Content -Path $stampPath -Value $stamp -NoNewline
     }
-    Write-Host 'Installing the whole-song chord analysis environment (downloads PyTorch once)...'
-    if (-not (Test-Path $pythonExe)) {
-        python -m venv $venvDir
-        if ($LASTEXITCODE -ne 0 -or -not (Test-Path $pythonExe)) { throw 'Harmonia virtual environment creation failed.' }
-    }
-    & $pythonExe -m pip install --disable-pip-version-check -r $requirements
-    if ($LASTEXITCODE -ne 0) { throw 'Harmonia dependency installation failed.' }
-    & $pythonExe -c "import lv_chordia, torch, librosa"
-    if ($LASTEXITCODE -ne 0) { throw 'Harmonia environment cannot import lv_chordia.' }
-    Set-Content -Path $stampPath -Value $stamp -NoNewline
+    # Separate from the stamp: an environment installed before the beat tracker existed still needs it.
+    Install-BeatTrackerCheckpoint $venvDir
 }
 
 function Install-LiveListening {

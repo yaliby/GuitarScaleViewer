@@ -40,12 +40,28 @@ export type SheetLyricRow = {
   rtl: boolean;
 };
 
+/** One bar of a chords-only row: the chord ringing into it (carried), then its changes. */
+export type SheetBar = {
+  start: number;
+  end: number;
+  marks: SheetMark[];
+};
+
 export type SheetChordRow = {
   kind: "chords";
   id: string;
   start: number;
   end: number;
+  /** The changes written in this row, in order. */
   marks: SheetMark[];
+  /** Present when the recording's bars are known: the row as a strip of bars. */
+  bars?: SheetBar[];
+};
+
+/** Where the bars fall: the analysis's downbeats and the end of the recording. */
+export type SheetGrid = {
+  downbeats: readonly number[];
+  end: number;
 };
 
 export type SheetRow = SheetLyricRow | SheetChordRow;
@@ -82,6 +98,9 @@ const BREAK_S = 6;
 /** A rest this long between sung lines starts a new block of lines. */
 const STANZA_S = 3;
 const ROW_CHORDS = 8;
+const ROW_BARS = 4;
+/** A chord landing this soon before a bar line is that bar's first chord, a push into it. */
+const BAR_SNAP_S = 0.15;
 
 const HEBREW = /[֐-׿]/;
 
@@ -109,7 +128,62 @@ export function chordRuns(segments: readonly ChordSegment[]): SheetChord[] {
   return out;
 }
 
-function chordRows(chords: readonly SheetChord[], id: string): SheetChordRow[] {
+/** Bar spans from the downbeats: a pickup from 0 to the first, the last to the recording's end. */
+export function barSpans(grid: SheetGrid): { start: number; end: number }[] {
+  const lines = grid.downbeats.filter((time) => time > 0 && time < grid.end);
+  if (lines.length < 2) return [];
+  const edges = [0, ...lines, grid.end];
+  return edges.slice(0, -1).map((start, index) => ({ start, end: edges[index + 1]! }));
+}
+
+/**
+ * A chords-only stretch as bars, like a hand-written chart: each bar shows the chord ringing into
+ * it (dimmed) unless a change lands on its first beat, then every change inside it.
+ */
+function barRows(chords: readonly SheetChord[], all: readonly SheetChord[], spans: readonly { start: number; end: number }[], id: string): SheetChordRow[] {
+  const first = chords[0]!;
+  const last = chords[chords.length - 1]!;
+  const inside = spans.filter((bar) => bar.end > first.start + BAR_SNAP_S && bar.start < last.end - BAR_SNAP_S);
+  if (!inside.length) return [];
+  const members = new Set(chords.map((chord) => chord.order));
+  const bars: SheetBar[] = inside.map((span) => {
+    const changes = chords.filter(
+      (chord) => chord.start >= span.start - BAR_SNAP_S && chord.start < span.end - BAR_SNAP_S,
+    );
+    const marks: SheetMark[] = changes.map((chord) => ({ chord: chord.order, carried: false }));
+    if (!changes.length || changes[0]!.start > span.start + BAR_SNAP_S) {
+      const ringing = activeIndex(all, span.start + BAR_SNAP_S);
+      if (ringing >= 0 && members.has(ringing) && all[ringing]!.end > span.start + BAR_SNAP_S) {
+        marks.unshift({ chord: ringing, carried: true });
+      }
+    }
+    return { start: span.start, end: span.end, marks };
+  });
+  const rows: SheetChordRow[] = [];
+  for (let at = 0; at < bars.length; at += ROW_BARS) {
+    const slice = bars.slice(at, at + ROW_BARS);
+    rows.push({
+      kind: "chords",
+      id: `${id}-${at / ROW_BARS}`,
+      start: Math.max(slice[0]!.start, at === 0 ? first.start - BAR_SNAP_S : slice[0]!.start),
+      end: slice[slice.length - 1]!.end,
+      marks: slice.flatMap((bar) => bar.marks.filter((mark) => !mark.carried)),
+      bars: slice,
+    });
+  }
+  return rows;
+}
+
+function chordRows(
+  chords: readonly SheetChord[],
+  id: string,
+  all: readonly SheetChord[] = chords,
+  spans: readonly { start: number; end: number }[] = [],
+): SheetChordRow[] {
+  if (spans.length && chords.length) {
+    const rows = barRows(chords, all, spans, id);
+    if (rows.length) return rows;
+  }
   const rows: SheetChordRow[] = [];
   for (let at = 0; at < chords.length; at += ROW_CHORDS) {
     const slice = chords.slice(at, at + ROW_CHORDS);
@@ -160,8 +234,10 @@ function repeatedLines(rows: readonly SheetLyricRow[]): boolean[] {
 export function buildSongSheet(
   lines: readonly LyricLine[],
   segments: readonly ChordSegment[],
+  grid?: SheetGrid | null,
 ): SongSheet {
   const chords = chordRuns(segments);
+  const spans = grid ? barSpans(grid) : [];
   const words: SheetWord[] = [];
   const lyricRows: SheetLyricRow[] = lines.map((line, index) => {
     const rowWords = line.words.map((word) => {
@@ -236,7 +312,7 @@ export function buildSongSheet(
   };
   if (before.length) {
     open(lyricRows.length ? "intro" : "chords", lyricRows.length ? "Intro" : "Chords").rows.push(
-      ...chordRows(before, "intro"),
+      ...chordRows(before, "intro", chords, spans),
     );
   }
   let verses = 0;
@@ -253,7 +329,7 @@ export function buildSongSheet(
     if (played[index]!.length) {
       const outro = index === lyricRows.length - 1;
       open(outro ? "outro" : "instrumental", outro ? "Outro" : "Instrumental").rows.push(
-        ...chordRows(played[index]!, `b${index}`),
+        ...chordRows(played[index]!, `b${index}`, chords, spans),
       );
     }
   });
@@ -276,4 +352,54 @@ export function activeIndex(items: readonly { start: number }[], time: number): 
     }
   }
   return found;
+}
+
+/** Where the clock is in the bar grid: bar 0 is the pickup before the first downbeat. */
+export type BeatPlace = { bar: number; beat: number; meter: number; index: number };
+
+/** Last value at or before `time`, or -1. */
+function lastAtOrBefore(values: readonly number[], time: number): number {
+  let low = 0;
+  let high = values.length - 1;
+  let found = -1;
+  while (low <= high) {
+    const middle = (low + high) >> 1;
+    if (values[middle]! <= time) {
+      found = middle;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return found;
+}
+
+export function beatPlace(
+  beats: readonly number[],
+  downbeats: readonly number[],
+  meter: number | null,
+  time: number,
+): BeatPlace | null {
+  if (!meter || meter < 2 || beats.length < 2 || !downbeats.length) return null;
+  const index = lastAtOrBefore(beats, time);
+  if (index < 0) return null;
+  const period = beats[Math.min(index + 1, beats.length - 1)]! - beats[Math.max(index - 1, 0)]!;
+  // Past the last beat by more than a beat and a half: the song has stopped counting.
+  if (index === beats.length - 1 && time > beats[index]! + Math.max(period, 0.2) * 0.75) return null;
+  const bar = lastAtOrBefore(downbeats, beats[index]! + 1e-6) + 1;
+  if (bar === 0) {
+    const first = lastAtOrBefore(beats, downbeats[0]! + 1e-6);
+    return { bar: 0, beat: Math.max(1, meter - (first - index) + 1), meter, index };
+  }
+  const barStart = lastAtOrBefore(beats, downbeats[bar - 1]! + 1e-6);
+  return { bar, beat: Math.min(meter, index - barStart + 1), meter, index };
+}
+
+/**
+ * What a guitarist tunes to so their open strings sit with this recording: the A the recording
+ * implies, when it is far enough from 440 to hear (a sixth of a semitone).
+ */
+export function tuningNote(cents: number | null | undefined): { cents: number; hz: number } | null {
+  if (cents === null || cents === undefined || !Number.isFinite(cents) || Math.abs(cents) < 15) return null;
+  return { cents: Math.round(cents), hz: Math.round(440 * 2 ** (cents / 1200)) };
 }

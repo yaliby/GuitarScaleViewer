@@ -73,10 +73,27 @@ function validateOrderedTimes(
   }
 }
 
+/** Keys only newer analyses carry; a record without them is still whole. */
+const OPTIONAL_ANALYSIS_KEYS = ['grid', 'tuningCents'] as const;
+
+function validateGrid(value: unknown, beats: number[], duration: number): void {
+  if (!isRecord(value)) throw new Error('Analysis beat grid must be an object');
+  assertExactKeys(value, ['downbeats', 'steady', 'source'], 'Analysis beat grid');
+  validateOrderedTimes(value.downbeats, duration, 'Analysis downbeats');
+  const onBeat = new Set(beats);
+  if (value.downbeats.some((time) => !onBeat.has(time)))
+    throw new Error('Analysis downbeats must be beats');
+  if (typeof value.steady !== 'boolean') throw new Error('Analysis beat grid steadiness is invalid');
+  assertNonEmptyString(value.source, 'Analysis beat grid source');
+  if (value.source.length > 60) throw new Error('Analysis beat grid source is too long');
+}
+
 export function validateAnalysis(value: unknown): Analysis {
   if (!isRecord(value)) throw new Error('Analysis must be an object');
   assertExactKeys(
-    value,
+    Object.fromEntries(
+      Object.entries(value).filter(([key]) => !(OPTIONAL_ANALYSIS_KEYS as readonly string[]).includes(key)),
+    ),
     [
       'id',
       'fingerprint',
@@ -169,6 +186,11 @@ export function validateAnalysis(value: unknown): Analysis {
     throw new Error('Analysis calibration is invalid');
   }
   assertStringArray(value.warnings, 'Analysis warnings');
+  if (value.grid !== undefined) validateGrid(value.grid, value.beats, value.duration);
+  if (value.tuningCents !== undefined && value.tuningCents !== null) {
+    assertFinite(value.tuningCents, 'Analysis tuning');
+    if (Math.abs(value.tuningCents) > 50) throw new Error('Analysis tuning must be within a quarter tone');
+  }
   return value as unknown as Analysis;
 }
 

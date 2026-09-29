@@ -1,5 +1,9 @@
 # CPU inference extras for Linux/macOS. This is not the Windows measurement snapshot.
 lv-chordia==1.1.0
+# Beat This! (vendored in harmonia_ml/rhythm/beat_this.py) needs only these two small packages;
+# its checkpoint is downloaded and hash-checked by the setup scripts into <venv>/share/beat-this.
+einops==0.8.2
+rotary-embedding-torch==0.9.1
 numpy>=2.3,<3
 scipy>=1.16,<2
 soundfile>=0.13,<1

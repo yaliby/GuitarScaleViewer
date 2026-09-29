@@ -18,6 +18,7 @@ src-tauri/sidecars/chordsync/.venv-linux/
 
 # Vendored Harmonia recognition environment (never commit weights/venv)
 harmonia/ml/.venv/
+harmonia/ml/.venv-linux/
 harmonia/**/__pycache__/
 
 # Local credentials and internal review artifacts

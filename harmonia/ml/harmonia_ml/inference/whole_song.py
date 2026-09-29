@@ -1,7 +1,20 @@
-"""Original LV-Chordia CPU inference on bounded already-decoded mono PCM.
+"""LV-Chordia CPU inference on bounded already-decoded mono PCM, read against a beat grid.
 
-No training, audio paths, network access, normalization changes or ONNX fallback.
-Component support values are uncalibrated and never whole-chord probabilities.
+The five audited networks and their XHMM decoder are unchanged. What v4 changes is what they are
+given and how they are decoded:
+
+* The CQT is tuned to the recording at semitone resolution. LV-Chordia's own extractor estimates
+  tuning in thirds of a semitone (it asks librosa at 36 bins per octave), so a recording more than
+  ~17 cents off A440 lands one bin off the grid the networks were trained on. On GuitarSet played
+  40 cents flat that took root accuracy from 84.6% to 55.2%; tuned per semitone it stays at 84.8%.
+* Beats and downbeats come from Beat This! (harmonia_ml.rhythm.beat_this), and the chords are
+  decoded beat-synchronously (harmonia_ml.inference.beat_decode) with the bar phase checked by the
+  decoder's own likelihood.
+* The onset nudge of v3 (boundary_timing) is gone: boundaries already sit on beats, and moving
+  them to the nearest attack cost 0.2 points.
+
+No training, audio paths, network access or ONNX fallback. Component support values are
+uncalibrated and never whole-chord probabilities.
 """
 
 from __future__ import annotations
@@ -21,7 +34,7 @@ import numpy as np
 SAMPLE_RATE = 22050
 HOP = 512
 MAX_SAMPLES = SAMPLE_RATE * 1200
-MODEL_VERSION = "lv-chordia-1.1.0-submission-native-v1"
+MODEL_VERSION = "lv-chordia-1.1.0-submission-native-v4"
 WEIGHT_HASHES = {
     f"joint_chord_net_ismir_naive_v1.0_reweight(0.0,10.0)_s{i}.best.sdict": value
     for i, value in enumerate(
@@ -140,7 +153,67 @@ def ensure_still_responsive() -> None:
         )
 
 
-def infer(pcm: np.ndarray, *, refine: bool = False, align: bool = False, evidence=None) -> dict:
+TUNING_EXCERPTS = 4
+TUNING_EXCERPT_SECONDS = 30
+
+
+def estimate_tuning(pcm: np.ndarray) -> float:
+    """The recording's offset from A440 in semitones, in [-0.5, 0.5).
+
+    Read from up to four 30-second excerpts spread through the song: tuning is global, and
+    piptrack over a twenty-minute file would cost more memory than the networks do.
+    """
+    import librosa
+
+    span = TUNING_EXCERPT_SECONDS * SAMPLE_RATE
+    if len(pcm) <= TUNING_EXCERPTS * span:
+        sample = pcm
+    else:
+        starts = np.linspace(0, len(pcm) - span, TUNING_EXCERPTS).astype(int)
+        sample = np.concatenate([pcm[s : s + span] for s in starts])
+    tuning = float(librosa.estimate_tuning(y=sample, sr=SAMPLE_RATE, bins_per_octave=12))
+    return tuning if math.isfinite(tuning) else 0.0
+
+
+def chord_cqt(pcm: np.ndarray, tuning: float) -> np.ndarray:
+    """LV-Chordia's CQTV2 (288 bins, 36 per octave from F#0), tuned by `tuning` semitones."""
+    import librosa
+
+    cqt = librosa.hybrid_cqt(
+        pcm,
+        sr=SAMPLE_RATE,
+        bins_per_octave=36,
+        fmin=librosa.note_to_hz("F#0"),
+        n_bins=288,
+        tuning=3.0 * tuning,
+        hop_length=HOP,
+    )
+    return np.abs(cqt).T.astype(np.float32)
+
+
+def track_beats(pcm: np.ndarray) -> tuple[np.ndarray, np.ndarray, str, str | None]:
+    """Beats and downbeats in seconds, the tracker that produced them, and why not Beat This!."""
+    from harmonia_ml.rhythm import beat_this
+
+    reason = "The beat tracker is not installed"
+    if beat_this.available():
+        try:
+            beats, downbeats = beat_this.track(pcm)
+            return beats, downbeats, "beat-this-final0", None
+        except Exception as error:  # a damaged checkpoint must not cost the chords
+            sys.stderr.write(f"Beat tracking failed: {type(error).__name__}: {error}\n")
+            reason = "The beat tracker could not run"
+        finally:
+            beat_this.load_model.cache_clear()
+    import librosa
+
+    onset = librosa.onset.onset_strength(y=pcm, sr=SAMPLE_RATE, hop_length=HOP)
+    _, frames = librosa.beat.beat_track(onset_envelope=onset, sr=SAMPLE_RATE, hop_length=HOP, trim=False)
+    beats = librosa.frames_to_time(frames, sr=SAMPLE_RATE, hop_length=HOP)
+    return np.asarray(beats, dtype=float), np.zeros(0), "librosa", reason
+
+
+def infer(pcm: np.ndarray, *, refine: bool = True, evidence=None) -> dict:
     if (
         pcm.ndim != 1
         or pcm.dtype != np.float32
@@ -157,30 +230,49 @@ def infer(pcm: np.ndarray, *, refine: bool = False, align: bool = False, evidenc
     # Both are set by the entry point before importing numerical libraries too.
     os.environ["TORCH_FORCE_WEIGHTS_ONLY_LOAD"] = "1"
     os.environ["CUDA_VISIBLE_DEVICES"] = ""
-    import librosa
     import lv_chordia
     import torch
     from lv_chordia.chordnet_ismir_naive import ChordNet
     from lv_chordia.complex_chord import Chord
-    from lv_chordia.extractors.cqt import CQTV2
     from lv_chordia.extractors.xhmm_ismir import XHMMDecoder
-    from lv_chordia.mir import DataEntry, io
     from lv_chordia.mir.nn.train import NetworkInterface
+
+    from harmonia_ml.rhythm import grid
+
+    from . import beat_decode
 
     torch.set_num_threads(2)
     if torch.get_num_interop_threads() != 1:
         torch.set_num_interop_threads(1)
     duration = len(pcm) / SAMPLE_RATE
+    hop = HOP / SAMPLE_RATE
     package = Path(lv_chordia.__file__).parent
     hmm = XHMMDecoder(template_file=str(package / "data/submission_chord_list.txt"))
-    entry = DataEntry()
-    entry.prop.set("sr", SAMPLE_RATE)
-    entry.prop.set("hop_length", HOP)
-    entry.append_data(pcm, io.MusicIO, "music")
-    entry.append_extractor(CQTV2, "cqt", cache_enabled=False)
     timings = {"setupSeconds": time.perf_counter() - start}
+    warnings: list[str] = []
+
     stage = time.perf_counter()
-    cqt = entry.cqt
+    tuning = estimate_tuning(pcm)
+    timings["tuningSeconds"] = time.perf_counter() - stage
+    ensure_still_responsive()
+
+    # The beat tracker runs before the networks so its memory is gone before theirs is needed.
+    stage = time.perf_counter()
+    beats, downbeats, rhythm_source, missing = track_beats(pcm)
+    beats = beats[(beats >= 0) & (beats < duration)]
+    downbeats = downbeats[(downbeats >= 0) & (downbeats < duration)]
+    if missing:
+        warnings.append(
+            f"{missing}, so chords were decoded frame by frame and the tempo is a rough estimate. "
+            "Run the desktop setup again, then analyze this song again."
+        )
+    if tight:
+        gc.collect()
+    timings["beatSeconds"] = time.perf_counter() - stage
+    ensure_still_responsive()
+
+    stage = time.perf_counter()
+    cqt = chord_cqt(pcm, tuning)
     timings["cqtSeconds"] = time.perf_counter() - stage
     ensure_still_responsive()
     stage = time.perf_counter()
@@ -199,6 +291,7 @@ def infer(pcm: np.ndarray, *, refine: bool = False, align: bool = False, evidenc
         del net, model
         if tight:
             gc.collect()
+    del cqt
     probabilities = [
         np.mean([result[i] for result in ensemble], axis=0) for i in range(len(ensemble[0]))
     ]
@@ -207,28 +300,24 @@ def infer(pcm: np.ndarray, *, refine: bool = False, align: bool = False, evidenc
         raise RuntimeError("Nonfinite native model output")
     timings["inferenceSeconds"] = time.perf_counter() - stage
     ensure_still_responsive()
+
     stage = time.perf_counter()
-    original = hmm.decode_to_chordlab(entry, probabilities, False)
+    names, observations = hmm.get_chord_tag_obs(probabilities)
+    rotation = 0
+    if rhythm_source == "beat-this-final0" and len(beats) >= 2:
+        rotation, _ = beat_decode.choose_rotation(observations, beats, downbeats, hop)
+        original = beat_decode.decode(hmm, probabilities, beats, downbeats, hop, rotation)
+    else:
+        original = beat_decode.frames_to_rows(hmm.decode(probabilities, np.ones(len(observations), np.int8)), hop)
     timeline = bounded_segments(original, duration)
+    rhythm = grid.summarize(beats, downbeats if rhythm_source == "beat-this-final0" else [], rotation)
     timings["hmmSeconds"] = time.perf_counter() - stage
-    stage = time.perf_counter()
-    # Beat positions are independent evidence, never unconditional snapping points.
-    onset = librosa.onset.onset_strength(y=pcm, sr=SAMPLE_RATE, hop_length=HOP)
-    tempo, frames = librosa.beat.beat_track(
-        onset_envelope=onset, sr=SAMPLE_RATE, hop_length=HOP, trim=False
-    )
-    beats = [
-        float(t)
-        for t in librosa.frames_to_time(frames, sr=SAMPLE_RATE, hop_length=HOP)
-        if 0 <= t < duration
-    ]
-    bpm = float(np.asarray(tempo).reshape(-1)[0]) if np.asarray(tempo).size else 0
-    timings["beatSeconds"] = time.perf_counter() - stage
+
     stage = time.perf_counter()
     from .regions import component_values, refine_regions
 
     candidate, collapsed = refine_regions(
-        timeline, probabilities, beats, HOP / SAMPLE_RATE, lambda label: Chord(label).to_numpy()
+        timeline, probabilities, [float(b) for b in beats], hop, lambda label: Chord(label).to_numpy()
     )
     if evidence is not None:
         evidence(
@@ -236,23 +325,16 @@ def infer(pcm: np.ndarray, *, refine: bool = False, align: bool = False, evidenc
                 "original": timeline,
                 "candidate": candidate,
                 "probabilities": probabilities,
+                "observations": (names, observations),
                 "beats": beats,
+                "downbeats": downbeats,
+                "rotation": rotation,
+                "tuning": tuning,
                 "collapsed": collapsed,
             }
         )
     if refine:
         timeline = candidate
-    moved = 0
-    if align:
-        from .boundary_timing import align_boundaries
-
-        peaks = librosa.onset.onset_detect(onset_envelope=onset, sr=SAMPLE_RATE, hop_length=HOP)
-        names, observations = hmm.get_chord_tag_obs(probabilities)
-        aligned = align_boundaries(
-            timeline, peaks * HOP / SAMPLE_RATE, observations, names, HOP / SAMPLE_RATE
-        )
-        moved = sum(a[0] != b[0] for a, b in zip(timeline, aligned, strict=True))
-        timeline = aligned
     timings["refinementSeconds"] = time.perf_counter() - stage
     stage = time.perf_counter()
     segments = []
@@ -288,15 +370,18 @@ def infer(pcm: np.ndarray, *, refine: bool = False, align: bool = False, evidenc
         "sampleCount": len(pcm),
         "duration": duration,
         "segments": segments,
-        "beats": beats,
-        "tempo": bpm if bpm > 0 and math.isfinite(bpm) else None,
-        "modelVersion": MODEL_VERSION.removesuffix("v1") + ("v3" if align else "v2")
-        if refine or align
-        else MODEL_VERSION,
+        "beats": [float(t) for t in beats],
+        "downbeats": rhythm["downbeats"],
+        "tempo": rhythm["tempo"],
+        "tempoSteady": rhythm["tempoSteady"],
+        "meter": rhythm["meter"],
+        "rhythmSource": rhythm_source,
+        "downbeatRotation": rotation,
+        "tuningCents": round(100.0 * tuning, 1),
+        "modelVersion": MODEL_VERSION,
         "sourceHashes": hashes,
         "timings": timings,
-        "warnings": [],
+        "warnings": warnings,
         "refinement": {"enabled": refine, "collapsedTransientRegions": collapsed if refine else 0},
-        "boundaryAlignment": {"enabled": align, "movedBoundaries": moved},
         "pcmSha256": hashlib.sha256(pcm.tobytes()).hexdigest(),
     }

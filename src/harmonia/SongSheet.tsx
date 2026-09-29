@@ -10,17 +10,43 @@ import {
 } from "react";
 import { Crosshair, RotateCw } from "lucide-react";
 import { displayChord, type ChordDisplayMode } from "../../harmonia/packages/domain/notation";
-import type { ChordSegment } from "../../harmonia/packages/domain/types";
+import type { Analysis, ChordSegment } from "../../harmonia/packages/domain/types";
 import { scrollLineToCenter } from "../playalong/scroll";
 import { lyricStageLabel, type LyricMap } from "../services/lyricMap";
 import {
   activeIndex,
+  beatPlace,
   buildSongSheet,
+  tuningNote,
   type SheetMark,
   type SheetRow,
   type SongSheet as Sheet,
 } from "./chordSheet";
 import "./SongSheet.css";
+
+/** The beat grid the sheet counts in: only analyses that read bars (native v4) carry one. */
+export type SheetRhythm = {
+  beats: readonly number[];
+  downbeats: readonly number[];
+  tempo: number | null;
+  meter: number | null;
+  steady: boolean;
+  tuningCents: number | null;
+  duration: number;
+};
+
+export function sheetRhythm(analysis: Analysis): SheetRhythm | null {
+  if (!analysis.grid) return null;
+  return {
+    beats: analysis.beats,
+    downbeats: analysis.grid.downbeats,
+    tempo: analysis.tempo,
+    meter: analysis.meter,
+    steady: analysis.grid.steady,
+    tuningCents: analysis.tuningCents ?? null,
+    duration: analysis.duration,
+  };
+}
 
 export type LyricSheetState =
   | { status: "loading" }
@@ -39,6 +65,8 @@ type Props = {
   seekRevision: number;
   onSeek(seconds: number): void;
   onRetime(): void;
+  /** Bars, tempo and tuning, when the analysis read them. */
+  rhythm?: SheetRhythm | null;
 };
 
 /** A line lights up this much before its first word, so the eye is there in time. */
@@ -92,14 +120,16 @@ type RowProps = {
   /** How far through that word (0..1), when it is still being sung. */
   fill: number | null;
   activeChord: number;
+  /** The bar being played, in a row of bars; -1 elsewhere. */
+  bar: number;
   onSeek(seconds: number): void;
 };
 
-const Row = memo(function Row({ row, sheet, faces, state, word, fill, activeChord, onSeek }: RowProps) {
+const Row = memo(function Row({ row, sheet, faces, state, word, fill, activeChord, bar, onSeek }: RowProps) {
   const seekRow = () => onSeek(Math.max(0, row.start - 0.1));
   const common = {
     "data-row": row.id,
-    className: `sheet-row sheet-${row.kind}-row is-${state}`,
+    className: `sheet-row sheet-${row.kind}-row${row.kind === "chords" && row.bars ? " sheet-bars-row" : ""} is-${state}`,
     tabIndex: 0,
     onKeyDown: (event: React.KeyboardEvent) => {
       if (event.key === "Enter" || event.key === " ") {
@@ -118,6 +148,30 @@ const Row = memo(function Row({ row, sheet, faces, state, word, fill, activeChor
       onSeek={onSeek}
     />
   );
+  if (row.kind === "chords" && row.bars) {
+    return (
+      <div {...common} aria-label="Chords only, in bars" onClick={seekRow}>
+        {row.bars.map((item, index) => (
+          <span
+            key={index}
+            className={`sheet-bar${index === bar ? " is-now" : ""}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              onSeek(item.start);
+            }}
+          >
+            {item.marks.length ? (
+              item.marks.map((m, at) => mark(m, `${index}-${at}`))
+            ) : (
+              <span className="sheet-bar-rest" aria-label="No chord">
+                –
+              </span>
+            )}
+          </span>
+        ))}
+      </div>
+    );
+  }
   if (row.kind === "chords") {
     return (
       <div {...common} aria-label="Chords only" onClick={seekRow}>
@@ -161,6 +215,57 @@ const Row = memo(function Row({ row, sheet, faces, state, word, fill, activeChor
   );
 });
 
+/**
+ * The song's pulse under the sheet's heading: tempo, meter, the A a guitarist tunes to when the
+ * recording is off 440, and a counter that walks the beats of the bar being played.
+ */
+function RhythmStrip({ rhythm, time, playing }: { rhythm: SheetRhythm; time: number; playing: boolean }) {
+  const place = beatPlace(rhythm.beats, rhythm.downbeats, rhythm.meter, time);
+  const tuning = tuningNote(rhythm.tuningCents);
+  const tempo = rhythm.tempo === null ? null : Math.round(rhythm.tempo);
+  return (
+    <div className="song-sheet-rhythm">
+      {tempo !== null && (
+        <span
+          className="sheet-fact"
+          title={rhythm.steady ? "Beats per minute, read from the whole recording" : "The tempo moves: this is its middle"}
+        >
+          <strong>{tempo}</strong> BPM{rhythm.steady ? "" : " · tempo moves"}
+        </span>
+      )}
+      {rhythm.meter && (
+        <span className="sheet-fact" title="Beats per bar">
+          <strong>{rhythm.meter}</strong> beats a bar
+        </span>
+      )}
+      {tuning && (
+        <span
+          className="sheet-fact is-tuning"
+          title={`The recording sits ${Math.abs(tuning.cents)} cents ${tuning.cents < 0 ? "flat" : "sharp"} of A440. Tune to A = ${tuning.hz} Hz to play along in tune.`}
+        >
+          A = <strong>{tuning.hz}</strong> Hz · {Math.abs(tuning.cents)}¢ {tuning.cents < 0 ? "flat" : "sharp"}
+        </span>
+      )}
+      {rhythm.meter && rhythm.meter >= 2 && (
+        <span
+          className={`beat-counter${playing ? " is-playing" : ""}`}
+          role="img"
+          aria-label={place ? `Bar ${place.bar}, beat ${place.beat} of ${place.meter}` : "Before the first beat"}
+        >
+          <span className="beat-counter-bar">{place ? (place.bar === 0 ? "pickup" : `bar ${place.bar}`) : "—"}</span>
+          {Array.from({ length: rhythm.meter }, (_, index) => (
+            <i
+              // A new key per beat restarts the pulse, so every beat flashes, not just changes.
+              key={place && index + 1 === place.beat ? `on-${place.index}` : `off-${index}`}
+              className={`${index === 0 ? "is-downbeat " : ""}${place && index + 1 === place.beat ? "is-on" : ""}`}
+            />
+          ))}
+        </span>
+      )}
+    </div>
+  );
+}
+
 function sourceLine(map: LyricMap): string {
   if (map.source === "none") return "No singing heard: the sheet is the chords alone.";
   if (map.source === "whisper") {
@@ -183,9 +288,14 @@ export function SongSheet({
   seekRevision,
   onSeek,
   onRetime,
+  rhythm = null,
 }: Props) {
   const lines = lyrics.status === "ready" ? lyrics.map.lines : null;
-  const sheet = useMemo(() => buildSongSheet(lines ?? [], segments), [lines, segments]);
+  const grid = useMemo(
+    () => (rhythm && rhythm.downbeats.length ? { downbeats: rhythm.downbeats, end: rhythm.duration } : null),
+    [rhythm],
+  );
+  const sheet = useMemo(() => buildSongSheet(lines ?? [], segments, grid), [lines, segments, grid]);
   const faces = useMemo(
     () => sheet.chords.map((chord) => faceOf(segments[chord.segment], notation, keyRoot)),
     [sheet, segments, notation, keyRoot],
@@ -212,6 +322,11 @@ export function SongSheet({
       : null;
   const chordIndex = activeIndex(sheet.chords, time);
   const activeChord = chordIndex >= 0 && time < sheet.chords[chordIndex]!.end ? chordIndex : -1;
+  const nowRow = sheet.rows[rowIndex];
+  const activeBar =
+    nowRow?.kind === "chords" && nowRow.bars
+      ? nowRow.bars.findIndex((item) => time >= item.start && time < item.end)
+      : -1;
 
   const scroller = useRef<HTMLDivElement>(null);
   const raf = useRef<{ id: number | null }>({ id: null });
@@ -296,6 +411,7 @@ export function SongSheet({
       ) : (
         <p className="song-sheet-source">{sourceLine(lyrics.map)}</p>
       )}
+      {rhythm && <RhythmStrip rhythm={rhythm} time={time} playing={playing} />}
       <div className="song-sheet-scroll" ref={scroller}>
         {sheet.sections.map((section) => (
           <section key={section.id} className={`sheet-section is-${section.kind}`}>
@@ -315,6 +431,7 @@ export function SongSheet({
                   activeChord={
                     state === "now" || changesIn[index]!.has(activeChord) ? activeChord : -1
                   }
+                  bar={state === "now" ? activeBar : -1}
                   onSeek={seek}
                 />
               );

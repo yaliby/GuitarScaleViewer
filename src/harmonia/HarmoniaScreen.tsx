@@ -24,7 +24,7 @@ import {
   pauseHarmoniaPlayback,
   prepareCapturedSong,
 } from "./composition";
-import { SongSheet } from "./SongSheet";
+import { SongSheet, sheetRhythm } from "./SongSheet";
 import { useLyricMap } from "./useLyricMap";
 import "./HarmoniaScreen.css";
 
@@ -140,6 +140,7 @@ export default function HarmoniaScreen({ menuOpen, onToggleMenu }: Props) {
     openingId === null &&
     current.track.fingerprint === analyzedFingerprint(selected.id);
   const lyrics = useLyricMap(playerOpen ? selected.id : null);
+  const rhythm = useMemo(() => (current ? sheetRhythm(current.analysis) : null), [current]);
   const openingJob = openingId ? chordJobs[openingId] : undefined;
   const stopOpening = () => {
     opener.current += 1;
@@ -239,6 +240,7 @@ export default function HarmoniaScreen({ menuOpen, onToggleMenu }: Props) {
                   seekRevision={slot.seekRevision}
                   onSeek={slot.seek}
                   onRetime={lyrics.retime}
+                  rhythm={rhythm}
                 />
               )}
             />

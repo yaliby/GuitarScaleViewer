@@ -74,6 +74,100 @@
   color: var(--warning, #e6bc82);
 }
 
+/* The pulse under the heading: tempo, meter, tuning and a counter that walks the bar. */
+.song-sheet-rhythm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 22px 0;
+}
+
+.sheet-fact {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid #2c3a3b;
+  border-radius: 999px;
+  color: var(--muted, #99a7aa);
+  font-size: 12px;
+  line-height: 24px;
+  white-space: nowrap;
+}
+
+.sheet-fact strong {
+  color: #e8e4d9;
+  font-family: "JetBrains Mono", "Cascadia Mono", "Noto Sans Mono", ui-monospace, monospace;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.sheet-fact.is-tuning {
+  border-color: #5a4a30;
+  color: var(--warning, #e6bc82);
+  background: #e6bc820d;
+}
+
+.sheet-fact.is-tuning strong {
+  color: var(--warning, #e6bc82);
+}
+
+.beat-counter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  margin-inline-start: auto;
+  padding: 0 12px 0 10px;
+  border: 1px solid #2c3a3b;
+  border-radius: 999px;
+}
+
+.beat-counter-bar {
+  min-width: 4.2em;
+  color: var(--muted, #99a7aa);
+  font-family: "JetBrains Mono", "Cascadia Mono", "Noto Sans Mono", ui-monospace, monospace;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.beat-counter i {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #2a3736;
+  transition: background-color 120ms ease;
+}
+
+.beat-counter i.is-downbeat {
+  box-shadow: inset 0 0 0 1.5px #4c6a5a;
+}
+
+.beat-counter i.is-on {
+  background: var(--accent, #bce7ce);
+}
+
+.beat-counter i.is-downbeat.is-on {
+  background: #f6f2e8;
+}
+
+.beat-counter.is-playing i.is-on {
+  animation: beat-flash 360ms ease-out;
+}
+
+@keyframes beat-flash {
+  from {
+    box-shadow: 0 0 0 5px #bce7ce55;
+    transform: scale(1.35);
+  }
+  to {
+    box-shadow: 0 0 0 0 #bce7ce00;
+    transform: scale(1);
+  }
+}
+
 .song-sheet-meter {
   flex: 1;
   max-width: 280px;
@@ -305,6 +399,25 @@
   font-size: calc(var(--sheet-chord) * 1.18);
 }
 
+/* Bars from the recording's downbeats: a fixed width, so the chart reads down in columns. */
+.sheet-bars-row .sheet-bar {
+  flex: 0 0 calc(25% - 2px);
+  justify-content: flex-start;
+  gap: 0.5em;
+  min-height: calc(var(--sheet-chord-row) + 10px);
+  box-sizing: border-box;
+  transition: background-color 200ms ease;
+}
+
+.sheet-bar.is-now {
+  background: #bce7ce14;
+}
+
+.sheet-bar-rest {
+  color: #4f5f5e;
+  font-family: "JetBrains Mono", "Cascadia Mono", "Noto Sans Mono", ui-monospace, monospace;
+}
+
 @media (max-width: 720px) {
   .song-sheet-head {
     padding: 0 14px;
@@ -329,6 +442,9 @@
     transition: none;
   }
   .sheet-row.is-now::before {
+    animation: none;
+  }
+  .beat-counter.is-playing i.is-on {
     animation: none;
   }
 }

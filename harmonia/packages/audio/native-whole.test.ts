@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { expect, it } from 'vitest';
-import { assembleNativeWholeSong, NATIVE_MODEL_VERSION } from './native-whole';
+import { assembleNativeWholeSong, NATIVE_BEAT_TRACKER, NATIVE_MODEL_VERSION } from './native-whole';
 import { formatChord } from '../domain/chord';
 const result = () => ({
   schemaVersion: 1,
@@ -13,7 +13,12 @@ const result = () => ({
     { start: 5, end: 10, label: 'D:7/3', score: 0.75 },
   ],
   beats: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+  downbeats: [1, 5, 9],
   tempo: 60,
+  tempoSteady: true,
+  meter: 4,
+  rhythmSource: 'beat-this-final0',
+  tuningCents: -32,
   timings: {
     setupSeconds: 0,
     cqtSeconds: 0.1,
@@ -26,6 +31,7 @@ const result = () => ({
 });
 it('invalidates the previous timing pipeline before accepting a prepared playback snapshot', () => {
   expect(NATIVE_MODEL_VERSION).not.toBe('lv-chordia-1.1.0-submission-native-v2');
+  expect(NATIVE_MODEL_VERSION).not.toBe('lv-chordia-1.1.0-submission-native-v3');
   expect(() =>
     assembleNativeWholeSong(
       { ...result(), modelVersion: 'lv-chordia-1.1.0-submission-native-v2' },
@@ -118,4 +124,41 @@ it.each([9.99, 10.01])('still rejects a materially incomplete or overlong endpoi
       waveform: [],
     }),
   ).toThrow('Incomplete native timeline');
+});
+
+const metadata = () => ({
+  fingerprint: 'a'.repeat(64),
+  profile: 'balanced' as const,
+  samples: 220500,
+  waveform: [],
+});
+
+it('keeps the bars, meter, steadiness and tuning the recognizer read', () => {
+  const analysis = assembleNativeWholeSong(result(), metadata());
+  expect(analysis.meter).toBe(4);
+  expect(analysis.tempo).toBe(60);
+  expect(analysis.grid).toEqual({ downbeats: [1, 5, 9], steady: true, source: NATIVE_BEAT_TRACKER });
+  expect(analysis.tuningCents).toBe(-32);
+});
+
+it('reads a result without a beat grid as bars unknown rather than failing', () => {
+  const native = result();
+  delete native.downbeats;
+  delete native.meter;
+  delete native.rhythmSource;
+  delete native.tuningCents;
+  delete native.tempoSteady;
+  const analysis = assembleNativeWholeSong(native, metadata());
+  expect(analysis.meter).toBeNull();
+  expect(analysis.grid).toEqual({ downbeats: [], steady: false, source: 'unknown' });
+  expect(analysis.tuningCents).toBeNull();
+});
+
+it('rejects downbeats that are not beats and tuning past a quarter tone', () => {
+  expect(() => assembleNativeWholeSong({ ...result(), downbeats: [1.5] }, metadata())).toThrow(
+    'Analysis downbeats must be beats',
+  );
+  expect(() => assembleNativeWholeSong({ ...result(), tuningCents: 60 }, metadata())).toThrow(
+    'quarter tone',
+  );
 });

@@ -25,7 +25,7 @@ def main() -> int:
             from harmonia_ml.inference.whole_song import infer, read_pcm
 
             pcm = read_pcm(sys.stdin.buffer, args.samples)
-            result = infer(pcm, refine=True, align=True)
+            result = infer(pcm)
         payload = json.dumps(result, allow_nan=False, separators=(",", ":"))
         if len(payload) > 16 * 1024 * 1024:
             raise ValueError("Native recognition output exceeds 16 MiB")

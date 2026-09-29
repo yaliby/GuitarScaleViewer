@@ -26,7 +26,8 @@ vi.mock("./composition", () => ({
 }));
 
 vi.mock("./backgroundChords", () => ({
-  enqueueChordAnalysis: (track: CapturedTrack) => mocks.enqueue(track),
+  enqueueChordAnalysis: (track: CapturedTrack, options?: { refresh?: boolean }) =>
+    mocks.enqueue(track, options),
 }));
 
 vi.mock("../hooks/mediaTransport", () => ({
@@ -40,7 +41,8 @@ vi.mock("../services/lyricMap", async (importOriginal) => ({
 
 import { markCaptureAnalyzed } from "./analyzedCaptures";
 import { resetChordJobsForTests, setChordJob } from "./chordJobs";
-import LiveSongSheet from "./LiveSongSheet";
+import { NATIVE_MODEL_VERSION } from "../../harmonia/packages/audio/native-whole";
+import LiveSongSheet, { forgetRefreshesForTests } from "./LiveSongSheet";
 
 const ROOTS: Record<string, number> = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
 
@@ -81,7 +83,12 @@ function line(text: string, start: number): LyricLine {
   return { text, startMs: words[0]!.startMs, endMs: words[words.length - 1]!.endMs, breakBefore: false, words };
 }
 
-function record(fingerprint: string, createdAt: string, spans: ChordSegment[]): SavedTrack {
+function record(
+  fingerprint: string,
+  createdAt: string,
+  spans: ChordSegment[],
+  modelVersion = NATIVE_MODEL_VERSION,
+): SavedTrack {
   return {
     track: {
       id: fingerprint,
@@ -95,7 +102,7 @@ function record(fingerprint: string, createdAt: string, spans: ChordSegment[]): 
       id: `${fingerprint}-${createdAt}`,
       fingerprint,
       profile: "balanced",
-      modelVersion: "m",
+      modelVersion,
       pipelineVersion: "p",
       duration: 16,
       segments: spans,
@@ -150,6 +157,8 @@ const nowRow = () => document.querySelector(".sheet-row.is-now")?.textContent ??
 beforeEach(() => {
   localStorage.clear();
   resetChordJobsForTests();
+  forgetRefreshesForTests();
+  mocks.enqueue.mockReset();
   mocks.tauri = true;
   mocks.library = [];
   mocks.ensure.mockImplementation(async () => MAP);
@@ -176,7 +185,7 @@ describe("LiveSongSheet", () => {
   it("offers to read the chords of a saved song nobody has analysed", () => {
     render(<LiveSongSheet track={TRACK} positionMs={0} playing={false} />);
     fireEvent.click(screen.getByRole("button", { name: "Read the chords" }));
-    expect(mocks.enqueue).toHaveBeenCalledWith(TRACK);
+    expect(mocks.enqueue).toHaveBeenCalledWith(TRACK, undefined);
   });
 
   it("follows the OS player's clock through the newest analysis of the recording", async () => {
@@ -234,5 +243,66 @@ describe("LiveSongSheet", () => {
       <LiveSongSheet track={{ ...TRACK, engine: "youtube_search" }} positionMs={0} playing={false} />,
     );
     expect(await screen.findByText(/another cut of the song is playing/)).toBeInTheDocument();
+  });
+
+  it("reads an analysis from the older recognizer again, once, keeping the old sheet up", async () => {
+    markCaptureAnalyzed("yt-abc", "fp-abc");
+    mocks.library = [
+      record("fp-abc", "2026-09-26T00:00:00Z", segments(["G", 0, 16]), "lv-chordia-1.1.0-submission-native-v3"),
+    ];
+    const { rerender } = render(<LiveSongSheet track={TRACK} positionMs={4_200} playing={false} />);
+    expect(await screen.findByRole("heading", { name: "Song sheet" })).toBeInTheDocument();
+    expect(mocks.enqueue).toHaveBeenCalledTimes(1);
+    expect(mocks.enqueue).toHaveBeenCalledWith(TRACK, { refresh: true });
+
+    act(() => setChordJob("yt-abc", { stage: "Recognizing harmony", progress: 0.4 }));
+    expect(screen.getByRole("heading", { name: "Song sheet" })).toBeInTheDocument();
+    expect(screen.getByText(/Reading this recording again with the new recognizer/)).toHaveTextContent("40%");
+
+    // The re-read failed: the job is gone and the old analysis is still the newest.
+    act(() => setChordJob("yt-abc", null));
+    rerender(<LiveSongSheet track={TRACK} positionMs={4_300} playing={false} />);
+    expect(mocks.enqueue).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a hand-corrected older analysis alone and offers to read it again", async () => {
+    markCaptureAnalyzed("yt-abc", "fp-abc");
+    const corrected = record(
+      "fp-abc",
+      "2026-09-26T00:00:00Z",
+      segments(["G", 0, 16]),
+      "lv-chordia-1.1.0-submission-native-v3",
+    );
+    mocks.library = [{ ...corrected, corrections: [{ id: "c1" }] }];
+    render(<LiveSongSheet track={TRACK} positionMs={4_200} playing={false} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Read again" }));
+    expect(mocks.enqueue).toHaveBeenCalledTimes(1);
+    expect(mocks.enqueue).toHaveBeenCalledWith(TRACK, { refresh: true });
+  });
+
+  it("shows the tempo, meter, tuning and the beat of the bar the recognizer read", async () => {
+    markCaptureAnalyzed("yt-abc", "fp-abc");
+    const beats = Array.from({ length: 32 }, (_, i) => 0.5 * i);
+    const read = record("fp-abc", "2026-09-26T00:00:00Z", segments(["G", 0, 8], ["C", 8, 16]));
+    mocks.library = [
+      {
+        ...read,
+        analysis: {
+          ...read.analysis,
+          beats,
+          tempo: 120,
+          meter: 4,
+          grid: { downbeats: beats.filter((_, i) => i % 4 === 0), steady: true, source: "beat-this-final0" },
+          tuningCents: -32,
+        },
+      },
+    ];
+    render(<LiveSongSheet track={TRACK} positionMs={5_100} playing={false} />);
+    expect(await screen.findByText("BPM", { exact: false })).toHaveTextContent("120 BPM");
+    expect(screen.getByText(/beats a bar/)).toHaveTextContent("4 beats a bar");
+    expect(screen.getByText(/Hz/)).toHaveTextContent("A = 432 Hz · 32¢ flat");
+    // 5.1 s at 120 BPM in 4/4 from 0: bar 3, beat 3.
+    expect(screen.getByRole("img", { name: "Bar 3, beat 3 of 4" })).toBeInTheDocument();
+    expect(mocks.enqueue).not.toHaveBeenCalled();
   });
 });

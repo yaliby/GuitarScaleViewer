@@ -1,6 +1,10 @@
 # CPU inference for Windows x64. Same pins as requirements-unix.txt; verified with Python 3.12
 # on Windows 10 (torch 2.14 CPU wheel from PyPI, lv-chordia weights under .venv/share).
 lv-chordia==1.1.0
+# Beat This! (vendored in harmonia_ml/rhythm/beat_this.py) needs only these two small packages;
+# its checkpoint is downloaded and hash-checked by the setup scripts into <venv>/share/beat-this.
+einops==0.8.2
+rotary-embedding-torch==0.9.1
 numpy>=2.3,<3
 scipy>=1.16,<2
 soundfile>=0.13,<1

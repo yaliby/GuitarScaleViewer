@@ -12,9 +12,19 @@ const aborts = new Map<string, AbortController>();
 /**
  * After a song file is on disk, read its chords with the local recognizer, then time its
  * lyrics word by word. The open screen is left alone; opening that song later reuses both.
+ * `refresh` reads a song again that an older recognizer already read: the newer analysis is
+ * saved beside the old one and wins as the latest.
  */
-export function enqueueChordAnalysis(track: CapturedTrack): Promise<void> {
-  if (!isTauri() || !track.id || pending.has(track.id) || analyzedCaptureIds().has(track.id)) {
+export function enqueueChordAnalysis(
+  track: CapturedTrack,
+  options: { refresh?: boolean } = {},
+): Promise<void> {
+  if (
+    !isTauri() ||
+    !track.id ||
+    pending.has(track.id) ||
+    (!options.refresh && analyzedCaptureIds().has(track.id))
+  ) {
     return Promise.resolve();
   }
   pending.add(track.id);

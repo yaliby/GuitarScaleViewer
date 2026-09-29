@@ -181,6 +181,75 @@ if [[ -z "${CHORDSYNC_PYTHON:-}" ]]; then
   fi
 fi
 
+# Whole-song chord analysis (LV-Chordia + the Beat This! beat tracker). `harmonia/ml/.venv` on this
+# shared drive is the Windows one, and PyTorch's thousands of files take the better part of an hour
+# to land on NTFS, so the Linux environment lives on the native filesystem instead and Rust is
+# pointed at it through HARMONIA_RECOGNITION_PYTHON. Without it "Read the chords" fails with
+# "Whole-song recognition is unavailable". Reinstalled whenever requirements-unix.txt changes.
+harmonia_ml_dir="$root/harmonia/ml"
+harmonia_venv="${XDG_DATA_HOME:-$HOME/.local/share}/fretboard-studio/harmonia-venv"
+harmonia_stamp="$harmonia_venv/.requirements-installed"
+beat_ckpt="$harmonia_venv/share/beat-this/final0.ckpt"
+beat_ckpt_sha256="8c328b45f59d8dd3dff219253ff6a8d6482be57d0133a29140e2febbf8eb8331"
+setup_harmonia_venv() {
+  local uv_bin
+  uv_bin="$(command -v uv || true)"
+  if [[ -z "$uv_bin" && -x "$HOME/.local/bin/uv" ]]; then uv_bin="$HOME/.local/bin/uv"; fi
+  mkdir -p "$(dirname "$harmonia_venv")"
+  if [[ -n "$uv_bin" ]]; then
+    if [[ ! -x "$harmonia_venv/bin/python" ]]; then
+      "$uv_bin" venv --python python3 "$harmonia_venv" || return 1
+    fi
+    # CPU wheels: the default Linux torch wheel drags in several GB of CUDA libraries.
+    "$uv_bin" pip install --python "$harmonia_venv/bin/python" --torch-backend=cpu \
+      -r "$harmonia_ml_dir/requirements-unix.txt" || return 1
+  elif python3 -c 'import ensurepip' 2>/dev/null; then
+    if [[ ! -x "$harmonia_venv/bin/python" ]]; then
+      python3 -m venv "$harmonia_venv" || return 1
+    fi
+    "$harmonia_venv/bin/python" -m pip install --index-url https://download.pytorch.org/whl/cpu torch || return 1
+    "$harmonia_venv/bin/python" -m pip install -r "$harmonia_ml_dir/requirements-unix.txt" || return 1
+  else
+    echo "dev.sh: cannot create the chord analysis venv: install uv or python3-venv." >&2
+    return 1
+  fi
+  "$harmonia_venv/bin/python" -c 'import lv_chordia, torch, librosa, einops, rotary_embedding_torch' || return 1
+}
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi
+}
+ensure_beat_checkpoint() {
+  if [[ -f "$beat_ckpt" && "$(sha256_of "$beat_ckpt")" == "$beat_ckpt_sha256" ]]; then
+    return 0
+  fi
+  echo "dev.sh: downloading the Beat This! beat tracker (80 MB, once)..."
+  mkdir -p "$(dirname "$beat_ckpt")"
+  curl -L --fail --retry 3 -o "$beat_ckpt.partial" \
+    "https://cloud.cp.jku.at/public.php/dav/files/7ik4RrBKTS273gp/final0.ckpt" || return 1
+  if [[ "$(sha256_of "$beat_ckpt.partial")" != "$beat_ckpt_sha256" ]]; then
+    rm -f "$beat_ckpt.partial"
+    echo "dev.sh: the beat tracker download does not match its pinned SHA-256." >&2
+    return 1
+  fi
+  mv "$beat_ckpt.partial" "$beat_ckpt"
+}
+if [[ -z "${HARMONIA_RECOGNITION_PYTHON:-}" ]]; then
+  if [[ ! -x "$harmonia_venv/bin/python" || ! -f "$harmonia_stamp" \
+        || "$harmonia_ml_dir/requirements-unix.txt" -nt "$harmonia_stamp" ]]; then
+    echo "dev.sh: setting up the chord analysis venv at $harmonia_venv (downloads PyTorch once) ..."
+    if setup_harmonia_venv; then
+      touch "$harmonia_stamp"
+    else
+      echo "dev.sh: chord analysis venv setup failed; saved songs cannot be read for chords." >&2
+    fi
+  fi
+  if [[ -x "$harmonia_venv/bin/python" ]]; then
+    ensure_beat_checkpoint \
+      || echo "dev.sh: no beat tracker; chords are decoded frame by frame and tempo is rough." >&2
+    export HARMONIA_RECOGNITION_PYTHON="$harmonia_venv/bin/python"
+  fi
+fi
+
 # rustup installs cargo into ~/.cargo/bin, which only login shells put on PATH.
 if ! command -v cargo >/dev/null 2>&1 && [[ -x "$HOME/.cargo/bin/cargo" ]]; then
   export PATH="$HOME/.cargo/bin:$PATH"
