@@ -241,10 +241,23 @@ async function lookupFor(media: MediaSessionUiState, pasted: string): Promise<vo
   });
 }
 
+export function canAutoCaptureMedia(media: MediaSessionUiState): boolean {
+  // Saving uses the song identity, not the playback clock. Windows can expose a
+  // titled Chrome session as paused; only lyric following needs a running clock.
+  return (
+    (media.playbackStatus === 'playing' ||
+      media.playbackStatus === 'opened' ||
+      media.playbackStatus === 'paused') &&
+    Boolean(media.title || media.trackUrl)
+  );
+}
+
 function maybeAutoCapture(media: MediaSessionUiState): void {
-  if (!snapshot.autoEnabled || !isTauri()) return;
-  if (media.playbackStatus !== 'playing' && media.playbackStatus !== 'opened') return;
-  if (!media.title && !media.trackUrl) return;
+  if (!snapshot.autoEnabled || !isTauri() || !canAutoCaptureMedia(media)) {
+    if (autoTimer) clearTimeout(autoTimer);
+    autoTimer = null;
+    return;
+  }
   const key = mediaKey(media);
   if (key === lastAutoKey) return;
   if (snapshot.status === 'capturing') return;

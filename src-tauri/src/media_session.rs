@@ -813,6 +813,7 @@ mod win {
     use super::{MediaSessionDebugEntry, MediaSessionPayload, WinBridge, WinRawSample};
     use std::sync::{Mutex, OnceLock};
     use std::time::{Duration, Instant};
+    use tokio::sync::OnceCell;
     use windows::Media::Control::{
         GlobalSystemMediaTransportControlsSession,
         GlobalSystemMediaTransportControlsSessionManager,
@@ -866,6 +867,21 @@ mod win {
             .unwrap_or_else(|err| err.into_inner())
     }
 
+    async fn session_manager() -> Result<GlobalSystemMediaTransportControlsSessionManager, String> {
+        // RequestAsync can take several seconds on Windows; reuse its manager for each poll.
+        static MANAGER: OnceCell<GlobalSystemMediaTransportControlsSessionManager> =
+            OnceCell::const_new();
+        MANAGER
+            .get_or_try_init(|| async {
+                GlobalSystemMediaTransportControlsSessionManager::RequestAsync()
+                    .map_err(|err| format!("media session manager: {err}"))?
+                    .await
+                    .map_err(|err| format!("media session manager: {err}"))
+            })
+            .await
+            .cloned()
+    }
+
     fn publish(sample: WinRawSample) -> MediaSessionPayload {
         bridge_mut().push(&sample)
     }
@@ -915,16 +931,10 @@ mod win {
     }
 
     pub async fn enumerate_sessions() -> Vec<MediaSessionDebugEntry> {
-        let manager = match GlobalSystemMediaTransportControlsSessionManager::RequestAsync() {
-            Ok(op) => match op.await {
-                Ok(m) => m,
-                Err(e) => {
-                    log::debug!("media_session: enumerate RequestAsync failed: {e}");
-                    return Vec::new();
-                }
-            },
-            Err(e) => {
-                log::debug!("media_session: enumerate RequestAsync (sync) failed: {e}");
+        let manager = match session_manager().await {
+            Ok(manager) => manager,
+            Err(err) => {
+                log::debug!("media_session: enumerate {err}");
                 return Vec::new();
             }
         };
@@ -966,12 +976,7 @@ mod win {
     }
 
     async fn current_session() -> Result<GlobalSystemMediaTransportControlsSession, String> {
-        let manager = match GlobalSystemMediaTransportControlsSessionManager::RequestAsync() {
-            Ok(op) => op
-                .await
-                .map_err(|e| format!("media session manager: {e}"))?,
-            Err(e) => return Err(format!("media session manager: {e}")),
-        };
+        let manager = session_manager().await?;
         manager
             .GetCurrentSession()
             .map_err(|_| "no current media session".to_string())
@@ -1039,6 +1044,18 @@ mod win {
     }
 
     pub async fn current_payload() -> MediaSessionPayload {
+        // The first manager request can be slow; keep the short deadline for each song read.
+        match tokio::time::timeout(Duration::from_secs(15), session_manager()).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(err)) => {
+                log::warn!("media_session: {err}");
+                return publish(WinRawSample::absent(unix_now_ms()));
+            }
+            Err(_) => {
+                log::warn!("media_session: manager request deadline exceeded");
+                return publish(WinRawSample::absent(unix_now_ms()));
+            }
+        }
         match tokio::time::timeout(Duration::from_secs(2), read_sample()).await {
             Ok(sample) => publish(sample),
             Err(_) => {
@@ -1053,16 +1070,10 @@ mod win {
     }
 
     async fn read_sample() -> WinRawSample {
-        let manager = match GlobalSystemMediaTransportControlsSessionManager::RequestAsync() {
-            Ok(op) => match op.await {
-                Ok(manager) => manager,
-                Err(err) => {
-                    log::debug!("media_session: RequestAsync: {err}");
-                    return WinRawSample::absent(unix_now_ms());
-                }
-            },
+        let manager = match session_manager().await {
+            Ok(manager) => manager,
             Err(err) => {
-                log::debug!("media_session: RequestAsync (sync): {err}");
+                log::debug!("media_session: {err}");
                 return WinRawSample::absent(unix_now_ms());
             }
         };
