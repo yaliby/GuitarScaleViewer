@@ -206,6 +206,22 @@ input::-webkit-inner-spin-button {
   background: var(--accent);
   box-shadow: 0 0 10px #e8ca8e33;
 }
+.nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-left: 14px;
+  padding-left: 8px;
+  border-left: 1px solid #ffffff0d;
+}
+.nav-group-chevron {
+  margin-left: auto;
+  transition: transform 0.18s ease;
+  transform: rotate(-90deg);
+}
+.nav-group-chevron.open {
+  transform: rotate(0deg);
+}
 .saved-heading {
   display: flex;
   align-items: center;
@@ -432,22 +448,13 @@ input::-webkit-inner-spin-button {
   Immersive shell (Live Jam). The neck is the screen: no topbar, no gutters, no docked nav —
   the window is the instrument and the menu comes back through the hamburger in its heading.
   Doubled class so these survive the width and height queries further down the file.
+  The nav stays docked like on the other screens; only phone widths fold it into the hamburger.
 */
-.studio-shell.shell-immersive .sidebar {
-  width: 248px;
-  transform: translateX(-100%);
-  transition: transform 0.25s ease;
-  background: #141a1f;
-}
-.studio-shell.shell-immersive .sidebar.open {
-  transform: translateX(0);
-}
 .studio-shell.shell-immersive {
   height: 100dvh;
   overflow: hidden;
 }
 .studio-shell.shell-immersive .studio-main {
-  margin-left: 0;
   height: 100dvh;
   min-height: 0;
   overflow: hidden;
@@ -903,6 +910,26 @@ input::-webkit-inner-spin-button {
   animation: note-ripple 0.7s ease-out infinite;
   transform-box: fill-box;
   transform-origin: center;
+}
+/* Root rings breathe between --ring-lo and --ring-hi (Fretboard.tsx BreathingRing). WebKit repaints
+   the whole neck for every opacity change on an SVG child, so the breath moves in six steps (about
+   a dozen repaints a second, 18% CPU) rather than every frame (145%); the eye reads it as smooth. */
+.breathing-ring {
+  opacity: var(--ring-lo, 0.4);
+  animation: ring-breathe 1.2s steps(6, jump-none) infinite alternate;
+}
+@keyframes ring-breathe {
+  from {
+    opacity: var(--ring-lo, 0.4);
+  }
+  to {
+    opacity: var(--ring-hi, 0.8);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .breathing-ring {
+    animation: none;
+  }
 }
 @keyframes note-ripple {
   0% {
@@ -3047,6 +3074,12 @@ html {
 }
 @media (max-width: 800px) {
   .sidebar:not(.open) {
+    visibility: hidden;
+  }
+}
+/* The nav is docked above the phone width, so the in-screen hamburger has nothing to open. */
+@media (min-width: 801px) {
+  .shell-immersive .lab-menu {
     visibility: hidden;
   }
 }

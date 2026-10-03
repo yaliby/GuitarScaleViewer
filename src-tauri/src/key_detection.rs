@@ -1,6 +1,7 @@
 use crate::audio_models::WindowAnalysisResult;
 use crate::key_engine;
 use crate::key_reranker;
+use crate::playalong::lower_priority;
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
@@ -287,6 +288,7 @@ impl SidecarKeyDetector {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         hide_console(&mut command);
+        lower_priority(&mut command);
         let mut child = ManagedChild(
             command
                 .spawn()
@@ -660,6 +662,7 @@ impl KeyDetector for LibKeyFinderDetector {
         cmd.args(&self.launch.args_prefix).arg(&wav_path_arg);
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
         hide_console(&mut cmd);
+        lower_priority(&mut cmd);
         let _temp_wav = TempWav(wav_path.clone());
         let mut child = ManagedChild(cmd.spawn().map_err(|e| {
             format!(

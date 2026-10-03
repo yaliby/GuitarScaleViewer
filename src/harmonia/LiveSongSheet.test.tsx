@@ -131,6 +131,7 @@ const MAP: LyricMap = {
   wordsHeard: 6,
   durationMs: 16_000,
   note: null,
+  ear: "heard",
   lines: [line("hello world again", 4), line("second line here", 9)],
 };
 

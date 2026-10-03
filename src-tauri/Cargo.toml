@@ -31,6 +31,9 @@ windows = { version = "0.59", features = ["Foundation", "Foundation_Collections"
 wasapi = "0.23"
 sysinfo = "0.38"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = { version = "5", default-features = false, features = ["tokio"] }
 libpulse-binding = "2.28"

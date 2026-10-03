@@ -18,6 +18,7 @@ import {
   Compass,
   Dumbbell,
   Expand,
+  GraduationCap,
   Guitar,
   Headphones,
   Library,
@@ -62,6 +63,7 @@ import {
   shouldRevise,
 } from "./services/keyFusion";
 import { readNeckFollow, useNeckFollow } from "./neckFollow";
+import { useKeyAdvice } from "./hooks/useKeyAdvice";
 import { rememberScale } from "./services/songMemory";
 import {
   SCALE_TYPES_ORDERED,
@@ -164,6 +166,9 @@ export default function App() {
   const [session, setSession] = useState<PracticeSession>(() => readSession());
   const [favorites, setFavorites] = useState<Favorite[]>(() => readFavorites());
   const [view, setView] = useState<StudioView>("explore");
+  const [trainingOpen, setTrainingOpen] = useState(true);
+  const inTraining =
+    view === "explore" || view === "practice" || view === "progressions";
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [saveOpen, setSaveOpen] = useState(false);
   const [guideOpen, setGuideOpen] = useState(false);
@@ -184,6 +189,8 @@ export default function App() {
   const capture = useTrackCapture(media);
   const { detectedKey, resetDetection } = useDetectedKey();
   const cloud = useCloudKeyResolution(media, detectedKey, view !== "jam");
+  /* What the scraped chart and the saved copy's chords say about this song: see services/keyAdvice. */
+  const advice = useKeyAdvice(media, capture, cloud.trackIdentity);
   const audio = usePracticeAudio(session.volume);
   const updateSession = useCallback(
     (patch: Partial<PracticeSession>) =>
@@ -386,8 +393,9 @@ export default function App() {
         detected: detectedKey,
         held: neckKey,
         trackIdentity: cloud.trackIdentity,
+        advice,
       }),
-    [cloud.cloudHit, cloud.trackIdentity, detectedKey, neckKey],
+    [advice, cloud.cloudHit, cloud.trackIdentity, detectedKey, neckKey],
   );
   /* The neck follows the song unless the player has switched Apply off, or set its gate above
      what the pipeline can currently claim. Nothing to arm, nothing to press. Switching Apply back
@@ -970,7 +978,7 @@ export default function App() {
       }
     />
   );
-  /* Live Jam is the whole window: the neck needs it, so the nav folds into the hamburger. */
+  /* Live Jam and the library fill the window height with no topbar; the nav stays docked. */
   const immersive = view === "jam" || view === "library";
 
   return (
@@ -1012,32 +1020,51 @@ export default function App() {
               <i className="nav-dot" />
             </button>
             <button
-              className={`nav-item ${view === "explore" ? "active" : ""}`}
-              aria-current={view === "explore" ? "page" : undefined}
-              onClick={() => changeView("explore")}
+              className={`nav-item nav-group-toggle ${
+                inTraining && !trainingOpen ? "active" : ""
+              }`}
+              aria-expanded={trainingOpen}
+              aria-controls="nav-training"
+              onClick={() => setTrainingOpen((open) => !open)}
             >
-              <Compass size={17} />
-              <span>Explore</span>
-              <i className="nav-dot" />
+              <GraduationCap size={17} />
+              <span>Training</span>
+              <ChevronDown
+                size={14}
+                className={`nav-group-chevron ${trainingOpen ? "open" : ""}`}
+              />
             </button>
-            <button
-              className={`nav-item ${view === "practice" ? "active" : ""}`}
-              aria-current={view === "practice" ? "page" : undefined}
-              onClick={() => changeView("practice")}
-            >
-              <Dumbbell size={17} />
-              <span>Practice</span>
-              <i className="nav-dot" />
-            </button>
-            <button
-              className={`nav-item ${view === "progressions" ? "active" : ""}`}
-              aria-current={view === "progressions" ? "page" : undefined}
-              onClick={() => changeView("progressions")}
-            >
-              <ListMusic size={17} />
-              <span>Progressions</span>
-              <i className="nav-dot" />
-            </button>
+            {trainingOpen && (
+              <div className="nav-group" id="nav-training">
+                <button
+                  className={`nav-item ${view === "explore" ? "active" : ""}`}
+                  aria-current={view === "explore" ? "page" : undefined}
+                  onClick={() => changeView("explore")}
+                >
+                  <Compass size={17} />
+                  <span>Explore</span>
+                  <i className="nav-dot" />
+                </button>
+                <button
+                  className={`nav-item ${view === "practice" ? "active" : ""}`}
+                  aria-current={view === "practice" ? "page" : undefined}
+                  onClick={() => changeView("practice")}
+                >
+                  <Dumbbell size={17} />
+                  <span>Practice</span>
+                  <i className="nav-dot" />
+                </button>
+                <button
+                  className={`nav-item ${view === "progressions" ? "active" : ""}`}
+                  aria-current={view === "progressions" ? "page" : undefined}
+                  onClick={() => changeView("progressions")}
+                >
+                  <ListMusic size={17} />
+                  <span>Progressions</span>
+                  <i className="nav-dot" />
+                </button>
+              </div>
+            )}
           </nav>
           <div className="saved-heading">
             <span className="nav-section-label">Saved setups</span>

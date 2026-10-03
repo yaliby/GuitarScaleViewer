@@ -15,7 +15,8 @@ import {
   resolutionLed,
   resolutionStateLabel,
 } from './statusLabels';
-import { certaintyLabel, type KeyCertainty } from './statusLabels';
+import { adviceNoteLabel, certaintyLabel, type KeyCertainty } from './statusLabels';
+import type { AdviceSource } from '../services/keyAdvice';
 import { GearToggle, Led, litSegments, METER_SEGMENTS, SignalMeter } from './gear';
 import type { TrackCaptureApi } from '../hooks/useTrackCapture';
 import { TrackCaptureBar } from '../components/TrackCaptureBar';
@@ -34,6 +35,10 @@ export type SourceStripProps = {
   tonicSettled: boolean;
   /** The other name for the same seven notes, e.g. "E minor" while the neck reads G major. */
   relativeAlternative: string | null;
+  /** The chord legs behind the key — the chart, the song sheet — when the chords put it there. */
+  advisedBy?: readonly AdviceSource[] | null;
+  /** What the engine hears instead, while the chords still hold the neck against it. */
+  contestedBy?: string | null;
   /** Is the neck allowed to take the pipeline's key? On by default; off freezes what is drawn. */
   applyDetected: boolean;
   onToggleApply: () => void;
@@ -76,6 +81,8 @@ export function SourceStrip({
   notesSettled,
   tonicSettled,
   relativeAlternative,
+  advisedBy = null,
+  contestedBy = null,
   applyDetected,
   onToggleApply,
   applyThreshold,
@@ -172,7 +179,7 @@ export function SourceStrip({
       <div className="lab-meter">
         <div className="lab-meter-head">
           <strong>{keyName ?? 'Listening…'}</strong>
-          <span className="tele">{certaintyLabel(certainty)}</span>
+          <span className="tele">{certaintyLabel(certainty, advisedBy)}</span>
         </div>
         <SignalMeter
           value={meterValue}
@@ -185,7 +192,9 @@ export function SourceStrip({
             legs are still arguing about which note is home. Measured on the corpus, that is the
             engine's most common miss by far — and the one a player can ignore. */}
         <p className="lab-meter-note">
-          {!notesSettled
+          {certainty === 'advised'
+            ? adviceNoteLabel({ advisedBy, contestedBy })
+            : !notesSettled
             ? 'Scale tones still settling'
             : tonicSettled
               ? 'Scale tones confirmed'

@@ -31,8 +31,8 @@ describe('practice notation', () => {
 
   it('distinguishes unknown harmony from no chord in all modes', () => {
     for (const mode of ['advanced', 'simple', 'roman', 'nashville'] as const) {
-      expect(displayChord({ kind: 'none' }, mode, 0)).toBe('N');
-      expect(displayChord({ kind: 'unknown' }, mode, 0)).toBe('X');
+      expect(displayChord({ kind: 'none' }, mode, 0)).toBe('N.C.');
+      expect(displayChord({ kind: 'unknown' }, mode, 0)).toBe('?');
     }
   });
 });

@@ -140,26 +140,35 @@ if [[ -n "$tauri_native" && ! -d "$root/node_modules/@tauri-apps/$tauri_native" 
   npm install --no-save "@tauri-apps/$tauri_native@$tauri_version"
 fi
 
-# ChordSync (Play Along, lyrics, capture) needs its own venv with requirements.txt. The sidecar's
-# `.venv` is the Windows one on this shared drive, so Linux keeps `.venv-linux` beside it -- the
-# Linux equivalent of the venv dev.ps1 requires. Reinstalled whenever requirements.txt changes.
+# ChordSync (Play Along, lyrics, capture) needs its own venv with requirements.txt, plus
+# requirements-lyrics.txt (Whisper, Demucs, the CTC aligner) to time lyric words by ear: without
+# them every word sits on LRCLIB's line clock and the song sheet runs ahead of the singer. The
+# sidecar's `.venv` is the Windows one on this shared drive, and PyTorch takes the better part of an
+# hour to land on NTFS, so the Linux venv lives on the native filesystem, like the chord analysis
+# one. Reinstalled whenever either requirements file changes.
 chordsync_dir="$root/src-tauri/sidecars/chordsync"
-chordsync_venv="$chordsync_dir/.venv-linux"
+chordsync_venv="${XDG_DATA_HOME:-$HOME/.local/share}/fretboard-studio/chordsync-venv"
 chordsync_stamp="$chordsync_venv/.requirements-installed"
 setup_chordsync_venv() {
   local uv_bin
   uv_bin="$(command -v uv || true)"
   if [[ -z "$uv_bin" && -x "$HOME/.local/bin/uv" ]]; then uv_bin="$HOME/.local/bin/uv"; fi
+  mkdir -p "$(dirname "$chordsync_venv")"
   if [[ -n "$uv_bin" ]]; then
     if [[ ! -x "$chordsync_venv/bin/python" ]]; then
       "$uv_bin" venv --python python3 "$chordsync_venv" || return 1
     fi
-    "$uv_bin" pip install --python "$chordsync_venv/bin/python" -r "$chordsync_dir/requirements.txt"
+    # torch for Demucs and the aligner: uv picks the build that matches the machine (CUDA on an
+    # NVIDIA GPU, CPU elsewhere), so the GPU is used when there is one. Whisper runs on CTranslate2.
+    "$uv_bin" pip install --python "$chordsync_venv/bin/python" --torch-backend=auto \
+      -r "$chordsync_dir/requirements.txt" -r "$chordsync_dir/requirements-lyrics.txt"
   elif python3 -c 'import ensurepip' 2>/dev/null; then
     if [[ ! -x "$chordsync_venv/bin/python" ]]; then
       python3 -m venv "$chordsync_venv" || return 1
     fi
-    "$chordsync_venv/bin/python" -m pip install -r "$chordsync_dir/requirements.txt"
+    "$chordsync_venv/bin/python" -m pip install --index-url https://download.pytorch.org/whl/cpu torch || return 1
+    "$chordsync_venv/bin/python" -m pip install -r "$chordsync_dir/requirements.txt" \
+      -r "$chordsync_dir/requirements-lyrics.txt"
   else
     echo "dev.sh: cannot create the ChordSync venv: install uv (https://docs.astral.sh/uv/)" >&2
     echo "dev.sh:   or python3-venv (sudo apt install python3-venv)." >&2
@@ -168,7 +177,8 @@ setup_chordsync_venv() {
 }
 if [[ -z "${CHORDSYNC_PYTHON:-}" ]]; then
   if [[ ! -x "$chordsync_venv/bin/python" || ! -f "$chordsync_stamp" \
-        || "$chordsync_dir/requirements.txt" -nt "$chordsync_stamp" ]]; then
+        || "$chordsync_dir/requirements.txt" -nt "$chordsync_stamp" \
+        || "$chordsync_dir/requirements-lyrics.txt" -nt "$chordsync_stamp" ]]; then
     echo "dev.sh: setting up the ChordSync venv at $chordsync_venv ..."
     if setup_chordsync_venv; then
       touch "$chordsync_stamp"

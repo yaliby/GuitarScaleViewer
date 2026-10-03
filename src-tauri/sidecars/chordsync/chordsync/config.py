@@ -97,6 +97,8 @@ class AppConfig(BaseSettings):
     live_lyrics_device: str = "auto"  # auto | cuda | cpu
     live_lyrics_compute_type: str = "auto"  # auto: float16 on the GPU, int8 on the CPU
     live_lyrics_beam_size: int = 5
+    # CPU threads for Whisper when it runs on the CPU; 0 lets CTranslate2 choose.
+    live_lyrics_cpu_threads: int = 0
     # Seconds of new audio before the next Whisper pass over the buffer.
     live_lyrics_step_s: float = 1.0
     # Unload the Whisper models after this long without a song to transcribe.

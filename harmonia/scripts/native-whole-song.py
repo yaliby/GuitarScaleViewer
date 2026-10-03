@@ -11,6 +11,12 @@ from pathlib import Path
 
 for name in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "NUMBA_NUM_THREADS"):
     os.environ[name] = "2"
+try:
+    # A background analysis must never compete with the desktop. Absolute, not os.nice(10): the app's
+    # children start at -6 under a COSMIC / Pop!_OS scheduler, and -6 + 10 would still outrank apps.
+    os.setpriority(os.PRIO_PROCESS, 0, max(10, os.getpriority(os.PRIO_PROCESS, 0)))
+except (OSError, AttributeError):  # no setpriority on Windows
+    pass
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 os.environ["TORCH_FORCE_WEIGHTS_ONLY_LOAD"] = "1"
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ml"))

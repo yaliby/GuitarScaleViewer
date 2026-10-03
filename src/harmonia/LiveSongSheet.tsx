@@ -9,6 +9,7 @@ import { analyzedFingerprint, getAnalyzedRevision, subscribeAnalyzed } from "./a
 import { enqueueChordAnalysis } from "./backgroundChords";
 import { getChordJobs, subscribeChordJobs } from "./chordJobs";
 import { getHarmoniaSession } from "./composition";
+import { latestFor } from "./recordingAnalysis";
 import { SongSheet, sheetRhythm } from "./SongSheet";
 import { useLyricMap } from "./useLyricMap";
 
@@ -34,19 +35,6 @@ function subscribeNone() {
 
 function noLibrary() {
   return EMPTY_LIBRARY;
-}
-
-/** The newest analysis of one recording: a re-analysis supersedes, a hand correction is saved in place. */
-function latestFor(library: readonly SavedTrack[], fingerprint: string | null): SavedTrack | null {
-  if (!fingerprint) return null;
-  let best: SavedTrack | null = null;
-  for (const record of library) {
-    if (record.track.fingerprint !== fingerprint) continue;
-    if (!best || Date.parse(record.analysis.createdAt) > Date.parse(best.analysis.createdAt)) {
-      best = record;
-    }
-  }
-  return best;
 }
 
 function Status({ children }: { children: ReactNode }) {

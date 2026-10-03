@@ -74,6 +74,25 @@ pub(crate) fn hide_console(
     }
 }
 
+/// Run a helper process behind the desktop: nice 10, whatever priority the app was boosted to (a
+/// COSMIC / Pop!_OS scheduler gives the focused app and its children -6, which put every analysis
+/// burst ahead of the compositor). Windows keeps its own scheduler's say.
+pub(crate) fn lower_priority(
+    #[cfg_attr(not(unix), allow(unused_variables))] command: &mut Command,
+) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: setpriority is async-signal-safe and touches nothing but the child's own niceness.
+        unsafe {
+            command.pre_exec(|| {
+                libc::setpriority(libc::PRIO_PROCESS, 0, 10);
+                Ok(())
+            });
+        }
+    }
+}
+
 fn stdout_lines(stdout: ChildStdout) -> mpsc::Receiver<Result<String, String>> {
     let (sender, receiver) = mpsc::sync_channel(4);
     std::thread::spawn(move || {
@@ -113,7 +132,8 @@ fn configured_chordsync_python() -> Option<String> {
 /// Program plus leading launcher args (`py -3` on Windows).
 ///
 /// `CHORDSYNC_PYTHON` is the interpreter `dev.ps1` selects. Otherwise the sidecar
-/// venv for this OS (Windows `.venv/Scripts/python.exe`, Unix `.venv/bin/python` or
+/// venv for this OS (Windows `.venv/Scripts/python.exe`; Unix dev.sh's
+/// `~/.local/share/fretboard-studio/chordsync-venv`, else `.venv/bin/python` or
 /// `.venv-linux/bin/python`) is used. The key
 /// analyzer environment is not a fallback: it never installs ChordSync's
 /// `requirements.txt`, so Play Along dies with `No module named 'rapidfuzz'`.
@@ -205,8 +225,25 @@ fn venv_candidates(dir: &Path) -> Vec<PathBuf> {
     }
 }
 
+/// dev.sh's Linux venv, on the native filesystem: PyTorch (lyric timing) is too slow to install
+/// on the shared NTFS drive, so it is not beside the sidecar.
+fn native_venv_python() -> Option<PathBuf> {
+    if cfg!(windows) {
+        return None;
+    }
+    let data = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local").join("share")))?;
+    Some(data.join("fretboard-studio").join("chordsync-venv").join("bin").join("python"))
+        .filter(|path| path.is_file())
+}
+
 pub(crate) fn venv_python(script: &Path) -> Option<PathBuf> {
     let root = script.parent()?;
+    if let Some(found) = native_venv_python() {
+        return Some(found);
+    }
     if let Some(found) = venv_candidates(root).into_iter().find(|p| p.is_file()) {
         return Some(found);
     }
@@ -237,6 +274,7 @@ fn spawn_worker() -> Result<SidecarWorker, String> {
         command.current_dir(dir);
     }
     hide_console(&mut command);
+    lower_priority(&mut command);
     let mut child = command
         .spawn()
         .map_err(|error| format!("spawn chordsync sidecar ({program}): {error}"))?;

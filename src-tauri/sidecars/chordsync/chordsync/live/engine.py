@@ -1,8 +1,7 @@
-"""Live listening on Windows: speaker loopback → Whisper → heard lines on the track clock.
+"""Live listening: speaker capture → Whisper → heard lines on the track clock.
 
-Linux gets this engine from the ChordSync companion repo (PulseAudio monitor). The sidecar only
-falls back to this vendored package where that repo is absent, and this engine refuses to start
-anywhere but Windows, so Linux keeps exactly what it has.
+Windows captures the speakers with WASAPI loopback, Linux with the PulseAudio / PipeWire monitor
+(``parec``). A ChordSync checkout next to this repo supplies its own engine and wins over this one.
 
 ``dev_lanes.LyricSources`` drives it: ``begin_track`` buffers from the first moment of a song,
 ``activate`` starts transcribing that buffer, ``set_clock`` receives the player position on every
@@ -20,7 +19,7 @@ from typing import Any, Callable
 
 import numpy as np
 
-from chordsync.live.audio_capture import SAMPLE_RATE, LoopbackCapture
+from chordsync.live.audio_capture import SAMPLE_RATE, default_capture
 from chordsync.live.streaming import HeardWord, LocalAgreement
 from chordsync.live.transcript import LiveLine, TrackClock, TrackWord, group_lines
 
@@ -152,12 +151,10 @@ class LiveLyricsEngine:
         capture_factory: Callable[[], Any] | None = None,
         asr: Any = None,
     ) -> None:
-        if sys.platform != "win32" and capture_factory is None:
-            raise RuntimeError("This live listening engine is Windows-only; Linux uses the ChordSync repo's engine")
         self._cfg = cfg
         self._on_update = on_update
         self._on_state = on_state
-        self._capture_factory = capture_factory or LoopbackCapture
+        self._capture_factory = capture_factory or default_capture
         if asr is None:
             from chordsync.live.whisper_asr import WhisperAsr
 

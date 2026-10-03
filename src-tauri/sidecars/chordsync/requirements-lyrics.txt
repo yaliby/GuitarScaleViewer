@@ -1,0 +1,11 @@
+# Mapping a saved song's lyrics word by word (lyric_map.py), Linux. Windows gets the same from
+# requirements-windows-live.txt (+ requirements-windows-cuda.txt).
+faster-whisper==1.2.1
+# faster-whisper decodes audio with PyAV; av 17+ dropped an argument it passes.
+av>=13,<17
+# Vocal separation (vocal_stem.py) and CTC forced alignment (forced_align.py); torch comes with demucs.
+demucs==4.0.1
+transformers>=4.40
+# CUDA 12 runtime for CTranslate2 (whisper_asr.py loads these), harmless on a CPU-only machine.
+nvidia-cublas-cu12
+nvidia-cudnn-cu12

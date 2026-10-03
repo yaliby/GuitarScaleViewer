@@ -24,7 +24,13 @@ export type ChartSection = {
 export type ScrapedChart = {
   source: string;
   sourceUrl: string;
+  /** The key the site declares, when it declares one. Ultimate Guitar's is the key as it sounds. */
   key: string | null;
+  /**
+   * The fret the site says the capo goes on, when it says. The chords are written as the shapes, so
+   * the song sounds this many semitones above them. Absent from charts scraped before it was read.
+   */
+  capo?: number | null;
   title: string | null;
   artist: string | null;
   notes: string[];

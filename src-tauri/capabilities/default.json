@@ -22,6 +22,7 @@
     "allow-lookup-track-capture",
     "allow-list-track-captures",
     "allow-map-track-lyrics",
+    "allow-make-track-stems",
     "allow-recognition-available",
     "allow-recognition-run",
     "allow-recognition-cancel",

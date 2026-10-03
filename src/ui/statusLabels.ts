@@ -1,4 +1,5 @@
 import type { DetectedKeyAbState } from '../hooks/useDetectedKey';
+import type { AdviceSource } from '../services/keyAdvice';
 import type { KeyCertainty } from '../services/keyFusion';
 import { litSegments, METER_SEGMENTS, type LedTone } from './gear';
 
@@ -47,18 +48,47 @@ export function applyGateLabel({
  * being asked to do. "Confirmed" says two independent legs agree; "estimated" says one leg is
  * guessing; neither asks for a reply.
  */
-export function certaintyLabel(certainty: KeyCertainty): string {
+export function certaintyLabel(
+  certainty: KeyCertainty,
+  advisedBy: readonly AdviceSource[] | null = null,
+): string {
   const labels: Record<KeyCertainty, string> = {
     verified: 'verified',
+    confirmed: 'confirmed',
     lone: 'estimated',
     // Not "unsure": the notes are settled and only the root is open. Wording it as doubt would
     // send the player looking for a problem with a diagram that is already correct.
     tonic_open: 'notes sure, root open',
+    advised: `from the ${adviceName(advisedBy)}`,
     hedged: 'unsure',
     held: 'holding',
     none: 'listening',
   };
   return labels[certainty] ?? 'listening';
+}
+
+/** The chord leg that spoke, in the words the Live Jam bay uses for it. */
+export function adviceName(advisedBy: readonly AdviceSource[] | null | undefined): string {
+  const first = advisedBy?.[0];
+  return first === 'recording' ? 'song sheet' : first === 'chart' ? 'chart' : 'chords';
+}
+
+/**
+ * The line under the meter while the chords hold the neck: where the key came from, and — when the
+ * engine hears something else — what, so the player can see the neck is not ignoring the audio, only
+ * waiting until the audio is surer than the chart.
+ */
+export function adviceNoteLabel({
+  advisedBy,
+  contestedBy,
+}: {
+  advisedBy?: readonly AdviceSource[] | null;
+  contestedBy?: string | null;
+}): string {
+  const name = adviceName(advisedBy);
+  return contestedBy
+    ? `The audio hears ${contestedBy} — keeping the ${name}'s key until it is surer`
+    : `Read from the ${name} — listening to confirm`;
 }
 
 export function mediaPlaybackDisplayLabel(status: string): string {
@@ -347,15 +377,26 @@ export function deckStatusLabel({
 export function keySourceLabel({
   hasCloudHit,
   showingProposedKey,
+  certainty = null,
+  advisedBy = null,
 }: {
   hasCloudHit: boolean;
   showingProposedKey: boolean;
+  /** The pipeline's certainty, so a key the chords and the audio agree on reads as such. */
+  certainty?: KeyCertainty | null;
+  advisedBy?: readonly AdviceSource[] | null;
 }): string {
   if (!showingProposedKey) {
     return 'Manual';
   }
   if (hasCloudHit) {
     return 'Verified';
+  }
+  if (certainty === 'confirmed') {
+    return 'Confirmed';
+  }
+  if (certainty === 'advised') {
+    return adviceName(advisedBy) === 'song sheet' ? 'Song sheet' : 'Chart';
   }
   return 'Detected';
 }

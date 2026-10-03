@@ -20,6 +20,12 @@ export type TrackCaptureState = {
   progressPct: number | null;
   stage: string | null;
   track: CapturedTrack | null;
+  /**
+   * The now-playing session `track` was found or saved for (`captureMediaKey`). The lookup for a new
+   * song is asynchronous, so for a moment after a track change `track` is still the last song's copy;
+   * anything that reads the copy as *this* song's — the key advice — checks this first.
+   */
+  trackFor?: string | null;
   error: string | null;
   query: string;
   autoEnabled: boolean;
@@ -31,6 +37,7 @@ const INITIAL: TrackCaptureState = {
   progressPct: null,
   stage: null,
   track: null,
+  trackFor: null,
   error: null,
   query: '',
   autoEnabled: true,
@@ -65,7 +72,7 @@ function publish(patch: Partial<TrackCaptureState>): void {
   subscribers.forEach((fn) => fn(snapshot));
 }
 
-function mediaKey(media: MediaSessionUiState): string {
+function mediaKey(media: Pick<MediaSessionUiState, 'trackUrl' | 'sourceApp' | 'title' | 'artist' | 'album'>): string {
   return [
     media.trackUrl || '',
     media.sourceApp || '',
@@ -73,6 +80,11 @@ function mediaKey(media: MediaSessionUiState): string {
     media.artist || '',
     media.album || '',
   ].join('\0');
+}
+
+/** Which now-playing session a saved copy belongs to; compare with `TrackCaptureState.trackFor`. */
+export function captureMediaKey(media: Pick<MediaSessionUiState, 'trackUrl' | 'sourceApp' | 'title' | 'artist' | 'album'>): string {
+  return mediaKey(media);
 }
 
 function queryFromMedia(media: MediaSessionUiState, pasted: string): CaptureQuery {
@@ -145,6 +157,13 @@ async function runCapture(query: CaptureQuery, reason: string): Promise<void> {
         progressPct: 100,
         stage: 'done',
         track: result.track,
+        trackFor: mediaKey({
+          trackUrl: query.trackUrl ?? null,
+          sourceApp: query.sourceApp ?? null,
+          title: query.title ?? null,
+          artist: query.artist ?? null,
+          album: query.album ?? null,
+        }),
         error: null,
       });
       trace(
@@ -208,7 +227,7 @@ async function lookupFor(media: MediaSessionUiState, pasted: string): Promise<vo
     lastLookupKey = key;
     if (snapshot.track) {
       attachTrack(null);
-      publish({ status: 'idle', track: null, error: null, progressPct: null });
+      publish({ status: 'idle', track: null, trackFor: null, error: null, progressPct: null });
     }
     return;
   }
@@ -221,6 +240,7 @@ async function lookupFor(media: MediaSessionUiState, pasted: string): Promise<vo
     publish({
       status: 'ready',
       track: result.track,
+      trackFor: mediaKey(media),
       error: null,
       progressPct: 100,
       stage: 'cache',
@@ -235,6 +255,7 @@ async function lookupFor(media: MediaSessionUiState, pasted: string): Promise<vo
   publish({
     status: result.status === 'error' ? 'error' : 'idle',
     track: null,
+    trackFor: null,
     error: result.status === 'error' ? result.message || result.reason : null,
     progressPct: null,
     stage: null,

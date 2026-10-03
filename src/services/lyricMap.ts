@@ -37,6 +37,11 @@ export type LyricMap = {
   wordsHeard: number;
   durationMs: number | null;
   note: string | null;
+  /**
+   * Whether Whisper listened: "missing" (not installed; the map is made again once it is) or
+   * "failed" leave every word on the lyric site's line clock. Null in maps from before it was kept.
+   */
+  ear: "heard" | "missing" | "failed" | null;
   lines: LyricLine[];
 };
 
@@ -95,6 +100,7 @@ export function asLyricMap(value: unknown): LyricMap | null {
     wordsHeard: num(row.wordsHeard) ?? 0,
     durationMs: num(row.durationMs),
     note: str(row.note),
+    ear: row.ear === "heard" || row.ear === "missing" || row.ear === "failed" ? row.ear : null,
     lines,
   };
 }
@@ -207,12 +213,16 @@ export function lyricStageLabel(stage: string | null | undefined): string {
       return "Finding the lyrics";
     case "decode":
       return "Reading the song";
+    case "separate":
+      return "Separating the vocals";
     case "load":
       return "Loading Whisper";
     case "listen":
       return "Listening to the vocals";
     case "align":
       return "Lining up every word";
+    case "time":
+      return "Timing every word on the voice";
     default:
       return "Timing the lyrics";
   }

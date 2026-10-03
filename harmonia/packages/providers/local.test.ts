@@ -174,3 +174,149 @@ it('copies a valid loop so caller mutations cannot corrupt playback', () => {
   expect(provider.position).toBe(3);
   provider.release();
 });
+
+// A real element's load() pauses, zeroes the clock and drops playbackRate to defaultPlaybackRate.
+function restartsOnLoad(media: TestAudio & { defaultPlaybackRate?: number }) {
+  media.load = () => {
+    media.currentTime = 0;
+    media.paused = true;
+    media.playbackRate = media.defaultPlaybackRate ?? 1;
+  };
+}
+
+const stems = { instrumental: 'blob:band', vocals: 'blob:voice' };
+
+it('keeps the place, the play state and the speed when the singer slider swaps the file', () => {
+  const provider = new LocalFileProvider();
+  provider.load(new Blob(['audio']));
+  const media = provider.audio as unknown as TestAudio;
+  restartsOnLoad(media);
+  provider.setSpeed(0.75);
+  provider.setStems(stems);
+  media.currentTime = 2.5;
+  media.paused = false;
+  provider.setSinger(0.5);
+  expect(media.src).toBe(stems.instrumental);
+  expect(provider.position).toBe(2.5);
+  expect(provider.playing).toBe(true);
+  expect(provider.duration).toBe(4);
+  media.dispatchEvent(new Event('loadedmetadata'));
+  expect(media.currentTime).toBe(2.5);
+  expect(media.paused).toBe(false);
+  expect(media.playbackRate).toBe(0.75);
+  provider.release();
+});
+
+it('does not lose the place when the slider crosses back before the swapped file has loaded', () => {
+  const provider = new LocalFileProvider();
+  provider.load(new Blob(['audio']));
+  const media = provider.audio as unknown as TestAudio;
+  restartsOnLoad(media);
+  provider.setStems(stems);
+  media.currentTime = 3;
+  media.paused = false;
+  provider.setSinger(0.5);
+  provider.setSinger(1);
+  media.dispatchEvent(new Event('loadedmetadata'));
+  expect(media.currentTime).toBe(3);
+  expect(media.paused).toBe(false);
+  provider.release();
+});
+
+it('follows a seek and a pause made while the swapped file is still loading', () => {
+  const provider = new LocalFileProvider();
+  provider.load(new Blob(['audio']));
+  const media = provider.audio as unknown as TestAudio;
+  restartsOnLoad(media);
+  provider.setStems(stems);
+  media.currentTime = 1;
+  media.paused = false;
+  provider.setSinger(0.5);
+  provider.seek(3);
+  provider.pause();
+  expect(provider.position).toBe(3);
+  media.dispatchEvent(new Event('loadedmetadata'));
+  expect(media.currentTime).toBe(3);
+  expect(media.paused).toBe(true);
+  provider.release();
+});
+
+const webkit = 'Mozilla/5.0 (X11; Ubuntu; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/60.5 Safari/605.1.15';
+
+function stubFileReader(read: string) {
+  vi.stubGlobal(
+    'FileReader',
+    class {
+      result: string | null = null;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      error = null;
+      readAsDataURL() {
+        queueMicrotask(() => {
+          this.result = read;
+          this.onload?.();
+        });
+      }
+    },
+  );
+}
+
+it('gives the element a data: URL on WebKit, whose blob: URLs play an MP3 from the wrong place', async () => {
+  vi.stubGlobal('navigator', { userAgent: webkit });
+  stubFileReader('data:application/octet-stream;base64,QUJD');
+  const provider = new LocalFileProvider();
+  provider.load(new Blob(['abc'], { type: 'audio/mpeg' }));
+  const media = provider.audio as unknown as TestAudio;
+  expect(provider.available).toBe(true);
+  expect(media.src).toBe('');
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(media.src).toBe('data:audio/mpeg;base64,QUJD');
+  provider.release();
+});
+
+it('holds a play pressed while the data: URL is still being made, then plays', async () => {
+  vi.stubGlobal('navigator', { userAgent: webkit });
+  stubFileReader('data:audio/mpeg;base64,QUJD');
+  const provider = new LocalFileProvider();
+  provider.load(new Blob(['abc'], { type: 'audio/mpeg' }));
+  const media = provider.audio as unknown as TestAudio;
+  await provider.play();
+  expect(media.src).toBe('data:audio/mpeg;base64,QUJD');
+  expect(media.paused).toBe(false);
+  provider.release();
+});
+
+it('applies the singer once the original is ready when the stems arrive first', async () => {
+  vi.stubGlobal('navigator', { userAgent: webkit });
+  stubFileReader('data:audio/mpeg;base64,QUJD');
+  const provider = new LocalFileProvider();
+  provider.load(new Blob(['abc'], { type: 'audio/mpeg' }));
+  const media = provider.audio as unknown as TestAudio;
+  provider.setStems(stems);
+  provider.setSinger(0.5);
+  expect(media.src).toBe('');
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(media.src).toBe(stems.instrumental);
+  provider.release();
+});
+
+it('a play with nothing readable rejects instead of waiting for ever', async () => {
+  vi.stubGlobal('navigator', { userAgent: webkit });
+  vi.stubGlobal(
+    'FileReader',
+    class {
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      error = null;
+      readAsDataURL() {
+        queueMicrotask(() => this.onerror?.());
+      }
+    },
+  );
+  const provider = new LocalFileProvider();
+  provider.load(new Blob(['abc']));
+  await expect(provider.play()).rejects.toThrow('could not be read');
+  provider.release();
+});

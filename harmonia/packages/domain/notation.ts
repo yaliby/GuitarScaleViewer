@@ -10,6 +10,9 @@ const DEGREES = ['1', 'b2', '2', 'b3', '3', '4', '#4', '5', 'b6', '6', 'b7', '7'
 const ROMAN = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII'];
 
 export function displayChord(chord: Chord, mode: ChordDisplayMode, tonic: number | null): string {
+  // formatChord's N and X are the stored symbols; on screen a bare "N" reads as a note name.
+  if (chord.kind === 'none') return 'N.C.';
+  if (chord.kind === 'unknown') return '?';
   if (chord.kind !== 'chord' || mode === 'advanced') return formatChord(chord);
   if (mode === 'simple') {
     return formatChord({

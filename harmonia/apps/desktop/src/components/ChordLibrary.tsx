@@ -1,8 +1,34 @@
 // @ts-nocheck
-import { memo, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import type { buildPracticeArrangement } from '../../../../packages/domain/practice-arrangement';
 import { GuitarDiagram, PianoDiagram } from './PracticeDiagrams';
 import { timeLabel } from './Timeline';
+
+/** Cards shown before "Show all": the chords that fill most of the song. */
+const LIBRARY_PREVIEW = 24;
+
+/**
+ * The entries to show first: the LIBRARY_PREVIEW chords held longest, kept in order of first
+ * appearance. A recognizer's flicker can name hundreds of chords heard for a tenth of a second.
+ */
+export function mainEntries<T extends { totalDuration: number }>(entries: readonly T[]): T[] {
+  if (entries.length <= LIBRARY_PREVIEW) return [...entries];
+  const kept = new Set(
+    [...entries].sort((a, b) => b.totalDuration - a.totalDuration).slice(0, LIBRARY_PREVIEW),
+  );
+  return entries.filter((entry) => kept.has(entry));
+}
+
+/** One chip per time shown: several slivers inside one second all read "0:01". */
+function distinctTimes<T extends { start: number }>(occurrences: readonly T[]): T[] {
+  const seen = new Set<string>();
+  return occurrences.filter((occurrence) => {
+    const label = timeLabel(occurrence.start);
+    if (seen.has(label)) return false;
+    seen.add(label);
+    return true;
+  });
+}
 
 // No playback time prop: aggregation and voicing selection only depend on the snapshot.
 export const ChordLibrary = memo(function ChordLibrary({
@@ -21,7 +47,10 @@ export const ChordLibrary = memo(function ChordLibrary({
   onCapoChange(capo: number | 'recommended'): void;
 }) {
   const [instrument, setInstrument] = useState<'guitar' | 'piano' | 'both'>('both');
+  const [showAll, setShowAll] = useState(false);
   const { entries } = arrangement;
+  const main = useMemo(() => mainEntries(entries), [entries]);
+  const shown = showAll ? entries : main;
   return (
     <section className="chord-library" aria-label="Chord Library">
       <div className="practice-heading">
@@ -29,8 +58,10 @@ export const ChordLibrary = memo(function ChordLibrary({
           <span className="eyebrow">LEARN THE SONG</span>
           <h2>Chord Library</h2>
           <p>
-            {entries.length} unique {entries.length === 1 ? 'chord' : 'chords'} · in order of first
-            appearance
+            {shown.length < entries.length
+              ? `The ${shown.length} chords held longest, of ${entries.length} heard`
+              : `${entries.length} unique ${entries.length === 1 ? 'chord' : 'chords'}`}{' '}
+            · in order of first appearance
           </p>
         </div>
         <div className="instrument-tabs" role="group" aria-label="Library instrument">
@@ -116,7 +147,7 @@ export const ChordLibrary = memo(function ChordLibrary({
       </p>
       {!entries.length && <p>No playable chords in this timeline yet.</p>}
       <div className={`practice-chord-grid view-${instrument}`}>
-        {entries.map((entry) => (
+        {shown.map((entry) => (
           <article
             className="practice-chord-card"
             data-testid="practice-chord-card"
@@ -183,7 +214,7 @@ export const ChordLibrary = memo(function ChordLibrary({
               role="group"
               aria-label={`${entry.label} occurrences`}
             >
-              {entry.occurrences.map((occurrence, i) => (
+              {distinctTimes(entry.occurrences).map((occurrence, i) => (
                 <button
                   key={occurrence.segmentId}
                   data-start={occurrence.start}
@@ -197,6 +228,13 @@ export const ChordLibrary = memo(function ChordLibrary({
           </article>
         ))}
       </div>
+      {main.length < entries.length && (
+        <button type="button" className="text-button library-more" onClick={() => setShowAll((all) => !all)}>
+          {showAll
+            ? `Show the ${main.length} main chords`
+            : `Show all ${entries.length} chords (${entries.length - main.length} brief ones)`}
+        </button>
+      )}
     </section>
   );
 });

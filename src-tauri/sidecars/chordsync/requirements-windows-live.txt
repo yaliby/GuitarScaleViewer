@@ -2,3 +2,8 @@
 # Linux gets its engine and dependencies from the ChordSync repo. Verified on Windows 10, Python 3.12.
 faster-whisper==1.2.1
 soundcard==0.4.6
+# Lyric mapping: vocal separation (vocal_stem.py) and CTC forced alignment (forced_align.py).
+# Optional: without them the mix is used and Whisper's own word times stand.
+av>=13,<17
+demucs==4.0.1
+transformers>=4.40

@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useState } from 'react';
+import { memo, useEffect, useMemo, useState, type CSSProperties, type SVGProps } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   buildScaleNotes,
@@ -26,6 +26,37 @@ import {
   type MarkerToken,
   type RenderMarker,
 } from './geometry';
+
+/**
+ * A ring that breathes between two opacities, in CSS. It was a framer-motion loop that rewrote the
+ * opacity attribute of every root ring about fifty times a second, forever, and WebKit repainted
+ * the whole filter-heavy neck for each write (130% CPU on Live Jam, paused or not).
+ */
+function BreathingRing({
+  lo,
+  hi,
+  seconds,
+  still = false,
+  stillOpacity = lo,
+  ...ring
+}: {
+  lo: number;
+  hi: number;
+  seconds: number;
+  still?: boolean;
+  stillOpacity?: number;
+} & SVGProps<SVGCircleElement>) {
+  const vars = { '--ring-lo': lo, '--ring-hi': hi, animationDuration: `${seconds / 2}s` } as CSSProperties;
+  return (
+    <circle
+      {...ring}
+      fill="none"
+      className="breathing-ring"
+      style={still ? { opacity: stillOpacity, animation: 'none' } : vars}
+    />
+  );
+}
+
 
 export type FretboardProps = {
   /** Tonic of the displayed scale, e.g. "A". */
@@ -707,23 +738,9 @@ function FretboardView({
                               </>
                             ) : openChordEm === 'chord-root' ? (
                               <>
-                                <motion.circle
-                                  r={r + 10}
-                                  fill="none"
-                                  stroke="#38bdf8"
-                                  strokeWidth={2}
-                                  animate={{ opacity: showOpenBadge ? [0.38, 0.88, 0.38] : 0.15 }}
-                                  transition={{ duration: 2.4, repeat: Infinity, ease: 'easeInOut' }}
-                                />
+                                <BreathingRing r={r + 10} stroke="#38bdf8" strokeWidth={2} lo={0.38} hi={0.88} seconds={2.4} still={!showOpenBadge} stillOpacity={0.15} />
                                 {isRootOpen ? (
-                                  <motion.circle
-                                    r={r + 6}
-                                    fill="none"
-                                    stroke="#fbbf24"
-                                    strokeWidth={1.6}
-                                    animate={{ opacity: showOpenBadge ? [0.25, 0.55, 0.25] : 0.12 }}
-                                    transition={{ duration: 2.7, repeat: Infinity, ease: 'easeInOut' }}
-                                  />
+                                  <BreathingRing r={r + 6} stroke="#fbbf24" strokeWidth={1.6} lo={0.25} hi={0.55} seconds={2.7} still={!showOpenBadge} stillOpacity={0.12} />
                                 ) : null}
                                 <g filter="url(#note-drop-root)">
                                   <circle
@@ -767,14 +784,7 @@ function FretboardView({
                               </>
                             ) : isRootOpen ? (
                               <>
-                                <motion.circle
-                                  r={r + 9}
-                                  fill="none"
-                                  stroke="#fbbf24"
-                                  strokeWidth={2}
-                                  animate={{ opacity: showOpenBadge ? [0.32, 0.78, 0.32] : 0.12 }}
-                                  transition={{ duration: 2.7, repeat: Infinity, ease: 'easeInOut' }}
-                                />
+                                <BreathingRing r={r + 9} stroke="#fbbf24" strokeWidth={2} lo={0.32} hi={0.78} seconds={2.7} still={!showOpenBadge} stillOpacity={0.12} />
                                 <g filter="url(#note-drop-root)">
                                   <circle
                                     r={r}
@@ -956,23 +966,9 @@ function FretboardView({
                           style={{ pointerEvents: 'none' }}
                         />
                       ) : null}
-                      <motion.circle
-                        r={rDisc + 10}
-                        fill="none"
-                        stroke="#38bdf8"
-                        strokeWidth={2.4}
-                        animate={{ opacity: [0.38, 0.88, 0.38] }}
-                        transition={{ duration: 2.4, repeat: Infinity, ease: 'easeInOut' }}
-                      />
+                      <BreathingRing r={rDisc + 10} stroke="#38bdf8" strokeWidth={2.4} lo={0.38} hi={0.88} seconds={2.4} />
                       {isRootStyle ? (
-                        <motion.circle
-                          r={rDisc + 6}
-                          fill="none"
-                          stroke="#fbbf24"
-                          strokeWidth={1.8}
-                          animate={{ opacity: [0.25, 0.55, 0.25] }}
-                          transition={{ duration: 2.7, repeat: Infinity, ease: 'easeInOut' }}
-                        />
+                        <BreathingRing r={rDisc + 6} stroke="#fbbf24" strokeWidth={1.8} lo={0.25} hi={0.55} seconds={2.7} />
                       ) : null}
                       <g filter="url(#note-drop-root)">
                         <circle
@@ -1078,14 +1074,7 @@ function FretboardView({
                       ) : null}
                       {isRootStyle ? (
                         <>
-                          <motion.circle
-                            r={rDisc + 9}
-                            fill="none"
-                            stroke="#fbbf24"
-                            strokeWidth={2.2}
-                            animate={{ opacity: [0.35, 0.82, 0.35] }}
-                            transition={{ duration: 2.7, repeat: Infinity, ease: 'easeInOut' }}
-                          />
+                          <BreathingRing r={rDisc + 9} stroke="#fbbf24" strokeWidth={2.2} lo={0.35} hi={0.82} seconds={2.7} />
                           <g filter="url(#note-drop-root)">
                             <circle
                               r={rDisc}

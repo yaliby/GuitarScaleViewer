@@ -7,6 +7,8 @@ import os
 import sys
 import tempfile
 import unittest
+
+import numpy as np
 from pathlib import Path
 from unittest.mock import patch
 
@@ -164,6 +166,22 @@ class BuildMapTest(unittest.TestCase):
         self.assertEqual(result.words_heard, 0)
         self.assertEqual([ln.start_ms for ln in result.lines], [5_000, 9_000])
 
+    def test_an_unheard_line_is_sung_over_its_time_not_rattled_off_at_its_stamp(self) -> None:
+        line = "you get a shiver in the dark"
+        reference = Reference((RefLine(line, 14_000), RefLine("south of the river", 18_000)), "lrclib", True, 100_000)
+        result = build_map(reference, [], duration_ms=100_000, whisper_ran=False)
+        words = result.lines[0].words
+        self.assertEqual(words[0].start_ms, 14_000)
+        # Packed at typical lengths "dark" came at 15.8 s, with two seconds of the line still to go.
+        self.assertGreater(words[-1].start_ms, 16_500)
+        self.assertLess(words[-1].end_ms, 18_000)
+
+    def test_an_unheard_line_before_a_long_rest_does_not_crawl(self) -> None:
+        reference = Reference((RefLine("competition in other places", 55_000), RefLine("ah but the horns", 63_500)), "lrclib", True, 100_000)
+        result = build_map(reference, [], duration_ms=100_000, whisper_ran=False)
+        words = result.lines[0].words
+        self.assertLess(words[-1].end_ms, 55_000 + 3_500)
+
     def test_heard_words_alone_break_into_lines_and_stanzas(self) -> None:
         sung = _sung((1.0, "one"), (1.4, "two"), (1.8, "three."), (2.2, "four"), (8.0, "five"))
         lines = lines_from_sung(sung)
@@ -202,10 +220,27 @@ class RequestTest(unittest.TestCase):
 
     def test_cached_only_misses_then_reads_the_saved_map(self) -> None:
         self.assertEqual(handle_request({"id": "meta-1", "cachedOnly": True})["status"], "miss")
-        saved = {"version": lyric_map.MAP_VERSION, "audioBytes": 2048, "lines": [], "source": "none"}
+        saved = {"version": lyric_map.MAP_VERSION, "audioBytes": 2048, "lines": [], "source": "none", "ear": "heard"}
         (Path(self.tmp.name) / "meta-1.lyrics.json").write_text(json.dumps(saved), encoding="utf-8")
         reply = handle_request({"id": "meta-1", "cachedOnly": True})
         self.assertEqual((reply["status"], reply["map"]["source"]), ("ready", "none"))
+
+    def test_a_map_made_without_whisper_is_made_again_once_it_is_installed(self) -> None:
+        for ear, model in (("missing", None), (None, None)):  # (None, None): a map from before "ear"
+            saved = {"version": lyric_map.MAP_VERSION, "audioBytes": 2048, "lines": [], "source": "lrclib", "model": model}
+            if ear:
+                saved["ear"] = ear
+            (Path(self.tmp.name) / "meta-1.lyrics.json").write_text(json.dumps(saved), encoding="utf-8")
+            with patch.object(lyric_map, "ear_installed", return_value=True):
+                self.assertEqual(handle_request({"id": "meta-1", "cachedOnly": True})["status"], "miss")
+            with patch.object(lyric_map, "ear_installed", return_value=False):
+                self.assertEqual(handle_request({"id": "meta-1", "cachedOnly": True})["status"], "ready")
+
+    def test_a_map_whose_whisper_failed_is_kept(self) -> None:
+        saved = {"version": lyric_map.MAP_VERSION, "audioBytes": 2048, "lines": [], "source": "lrclib", "ear": "failed"}
+        (Path(self.tmp.name) / "meta-1.lyrics.json").write_text(json.dumps(saved), encoding="utf-8")
+        with patch.object(lyric_map, "ear_installed", return_value=True):
+            self.assertEqual(handle_request({"id": "meta-1", "cachedOnly": True})["status"], "ready")
 
     def test_a_map_of_other_audio_is_not_reused(self) -> None:
         saved = {"version": lyric_map.MAP_VERSION, "audioBytes": 999, "lines": []}
@@ -225,6 +260,44 @@ class RequestTest(unittest.TestCase):
         self.assertTrue((Path(self.tmp.name) / "meta-1.lyrics.json").is_file())
         with patch.object(lyric_map, "hear", side_effect=AssertionError("cached")):
             self.assertEqual(handle_request({"id": "meta-1"})["status"], "ready")
+
+
+class RefineWithVoiceTests(unittest.TestCase):
+    def _map(self):
+        reference = reference_from_lrc([(1000, "hello big world")])
+        return build_map(Reference(tuple(reference), "lrclib", True, None), _sung((1.0, "hello")), duration_ms=10_000, whisper_ran=True)
+
+    def test_clear_words_take_the_aligners_start_and_end_where_the_voice_stops(self) -> None:
+        from forced_align import WordSpan
+
+        class Fake:
+            def align(self, audio, words, guess, window_ms=5000):
+                return [WordSpan(1200, 1300, 0.9), WordSpan(2000, 2100, 0.9), WordSpan(3000, 3100, 0.9)]
+
+        sr = 16_000
+        voice = np.zeros(6 * sr, dtype=np.float32)
+        tone = 0.3 * np.sin(2 * np.pi * 220 * np.arange(6 * sr) / sr).astype(np.float32)
+        for a, b in ((1.2, 1.6), (2.0, 2.4), (3.0, 3.5)):
+            voice[int(a * sr) : int(b * sr)] = tone[int(a * sr) : int(b * sr)]
+        out = lyric_map.refine_with_voice(self._map(), voice, "en", aligner=Fake())
+        words = out.lines[0].words
+        self.assertEqual([w.start_ms for w in words], [1200, 2000, 3000])
+        for w, stop in zip(words, (1600, 2400, 3500)):
+            self.assertAlmostEqual(w.end_ms, stop, delta=120)
+        self.assertEqual(out.aligned, 3)
+
+    def test_an_unsure_word_keeps_its_time_and_order_holds(self) -> None:
+        from forced_align import WordSpan
+
+        class Fake:
+            def align(self, audio, words, guess, window_ms=5000):
+                return [WordSpan(1500, 1600, 0.9), None, WordSpan(900, 1000, 0.01)]
+
+        out = lyric_map.refine_with_voice(self._map(), np.zeros(16_000, dtype=np.float32), "en", aligner=Fake())
+        starts = [w.start_ms for w in out.lines[0].words]
+        self.assertEqual(starts, sorted(starts))
+        self.assertEqual(starts[0], 1500)
+        self.assertEqual(out.aligned, 1)
 
 
 if __name__ == "__main__":

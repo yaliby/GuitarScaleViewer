@@ -32,3 +32,4 @@ docs/review-evidence/*
 
 # Generated key-accuracy corpus (187MB of build output, see tests/fixtures/generate_corpus.py)
 src-tauri/tests/fixtures/corpus/
+src-tauri/sidecars/__gsv_aside_venvs/

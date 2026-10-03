@@ -35,6 +35,9 @@ export interface LocalPlayback extends MusicProvider {
   setSpeed(rate: number): void;
   setVolume(volume: number): void;
   setLoop(range: { start: number; end: number } | null): void;
+  /** The singer and the band as separate files; with them, `setSinger` turns the singer down. */
+  setStems?(urls: { instrumental: string; vocals: string } | null): void;
+  setSinger?(level: number): void;
   /** Reports asynchronous failures for the current source only. */
   onError(listener: (error: Error) => void): () => void;
 }

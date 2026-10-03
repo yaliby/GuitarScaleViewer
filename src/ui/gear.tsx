@@ -8,11 +8,13 @@ import type { ReactNode, SelectHTMLAttributes, InputHTMLAttributes, ButtonHTMLAt
 
 export type LedTone = 'live' | 'hold' | 'fault' | 'data' | 'off';
 
+/* The tokens live on `.lab-shell`; a lamp drawn outside it (the library, Explore) falls back to
+   the same colours instead of going dark. */
 const LED_COLOR: Record<Exclude<LedTone, 'off'>, string> = {
-  live: 'var(--led-live)',
-  hold: 'var(--led-hold)',
-  fault: 'var(--led-fault)',
-  data: 'var(--led-data)',
+  live: 'var(--led-live, #3ddc97)',
+  hold: 'var(--led-hold, #f0a52a)',
+  fault: 'var(--led-fault, #f2555a)',
+  data: 'var(--led-data, #47b6f0)',
 };
 
 /** A panel status lamp. `off` renders the unlit lens so the row never reflows when state changes. */
@@ -41,7 +43,7 @@ export function Led({
           ? `radial-gradient(circle at 35% 30%, #fff 0%, ${color} 42%, ${color} 70%, rgba(0,0,0,0.55) 100%)`
           : 'radial-gradient(circle at 35% 30%, #3a3a42 0%, #1c1c21 60%, #0a0a0c 100%)',
         boxShadow: lit
-          ? `0 0 ${size * 1.1}px ${color}, 0 0 ${size * 2.4}px ${color}66, inset 0 0 1px rgba(255,255,255,0.5)`
+          ? `0 0 ${size * 1.1}px ${color}, 0 0 ${size * 2.4}px color-mix(in srgb, ${color} 40%, transparent), inset 0 0 1px rgba(255,255,255,0.5)`
           : 'inset 0 1px 1px rgba(0,0,0,0.8), 0 1px 0 rgba(255,255,255,0.05)',
       }}
       role={label ? 'img' : undefined}

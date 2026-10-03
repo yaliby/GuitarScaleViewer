@@ -637,6 +637,8 @@
   padding: 8px 0;
   text-align: left;
   overflow: hidden;
+  /* Its label is shown only when the block is wide enough to hold it (below). */
+  container-type: inline-size;
 }.harmonia-root .chord-block:nth-child(2n) {
   background: #263536;
 }.harmonia-root .chord-block.active {
@@ -654,6 +656,17 @@
   opacity: 0.65;
   padding-top: 5px;
   padding-left: 10px;
+}.harmonia-root .chord-block > span,
+.harmonia-root .chord-block > small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* A block a few letters wide would show a cut-off "Et" for Eb: leave it bare, the title names it. */
+@container (max-width: 34px) {
+  .harmonia-root .chord-block > span,
+  .harmonia-root .chord-block > small {
+    visibility: hidden;
+  }
 }.harmonia-root .consumer-progression h2 {
   font-size: 16px;
   margin: 0 0 12px;
@@ -806,6 +819,35 @@
   align-items: center;
   font-size: 11px;
   color: var(--muted);
+}.harmonia-root .analysis-progress > div > span {
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+/* accent-color alone leaves WebKit and Chromium drawing their own green bar: draw it here. */
+.harmonia-root .analysis-progress progress,
+.harmonia-root .preparation-progress progress {
+  -webkit-appearance: none;
+  appearance: none;
+  border: 0;
+  border-radius: 999px;
+  background: var(--line);
+  overflow: hidden;
+}
+.harmonia-root .analysis-progress progress::-webkit-progress-bar,
+.harmonia-root .preparation-progress progress::-webkit-progress-bar {
+  border-radius: 999px;
+  background: var(--line);
+}
+.harmonia-root .analysis-progress progress::-webkit-progress-value,
+.harmonia-root .preparation-progress progress::-webkit-progress-value {
+  border-radius: 999px;
+  background: var(--accent);
+  transition: width 300ms ease;
+}
+.harmonia-root .analysis-progress progress::-moz-progress-bar,
+.harmonia-root .preparation-progress progress::-moz-progress-bar {
+  border-radius: 999px;
+  background: var(--accent);
 }.harmonia-root .editor {
   width: min(440px, 90vw);
   background: var(--surface);
@@ -1682,39 +1724,6 @@
   font-size: 14px;
 }.harmonia-root .consumer-track p span {
   margin: 0 8px;
-}.harmonia-root .consumer-harmony {
-  display: grid;
-  grid-template-columns: 1fr 2.2fr 1fr;
-  align-items: center;
-  text-align: center;
-  min-height: 315px;
-  margin-top: 20px;
-  background: radial-gradient(ellipse at center, #bce7ce08, transparent 65%);
-}.harmonia-root .consumer-current {
-  min-width: 0;
-}.harmonia-root .consumer-chord {
-  color: var(--accent);
-  font-size: clamp(54px, 8vw, 108px);
-  letter-spacing: -4px;
-  line-height: 1.35;
-  font-weight: 500;
-  overflow-wrap: anywhere;
-}.harmonia-root .next-change {
-  color: var(--muted);
-  font-size: 13px;
-  font-variant-numeric: tabular-nums;
-}.harmonia-root .consumer-chord-neighbor {
-  display: grid;
-  justify-items: center;
-  gap: 13px;
-  min-width: 0;
-}.harmonia-root .consumer-chord-neighbor button {
-  background: none;
-  border: 0;
-  color: #b8c5bf;
-  font-size: clamp(20px, 3vw, 38px);
-  max-width: 100%;
-  overflow-wrap: anywhere;
 }.harmonia-root .consumer-transport {
   display: flex;
   align-items: center;
@@ -1840,6 +1849,14 @@
   color: var(--muted);
   font-size: 12px;
   margin: 6px 0;
+}.harmonia-root .library-more {
+  display: block;
+  margin: 22px auto 0;
+  padding: 8px 16px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--accent);
+  font-size: 13px;
 }.harmonia-root .practice-chord-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
@@ -1959,14 +1976,6 @@
     height: 78px;
   }.harmonia-root .consumer-track .eyebrow {
     display: none;
-  }.harmonia-root .consumer-harmony {
-    min-height: 280px;
-    grid-template-columns: 1fr 2.1fr 1fr;
-  }.harmonia-root .consumer-chord {
-    letter-spacing: -2px;
-  }.harmonia-root .consumer-chord-neighbor .eyebrow {
-    font-size: 8px;
-    letter-spacing: 1px;
   }.harmonia-root .consumer-local-actions {
     flex-direction: column;
     gap: 5px;
@@ -1988,8 +1997,6 @@
   }.harmonia-root .consumer-suggestion {
     padding: 8px;
     gap: 10px;
-  }.harmonia-root .consumer-harmony {
-    min-height: 240px;
   }.harmonia-root .consumer-track h1 {
     font-size: 21px;
   }.harmonia-root .consumer-track p {

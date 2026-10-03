@@ -20,6 +20,25 @@ export type SheetChord = {
 /** A chord over a word. `carried`: still ringing from before the line, not a change. */
 export type SheetMark = { chord: number; carried: boolean };
 
+/**
+ * A stretch of the lane drawn over the words: one chord, or nothing played (chord -1). The
+ * pieces of one chord join into a single box as long as the chord is played.
+ */
+export type SheetPiece = {
+  chord: number;
+  start: number;
+  end: number;
+  /** The chord changes to this one here: its box opens. */
+  opens: boolean;
+  /** It changes to the next one here: its box closes. */
+  closes: boolean;
+  /** Its name is written here: where it opens, or at the head of a row or bar it rings into. */
+  label: boolean;
+};
+
+/** A span of the song's clock and the lane over it. */
+export type SheetSlot = { start: number; end: number; pieces: SheetPiece[] };
+
 export type SheetWord = {
   order: number;
   text: string;
@@ -27,6 +46,8 @@ export type SheetWord = {
   end: number;
   heard: boolean;
   marks: SheetMark[];
+  /** The lane over the word: from its start to the next word's. */
+  slot: SheetSlot;
 };
 
 export type SheetLyricRow = {
@@ -37,7 +58,11 @@ export type SheetLyricRow = {
   words: SheetWord[];
   /** Changes after the last word, in the short rest before the next line. */
   tail: SheetMark[];
+  /** The lane over that rest, while a chord still rings in it. */
+  rest: SheetSlot | null;
   rtl: boolean;
+  /** The span its lane covers, up to where the next row's starts. */
+  lane: { start: number; end: number };
 };
 
 /** One bar of a chords-only row: the chord ringing into it (carried), then its changes. */
@@ -45,6 +70,7 @@ export type SheetBar = {
   start: number;
   end: number;
   marks: SheetMark[];
+  pieces: SheetPiece[];
 };
 
 export type SheetChordRow = {
@@ -56,6 +82,9 @@ export type SheetChordRow = {
   marks: SheetMark[];
   /** Present when the recording's bars are known: the row as a strip of bars. */
   bars?: SheetBar[];
+  /** Without bars: one slot per chord, as long as it is played. */
+  slots: SheetSlot[];
+  lane: { start: number; end: number };
 };
 
 /** Where the bars fall: the analysis's downbeats and the end of the recording. */
@@ -157,7 +186,7 @@ function barRows(chords: readonly SheetChord[], all: readonly SheetChord[], span
         marks.unshift({ chord: ringing, carried: true });
       }
     }
-    return { start: span.start, end: span.end, marks };
+    return { start: span.start, end: span.end, marks, pieces: [] };
   });
   const rows: SheetChordRow[] = [];
   for (let at = 0; at < bars.length; at += ROW_BARS) {
@@ -169,6 +198,8 @@ function barRows(chords: readonly SheetChord[], all: readonly SheetChord[], span
       end: slice[slice.length - 1]!.end,
       marks: slice.flatMap((bar) => bar.marks.filter((mark) => !mark.carried)),
       bars: slice,
+      slots: [],
+      lane: { start: slice[0]!.start, end: slice[slice.length - 1]!.end },
     });
   }
   return rows;
@@ -193,9 +224,99 @@ function chordRows(
       start: slice[0]!.start,
       end: slice[slice.length - 1]!.end,
       marks: slice.map((chord) => ({ chord: chord.order, carried: false })),
+      slots: [],
+      lane: { start: slice[0]!.start, end: slice[slice.length - 1]!.end },
     });
   }
   return rows;
+}
+
+/** Shorter than this, a piece of the lane is a rounding scrap, not a stretch of the song. */
+const SCRAP_S = 0.02;
+
+/**
+ * The lane over a span of the clock: a piece per chord played in it, gaps where nothing is.
+ * `head`: the span starts a row or a bar, so the chord ringing into it is named there.
+ */
+function laneSlot(
+  shown: readonly { start: number; end: number }[],
+  start: number,
+  end: number,
+  head: boolean,
+): SheetSlot {
+  const pieces: SheetPiece[] = [];
+  const push = (chord: number, from: number, to: number, opens: boolean, closes: boolean) => {
+    if (to - from < SCRAP_S) return;
+    pieces.push({ chord, start: from, end: to, opens, closes, label: chord >= 0 && (opens || (head && !pieces.length)) });
+  };
+  let at = start;
+  for (let index = Math.max(0, activeIndex(shown, start)); index < shown.length; index += 1) {
+    const chord = shown[index]!;
+    if (chord.start >= end) break;
+    if (chord.end <= start) continue;
+    const from = Math.max(start, chord.start);
+    const to = Math.min(end, chord.end);
+    push(-1, at, from, true, true);
+    push(index, from, to, chord.start >= start, chord.end <= end);
+    at = Math.max(at, to);
+  }
+  push(-1, at, end, true, true);
+  return { start, end, pieces };
+}
+
+/**
+ * Draws the lanes: the chords as boxes as long as they are played, over the words they are
+ * played under, in bars, or in a row of their own. Rows share the clock between them: a row's
+ * lane runs until the next row's starts. A change a hair off a word or a bar line lands on it.
+ */
+function drawLanes(rows: readonly SheetRow[], words: readonly SheetWord[], chords: readonly SheetChord[]): void {
+  const edges = [
+    ...words.map((word) => word.start),
+    ...rows.flatMap((row) => (row.kind === "chords" && row.bars ? row.bars.map((bar) => bar.start) : [])),
+  ].sort((a, b) => a - b);
+  const marks = edges.map((edge) => ({ start: edge }));
+  const snap = (time: number) => {
+    const at = activeIndex(marks, time + SNAP_S);
+    return at >= 0 && Math.abs(edges[at]! - time) <= SNAP_S ? edges[at]! : time;
+  };
+  const shown = chords.map((chord) => ({ start: snap(chord.start), end: snap(chord.end) }));
+  shown.forEach((chord) => {
+    chord.end = Math.max(chord.start, chord.end);
+  });
+
+  // Where each row's lane starts: a lyric row at its first change, even ahead of its first word.
+  const starts = rows.map((row) => {
+    if (row.kind === "chords") return row.bars ? row.lane.start : shown[row.marks[0]!.chord]!.start;
+    const changes = row.words.flatMap((word) => word.marks.filter((mark) => !mark.carried));
+    return Math.min(row.start, ...changes.map((mark) => shown[mark.chord]!.start));
+  });
+  const last = chords.length ? shown[shown.length - 1]!.end : 0;
+
+  rows.forEach((row, index) => {
+    const start = starts[index]!;
+    if (row.kind === "chords") {
+      if (row.bars) {
+        for (const bar of row.bars) bar.pieces = laneSlot(shown, bar.start, bar.end, true).pieces;
+        return;
+      }
+      row.slots = row.marks.map((mark) => laneSlot(shown, shown[mark.chord]!.start, shown[mark.chord]!.end, true));
+      row.lane = { start, end: row.slots[row.slots.length - 1]!.end };
+      return;
+    }
+    const final = row.words[row.words.length - 1]!;
+    const end = Math.max(index + 1 < rows.length ? starts[index + 1]! : Math.max(last, row.end), final.end);
+    // A rest after the line has a lane of its own; a breath is the last word's.
+    const resting = end - final.end > TAIL_S;
+    row.words.forEach((word, at) => {
+      const from = at === 0 ? start : word.start;
+      const next = row.words[at + 1];
+      const to = next ? next.start : resting ? Math.max(word.start, word.end) : end;
+      word.slot = laneSlot(shown, from, Math.max(from, to), at === 0);
+    });
+    const rest = resting ? laneSlot(shown, Math.max(final.start, final.end), end, false) : null;
+    row.rest = rest && rest.pieces.some((piece) => piece.chord >= 0) ? rest : null;
+    row.lane = { start, end };
+  });
 }
 
 function wordKeys(row: SheetLyricRow): string[] {
@@ -248,6 +369,7 @@ export function buildSongSheet(
         end: Math.max(word.startMs, word.endMs) / 1000,
         heard: word.heard,
         marks: [],
+        slot: { start: word.startMs / 1000, end: word.endMs / 1000, pieces: [] },
       };
       words.push(item);
       return item;
@@ -259,7 +381,9 @@ export function buildSongSheet(
       end: Math.max(...rowWords.map((word) => word.end)),
       words: rowWords,
       tail: [],
+      rest: null,
       rtl: HEBREW.test(line.text),
+      lane: { start: rowWords[0]!.start, end: Math.max(...rowWords.map((word) => word.end)) },
     };
   });
 
@@ -334,7 +458,9 @@ export function buildSongSheet(
     }
   });
 
-  return { sections, rows: sections.flatMap((section) => section.rows), words, chords };
+  const rows = sections.flatMap((section) => section.rows);
+  drawLanes(rows, words, chords);
+  return { sections, rows, words, chords };
 }
 
 /** Last item starting at or before `time`, or -1. */

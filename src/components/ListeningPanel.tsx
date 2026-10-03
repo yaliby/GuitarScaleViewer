@@ -14,6 +14,7 @@ import type { useCloudKeyResolution } from "../hooks/useCloudKeyResolution";
 import type { FusedKey } from "../services/keyFusion";
 import { musicalLabel } from "./Fretboard";
 import { TrackCaptureBar } from "./TrackCaptureBar";
+import { adviceName, adviceNoteLabel } from "../ui/statusLabels";
 
 type Props = {
   media: MediaSessionUiState;
@@ -71,7 +72,11 @@ export function ListeningPanel({
       : name
         ? fused.certainty === "verified"
           ? "Key is ready"
-          : tonicOpen
+          : fused.certainty === "confirmed"
+            ? "Key confirmed"
+            : fused.certainty === "advised"
+              ? `Key from the ${adviceName(fused.advisedBy)}`
+              : tonicOpen
             ? "Notes sure, root open"
             : "Possible key"
         : media.playbackStatus === "playing"
@@ -116,6 +121,10 @@ export function ListeningPanel({
                   ? "Apply is off, so the neck is staying where it is. Switch Apply on to take this key."
                   : underGate
                     ? `This reading is ${fused.confidencePct}% sure and the Apply gate is set to ${applyThreshold}%, so the neck is staying where it is. Lower the gate on the Live Jam deck to take it.`
+                    : fused.certainty === "advised"
+                    ? `${adviceNoteLabel(fused)}.`
+                    : fused.certainty === "confirmed"
+                    ? `The ${adviceName(fused.advisedBy)} and the audio agree on it.`
                     : tonicOpen
                     ? `The scale tones are settled — this reads equally as ${musicalLabel(fused.relativeAlternative!)}, which draws the same notes.`
                     : "The neck is already following this. Nothing to press."

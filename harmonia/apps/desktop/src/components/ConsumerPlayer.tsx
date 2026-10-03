@@ -5,12 +5,8 @@ import { ArrowDownToLine, Heart, Pause, Play, RotateCcw, RotateCw } from 'lucide
 import type { SavedTrack } from '../../../../packages/domain/types';
 import type { CatalogRecording } from '../../../../packages/application/catalog-contracts';
 import type { SessionController } from '../../../../packages/application/session';
-import {
-  findSegmentIndex,
-  findSegmentNeighbors,
-  transposeAnalysis,
-} from '../../../../packages/domain/timeline';
-import { displayChord, type ChordDisplayMode } from '../../../../packages/domain/notation';
+import { findSegmentIndex, transposeAnalysis } from '../../../../packages/domain/timeline';
+import type { ChordDisplayMode } from '../../../../packages/domain/notation';
 import { pitchName } from '../../../../packages/domain/chord';
 import { buildPracticeArrangement } from '../../../../packages/domain/practice-arrangement';
 import {
@@ -96,13 +92,7 @@ export function ConsumerPlayer({
         : undefined,
     [currentArrangement, arrangement],
   );
-  const { previous, next } =
-    index >= 0
-      ? { previous: analysis.segments[index - 1], next: analysis.segments[index + 1] }
-      : findSegmentNeighbors(analysis.segments, time);
   const editing = record.analysis.segments.find((item) => item.id === editingId);
-  const label = (chord: NonNullable<typeof segment>['chord']) =>
-    displayChord(chord, notation, analysis.key?.root ?? null);
   const boundedSeek = (value: number) => seek(Math.max(0, Math.min(analysis.duration, value)));
   usePlaybackShortcuts(controller, analysis.duration, editingId, seek);
   return (
@@ -125,33 +115,6 @@ export function ConsumerPlayer({
         >
           <Heart size={22} fill={record.track.favorite ? 'currentColor' : 'none'} />
         </button>
-      </div>
-      <div className="consumer-harmony" aria-label="Synchronized harmony">
-        <div className="consumer-chord-neighbor">
-          <span className="eyebrow">PREVIOUS</span>
-          <button
-            onClick={() => previous && seek(previous.start)}
-            disabled={!previous}
-            aria-label="Previous chord"
-          >
-            {previous ? label(previous.chord) : '—'}
-          </button>
-        </div>
-        <div className="consumer-current">
-          <span className="eyebrow">CURRENT CHORD</span>
-          <div className="consumer-chord" data-testid="current-chord">
-            {segment ? label(segment.chord) : '—'}
-          </div>
-          <span className="next-change" data-testid="next-change">
-            {next ? `Next change in ${Math.max(0, next.start - time).toFixed(1)}s` : 'Final chord'}
-          </span>
-        </div>
-        <div className="consumer-chord-neighbor">
-          <span className="eyebrow">UP NEXT</span>
-          <button onClick={() => next && seek(next.start)} disabled={!next} aria-label="Next chord">
-            {next ? label(next.chord) : '—'}
-          </button>
-        </div>
       </div>
       <div className="consumer-transport">
         <button

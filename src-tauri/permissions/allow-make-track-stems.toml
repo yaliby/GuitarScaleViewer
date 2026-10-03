@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-make-track-stems"
+description = "Allows separating a saved song into its singer and band (Demucs) for the sheet's singer slider, and reading the saved stems."
+commands.allow = ["make_track_stems"]

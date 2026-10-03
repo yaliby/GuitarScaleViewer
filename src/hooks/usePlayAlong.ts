@@ -5,6 +5,7 @@ import type {
   PlayAlongPayload,
   PlayAlongStatus,
   DevSourcePanel,
+  ScrapedChart,
   TimedLyricLine,
 } from "../playalong/types";
 
@@ -359,10 +360,20 @@ function tick(): void {
     });
 }
 
+/** Between follow requests while the song plays: lyric lines turn on this clock. */
+const FOLLOW_PLAYING_MS = 120;
+/** Between them while it is paused or stopped: nothing moves, so asking fourteen times a second only
+ *  kept the sidecar and the webview busy (35% of a core on Live Jam, doing nothing). */
+const FOLLOW_IDLE_MS = 500;
+
 function startLoop(): void {
   if (timer != null) return;
-  tick();
-  timer = window.setInterval(tick, 70);
+  const step = () => {
+    tick();
+    timer = window.setTimeout(step, mediaRef && playingOf(mediaRef) ? FOLLOW_PLAYING_MS : FOLLOW_IDLE_MS);
+  };
+  timer = 0;
+  step();
 }
 
 function resetStore(): void {
@@ -374,7 +385,7 @@ function resetStore(): void {
   resolvedKey = "";
   lastMediaKey = `\0reset:${epoch}`;
   if (timer != null) {
-    window.clearInterval(timer);
+    window.clearTimeout(timer);
     timer = null;
   }
   snapshot = emptySnapshot();
@@ -400,6 +411,40 @@ function setArtist(value: string): void {
 
 function search(nextTitle?: string, nextArtist?: string): void {
   run(nextTitle ?? snapshot.title, nextArtist ?? snapshot.artist, "manual");
+}
+
+export type PlayAlongChart = {
+  chart: ScrapedChart | null;
+  /** The song the chart was resolved for: the media session's title and artist, or a manual search. */
+  title: string;
+  artist: string;
+};
+
+/**
+ * Just the scraped chart, for readers that must neither drive a resolve of their own nor re-render
+ * on the follow loop: the snapshot changes about fourteen times a second while lyrics are followed,
+ * and the chart only when a new one is scraped.
+ */
+export function usePlayAlongChart(): PlayAlongChart {
+  const pick = (from: Snapshot): PlayAlongChart => ({
+    chart: from.payload?.chart ?? null,
+    title: from.title,
+    artist: from.artist,
+  });
+  const [picked, setPicked] = useState<PlayAlongChart>(() => pick(snapshot));
+  useEffect(
+    () =>
+      subscribe((next) => {
+        setPicked((current) => {
+          const chart = next.payload?.chart ?? null;
+          return current.chart === chart && current.title === next.title && current.artist === next.artist
+            ? current
+            : pick(next);
+        });
+      }),
+    [],
+  );
+  return picked;
 }
 
 /**

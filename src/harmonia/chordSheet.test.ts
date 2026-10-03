@@ -10,6 +10,7 @@ import {
   tuningNote,
   type SheetChordRow,
   type SheetLyricRow,
+  type SheetPiece,
 } from "./chordSheet";
 
 const ROOTS: Record<string, number> = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
@@ -191,6 +192,80 @@ describe("buildSongSheet", () => {
   it("reads Hebrew lines right to left", () => {
     const sheet = buildSongSheet([line("שיר של יום", 5)], segments(["C", 4, 9]));
     expect(lyricRows(sheet)[0]!.rtl).toBe(true);
+  });
+});
+
+describe("lanes", () => {
+  const NAMES = ["C", "G", "Am", "F", "D", "E"];
+
+  /** A lane as text: `[C` a box opening, `C]` one closing, `·` nothing played; `*` marks a name. */
+  function drawn(
+    sheet: ReturnType<typeof buildSongSheet>,
+    pieces: readonly SheetPiece[],
+    names: readonly string[] = NAMES,
+  ): string[] {
+    return pieces.map((piece) => {
+      if (piece.chord < 0) return "·";
+      const name = names[sheet.chords[piece.chord]!.segment]!;
+      return `${piece.opens ? "[" : ""}${piece.label ? "*" : ""}${name}${piece.closes ? "]" : ""}`;
+    });
+  }
+
+  it("draws each chord as a box over the words it is played under, on into the rest after the line", () => {
+    const sheet = buildSongSheet(
+      [line("one two three four", 10)],
+      segments(["C", 9.8, 11.02], ["G", 11.02, 13]),
+    );
+    const [row] = lyricRows(sheet);
+    expect(row!.words.map((word) => drawn(sheet, word.slot.pieces))).toEqual([["[*C"], ["C]"], ["[*G"], ["G"]]);
+    expect(drawn(sheet, row!.rest!.pieces)).toEqual(["G]"]);
+    // The first word's lane starts where C does, ahead of the word; G lands on "three".
+    expect(row!.words[0]!.slot.start).toBe(9.8);
+    expect(row!.words[2]!.slot.start).toBe(11);
+  });
+
+  it("splits a word's lane where the chord changes under it, as long as each is played", () => {
+    const held: LyricLine = {
+      text: "held on",
+      startMs: 10000,
+      endMs: 12400,
+      breakBefore: false,
+      words: [
+        { text: "held", startMs: 10000, endMs: 11900, heard: true },
+        { text: "on", startMs: 12000, endMs: 12400, heard: true },
+      ],
+    };
+    const sheet = buildSongSheet([held], segments(["C", 9.9, 11], ["G", 11, 13]));
+    const [word] = lyricRows(sheet)[0]!.words;
+    // G rings on over "on": its box stays open.
+    expect(drawn(sheet, word!.slot.pieces)).toEqual(["[*C]", "[*G"]);
+    expect(word!.slot.pieces.map((piece) => piece.end - piece.start)).toEqual([1, 1]);
+  });
+
+  it("names the chord still ringing at the head of a line, without opening its box again", () => {
+    const sheet = buildSongSheet([line("first line", 10), line("second line", 12)], segments(["C", 9, 20]));
+    const rows = lyricRows(sheet);
+    expect(drawn(sheet, rows[1]!.words[0]!.slot.pieces)).toEqual(["*C"]);
+    expect(rows[0]!.lane.end).toBe(rows[1]!.lane.start);
+  });
+
+  it("leaves a gap where nothing is played", () => {
+    const sheet = buildSongSheet([line("a b", 10)], segments(["C", 10, 10.5], ["N", 10.5, 10.9], ["G", 10.9, 12]));
+    const [row] = lyricRows(sheet);
+    expect(drawn(sheet, row!.words[0]!.slot.pieces)).toEqual(["[*C]"]);
+    expect(drawn(sheet, row!.words[1]!.slot.pieces)).toEqual(["·"]);
+    expect(drawn(sheet, row!.rest!.pieces, ["C", "N", "G"])).toEqual(["[*G]"]);
+  });
+
+  it("draws each bar's chords as long as they are played in it", () => {
+    const sheet = buildSongSheet(
+      [],
+      segments(["C", 0, 6], ["G", 6, 7], ["Am", 7, 8]),
+      { downbeats: [0, 4, 8, 12], end: 16 },
+    );
+    const row = sheet.rows[0] as SheetChordRow;
+    expect(row.bars!.map((bar) => drawn(sheet, bar.pieces))).toEqual([["[*C"], ["*C]", "[*G]", "[*Am]"]]);
+    expect(row.bars![1]!.pieces.map((piece) => piece.end - piece.start)).toEqual([2, 1, 1]);
   });
 });
 

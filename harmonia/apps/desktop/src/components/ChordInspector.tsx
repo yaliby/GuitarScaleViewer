@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { memo, useMemo, useState } from 'react';
 import { chordPitchClasses, formatChord, pitchName } from '../../../../packages/domain/chord';
+import { displayChord } from '../../../../packages/domain/notation';
 import type { Chord, ChordSegment } from '../../../../packages/domain/types';
 import { Piano, Guitar } from './Instrument';
 import { GuitarDiagram, PianoDiagram } from './PracticeDiagrams';
@@ -38,7 +39,7 @@ export const ChordInspector = memo(function ChordInspector({
         <span className="eyebrow">INSIDE THE CHORD</span>
         <span className="small-index">{segment ? String(index + 1).padStart(2, '0') : '—'}</span>
       </div>
-      <h2>{segment ? formatChord(chord) : '—'}</h2>
+      <h2>{segment ? displayChord(chord, 'advanced', null) : '—'}</h2>
       <p className="chord-description">
         {chord.kind === 'chord'
           ? `${chord.triad} · ${chord.seventh ? `${chord.seventh} seventh` : 'triad'}`

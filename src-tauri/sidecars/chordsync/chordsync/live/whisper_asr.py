@@ -1,6 +1,6 @@
 """faster-whisper with word times, on the GPU when there is one.
 
-On Windows the CUDA runtime comes from the nvidia-cublas-cu12 / nvidia-cudnn-cu12 wheels; their
+On Windows and Linux the CUDA runtime comes from the nvidia-cublas-cu12 / nvidia-cudnn-cu12 wheels; their
 DLL folders have to be visible before CTranslate2 loads a model.
 """
 
@@ -48,7 +48,28 @@ def collapse_loops(words: list[HeardWord], *, keep: int = 2, longest: int = 4) -
     return out
 
 
+def _expose_cuda_libs_linux() -> None:
+    """CTranslate2 wants CUDA 12's cuBLAS / cuDNN; the pip wheels keep them inside site-packages."""
+    import ctypes
+    import glob
+
+    for name in ("nvidia.cublas", "nvidia.cudnn"):
+        try:
+            module = __import__(name, fromlist=["__path__"])
+        except ImportError:
+            continue
+        for root in getattr(module, "__path__", []):
+            for lib in sorted(glob.glob(os.path.join(root, "lib", "lib*.so*"))):
+                try:
+                    ctypes.CDLL(lib, mode=ctypes.RTLD_GLOBAL)
+                except OSError:
+                    pass
+
+
 def _expose_cuda_dlls() -> None:
+    if sys.platform == "linux":
+        _expose_cuda_libs_linux()
+        return
     if sys.platform != "win32":
         return
     for name in ("nvidia.cublas", "nvidia.cudnn"):
@@ -94,13 +115,26 @@ class WhisperAsr:
         compute = str(self._cfg.live_lyrics_compute_type or "auto")
         if compute == "auto":
             compute = "float16" if device == "cuda" else "int8"
-        try:
-            self._model = WhisperModel(name, device=device, compute_type=compute)
-        except Exception:
-            if device == "cpu":
-                raise
-            device, compute = "cpu", "int8"
-            self._model = WhisperModel(name, device=device, compute_type=compute)
+        cpu_threads = int(getattr(self._cfg, "live_lyrics_cpu_threads", 0) or 0)
+        # A GPU that cannot hold the model at full precision gets a lighter one before the CPU.
+        attempts = [(device, compute)]
+        if device == "cuda":
+            if compute == "float16":
+                attempts.append(("cuda", "int8_float16"))
+            attempts.append(("cpu", "int8"))
+        for index, (try_device, try_compute) in enumerate(attempts):
+            try:
+                self._model = WhisperModel(
+                    name,
+                    device=try_device,
+                    compute_type=try_compute,
+                    cpu_threads=cpu_threads if try_device == "cpu" else 0,
+                )
+                device, compute = try_device, try_compute
+                break
+            except Exception:
+                if index == len(attempts) - 1:
+                    raise
         self.model_name, self.device = name, device
         return f"{name} on {device}"
 
@@ -116,6 +150,7 @@ class WhisperAsr:
         *,
         language: str | None,
         on_progress: Callable[[float], None] | None = None,
+        beam_size: int | None = None,
     ) -> tuple[list[HeardWord], str | None, float]:
         """Words with times in seconds from the start of ``audio``, and the language heard.
 
@@ -127,7 +162,7 @@ class WhisperAsr:
         segments, info = self._model.transcribe(
             audio,
             language=language,
-            beam_size=int(self._cfg.live_lyrics_beam_size),
+            beam_size=int(beam_size or self._cfg.live_lyrics_beam_size),
             word_timestamps=True,
             # Silero VAD is trained on speech: over a full band it cut a Queen verse from
             # 31 heard words to 4. Singing is what we listen for, so it stays off.

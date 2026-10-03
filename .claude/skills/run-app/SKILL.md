@@ -9,9 +9,11 @@ description: Launch the GuitarScaleViewer Tauri desktop app in dev mode on Linux
 - builds the libkeyfinder CLI when the build dir is missing or holds zero-byte stand-ins
 - adds the Linux Tauri CLI binary when `node_modules` was installed from Windows (shared NTFS drive)
 - puts `~/.cargo/bin` on PATH for non-login shells
-- creates the ChordSync venv `src-tauri/sidecars/chordsync/.venv-linux` with `uv` (the `.venv` there
-  is the Windows one) and exports `CHORDSYNC_PYTHON`; without it Play Along, lyrics and capture are dead
-  and the log fills with `ECONNREFUSED 127.0.0.1:18766`
+- creates the ChordSync venv `~/.local/share/fretboard-studio/chordsync-venv` with `uv` (native
+  filesystem: it holds PyTorch, Whisper and Demucs for lyric timing) and exports `CHORDSYNC_PYTHON`;
+  without it Play Along, lyrics and capture are dead and the log fills with
+  `ECONNREFUSED 127.0.0.1:18766`. Without its lyric packages the song sheet's words sit on LRCLIB's
+  line clock and run ahead of the singer
 - downloads FFmpeg into `.tools/ffmpeg` on first run
 
 ## Launch

@@ -10,6 +10,7 @@ import { useMediaSession } from './hooks/useMediaSession';
 import { controlMediaPlayback, seekMedia } from './hooks/mediaTransport';
 import { useDetectedKey } from './hooks/useDetectedKey';
 import { useCloudKeyResolution } from './hooks/useCloudKeyResolution';
+import { useKeyAdvice } from './hooks/useKeyAdvice';
 import { clearsApplyGate, fuseKey, shouldRevise } from './services/keyFusion';
 import { readNeckFollow, useNeckFollow } from './neckFollow';
 import { trace } from './services/debugLog';
@@ -145,6 +146,8 @@ export default function GuitarScaleView({
     [devMockArtist, devMockEnabled, devMockTitle, followSong, mediaSession],
   );
   const cloudResolution = useCloudKeyResolution(cloudMediaInput, detectedKey, followSong);
+  /* The chart and the saved copy's chords, about the same session the lookup is (see services/keyAdvice). */
+  const advice = useKeyAdvice(cloudMediaInput, capture, cloudResolution.trackIdentity);
 
   /* Library lookup is the bundled dictionary. A miss leaves the local engine as the remaining leg. */
   const cloudHit = cloudResolution.cloudHit;
@@ -161,8 +164,9 @@ export default function GuitarScaleView({
         detected: detectedKey,
         held: neckKey,
         trackIdentity: cloudResolution.trackIdentity,
+        advice,
       }),
-    [verifiedCandidate, detectedKey, neckKey, cloudResolution.trackIdentity],
+    [advice, verifiedCandidate, detectedKey, neckKey, cloudResolution.trackIdentity],
   );
   const activeDisplayName = fused.displayName;
   const shownCloudHit = fused.source === 'verified' ? cloudHit : null;
@@ -414,6 +418,8 @@ export default function GuitarScaleView({
           notesSettled={fused.notesSettled}
           tonicSettled={fused.tonicSettled}
           relativeAlternative={fused.relativeAlternative}
+          advisedBy={fused.advisedBy}
+          contestedBy={fused.contestedBy}
           applyDetected={applyDetected}
           onToggleApply={toggleApplyDetected}
           applyThreshold={applyThreshold}
@@ -442,6 +448,8 @@ export default function GuitarScaleView({
           sourceLabel={keySourceLabel({
             hasCloudHit: !!shownCloudHit,
             showingProposedKey,
+            certainty: fused.certainty,
+            advisedBy: fused.advisedBy,
           })}
           /* A hand-picked root is settled by definition — the open-tonic treatment belongs to the
              pipeline's own answer, not to a key the player chose. */

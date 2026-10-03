@@ -92,7 +92,10 @@ describe('LiveJamScreen', () => {
   it("opens the song sheet, which says how to get one when the song isn't saved", async () => {
     render(<Harness />);
     fireEvent.click(screen.getByRole('button', { name: 'Song sheet' }));
-    expect(await screen.findByText('No saved copy of this song yet.')).toBeDefined();
+    /* The sheet is a lazy chunk: under a full parallel run it can take longer than a second. */
+    expect(
+      await screen.findByText('No saved copy of this song yet.', {}, { timeout: 5000 }),
+    ).toBeDefined();
     expect(screen.getByRole('heading', { name: 'This recording, read by ear.' })).toBeDefined();
   });
 

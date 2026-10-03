@@ -18,7 +18,8 @@ import os
 import re
 import sys
 import tempfile
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
@@ -38,6 +39,11 @@ def _bind_chordsync() -> None:
 
 _bind_chordsync()
 
+import hw_profile  # noqa: E402
+
+# Before numpy / torch load: they read the thread environment at import.
+hw_profile.apply_process_policy()
+
 import numpy as np  # noqa: E402
 from rapidfuzz import fuzz, process  # noqa: E402
 
@@ -46,7 +52,7 @@ from track_capture import CapturedTrack, capture_dir, get_track  # noqa: E402
 
 ProgressFn = Callable[[int, str], None]
 
-MAP_VERSION = 1
+MAP_VERSION = 2
 # Two spellings of one sung word ("Kruschev" / "Christophe" is not one; "anytime" / "any time" is).
 _MIN_SIM = 75.0
 # Short words ("I", "the", "you") are everywhere: only an exact hearing anchors them.
@@ -314,6 +320,11 @@ def _word_ms(key: str) -> int:
     return max(220, min(800, 140 + 55 * len(key)))
 
 
+# An unheard line may take up to this many times its words' typical length, up to the next line:
+# more is the rest after it (an instrumental bar, a held last note), not slower singing.
+_LINE_STRETCH = 1.6
+
+
 def place(
     tokens: Sequence[Token],
     lines: Sequence[RefLine],
@@ -463,12 +474,12 @@ def _fill_run(
     for p in range(len(pieces) - 1, -1, -1):
         placed[p] = max(float(lo), min(placed[p], limit - need[p]))
         limit = placed[p] - gap
-    for (_line, members), at in zip(pieces, placed):
-        clock = at
-        for t in members:
-            size = _word_ms(tokens[t].key)
-            starts[t], ends[t] = int(clock), int(clock + size * 0.9)
-            clock += size
+    # A line is sung over the time it has, not rattled off at its stamp: typical word lengths
+    # packed from the start run ahead of the singer by seconds by the end of a long line.
+    for p, ((_line, members), at) in enumerate(zip(pieces, placed)):
+        room = (placed[p + 1] - gap if p + 1 < len(pieces) else float(hi)) - at
+        span = max(float(need[p]), min(room, need[p] * _LINE_STRETCH))
+        _spread(tokens, starts, ends, members, int(at), int(at + span))
 
 
 def _interpolate(values: list[float | None], lo: float, hi: float) -> None:
@@ -556,6 +567,7 @@ class LyricMap:
     words_total: int
     words_heard: int
     note: str | None = None
+    aligned: int = 0  # words timed by forced alignment on the vocal stem
 
 
 def build_map(
@@ -616,6 +628,73 @@ def build_map(
         words_total=len(tokens),
         words_heard=heard,
     )
+
+
+# Below this mean letter confidence the aligner did not really hear the word; keep the older time.
+_MIN_ALIGN_SCORE = 0.12
+
+
+def refine_with_voice(
+    result: LyricMap,
+    voice: np.ndarray,
+    language: str | None,
+    aligner: Any = None,
+) -> LyricMap:
+    """Re-time every written word by CTC forced alignment on the vocal stem.
+
+    ``result`` already has a time for each word (Whisper, neighbours, LRC); those are only the
+    rough window the aligner searches in. Words it hears clearly take its start, and their end is
+    where the voice stops (never past the next word); the rest keep what they had."""
+    from vocal_stem import snap_to_voice
+
+    words = [w for line in result.lines for w in line.words]
+    if not words:
+        return result
+    own = aligner is None
+    if own:
+        from forced_align import Aligner
+
+        aligner = Aligner(language)
+    try:
+        spans = aligner.align(voice, [w.text for w in words], [(w.start_ms, w.end_ms) for w in words])
+    finally:
+        if own:
+            aligner.close()
+    starts: list[int] = []
+    sure: list[bool] = []
+    for word, span in zip(words, spans):
+        ok = span is not None and span.score >= _MIN_ALIGN_SCORE
+        sure.append(ok)
+        starts.append(max(starts[-1] if starts else 0, span.start_ms if ok else word.start_ms))  # type: ignore[union-attr]
+    ends = [0] * len(words)
+    room = [0] * len(words)  # up to the next word: where a clearly heard word may sound
+    for i, word in enumerate(words):
+        room[i] = max(starts[i + 1] if i + 1 < len(words) else starts[i] + 4_000, starts[i])
+        ends[i] = min(max(word.end_ms, starts[i]), room[i])
+    voiced = snap_to_voice([(starts[i], max(room[i], starts[i] + 1)) for i in range(len(words)) if sure[i]], voice)
+    k = 0
+    for i in range(len(words)):
+        if sure[i]:
+            starts[i], ends[i] = voiced[k]
+            k += 1
+    pos = 0
+    lines: list[MappedLine] = []
+    for line in result.lines:
+        made = tuple(
+            MappedWord(w.text, starts[pos + j], max(starts[pos + j], ends[pos + j]), w.heard or sure[pos + j])
+            for j, w in enumerate(line.words)
+        )
+        pos += len(line.words)
+        lines.append(
+            MappedLine(
+                text=line.text,
+                start_ms=made[0].start_ms,
+                end_ms=max(w.end_ms for w in made),
+                break_before=line.break_before,
+                words=made,
+            )
+        )
+    return replace(result, lines=tuple(lines), aligned=sum(sure))
 
 
 def _lrc_offset(reference: Reference, sung: Sequence[SungWord], duration_ms: int | None) -> tuple[int, str | None]:
@@ -704,15 +783,41 @@ def hear(
     language: str | None,
     progress: ProgressFn | None,
     duration_ms: int | None,
+    stem: dict[str, Any] | None = None,
 ) -> tuple[list[SungWord], str | None, str | None, int | None]:
-    """Whisper over the whole file: (words, language, model description, audio length ms)."""
+    """Whisper over the whole file: (words, language, model description, audio length ms).
+
+    When the vocals could be separated, ``stem["voice"]`` receives them (mono 16 kHz)."""
     from chordsync.config import load_config
     from chordsync.live.whisper_asr import WhisperAsr
     from faster_whisper import decode_audio
 
-    audio = decode_audio(path, sampling_rate=16_000)
-    length_ms = int(len(audio) * 1000 / 16_000) or duration_ms
-    asr = WhisperAsr(load_config())
+    machine, gov = hw_profile.plan(), hw_profile.governor()
+    print(f"lyric_map: {machine.describe()}", file=sys.stderr, flush=True)
+    mix = decode_audio(path, sampling_rate=16_000)
+    length_ms = int(len(mix) * 1000 / 16_000) or duration_ms
+    audio = mix
+    if progress:
+        progress(10, "separate")
+    try:
+        if not machine.separate:
+            raise ImportError(f"only {machine.free_ram_gb:.1f} GB of RAM free")
+        from vocal_stem import vocals_16k
+
+        audio = vocals_16k(path)
+        length_ms = int(len(audio) * 1000 / 16_000) or length_ms
+    except ImportError as exc:
+        print(f"lyric_map: Demucs is not installed ({exc}); listening to the full mix", file=sys.stderr, flush=True)
+    except Exception as exc:
+        print(f"lyric_map: vocal separation failed ({exc}); listening to the full mix", file=sys.stderr, flush=True)
+    cfg = load_config()
+    cfg = cfg.model_copy(
+        update={
+            "live_lyrics_model": machine.whisper_model(cfg.live_lyrics_model),
+            "live_lyrics_cpu_threads": gov.threads(),
+        }
+    )
+    asr = WhisperAsr(cfg)
     if progress:
         progress(12, "load")
     described = asr.load(language)
@@ -720,21 +825,32 @@ def hear(
         progress(18, "listen")
     total_s = max(1.0, (length_ms or 1) / 1000.0)
 
+    segment_began = [time.monotonic()]
+
     def on_segment(end_s: float) -> None:
+        # Between segments the host gets its turn back if it needs one.
+        now = time.monotonic()
+        gov.breathe(now - segment_began[0])
+        segment_began[0] = time.monotonic()
         if progress:
             progress(18 + int(72 * min(1.0, end_s / total_s)), "listen")
 
     try:
-        heard, detected, _sure = asr.transcribe(audio, language=language, on_progress=on_segment)
+        beam = min(int(cfg.live_lyrics_beam_size), machine.beam(asr.device == "cuda"))
+        heard, detected, _sure = asr.transcribe(audio, language=language, on_progress=on_segment, beam_size=beam)
     except TypeError:
         # A ChordSync checkout whose WhisperAsr predates on_progress.
         heard, detected, _sure = asr.transcribe(audio, language=language)
     finally:
         asr.unload()
-    words = [
-        SungWord(int(round(w.start_s * 1000)), int(round(w.end_s * 1000)), w.text, bool(w.segment_start))
-        for w in heard
-    ]
+    spans = [(int(round(w.start_s * 1000)), int(round(w.end_s * 1000))) for w in heard]
+    if audio is not mix:  # only a clean vocal stem says where the voice really is
+        from vocal_stem import snap_to_voice
+
+        spans = snap_to_voice(spans, audio)
+        if stem is not None:
+            stem["voice"] = audio
+    words = [SungWord(a, b, w.text, bool(w.segment_start)) for (a, b), w in zip(spans, heard)]
     return words, detected, described, length_ms
 
 
@@ -752,8 +868,21 @@ def _audio_stamp(track: CapturedTrack) -> int:
         return int(track.bytes or 0)
 
 
+def ear_installed() -> bool:
+    """Whisper can be loaded here (checked without importing it, so a lookup stays quick)."""
+    import importlib.util
+
+    try:
+        return importlib.util.find_spec("faster_whisper") is not None
+    except (ImportError, ValueError):
+        return False
+
+
 def read_map(track: CapturedTrack) -> dict[str, Any] | None:
-    """The saved map, if it was made from this same audio file by this version."""
+    """The saved map, if it was made from this same audio file by this version.
+
+    A map made while Whisper was not installed has every word on the LRC line clock, which runs
+    ahead of the singer; once Whisper is here it is made again, by ear."""
     try:
         payload = json.loads(map_path(track.id).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, UnicodeError):
@@ -761,6 +890,10 @@ def read_map(track: CapturedTrack) -> dict[str, Any] | None:
     if not isinstance(payload, dict) or payload.get("version") != MAP_VERSION:
         return None
     if payload.get("audioBytes") != _audio_stamp(track) or not isinstance(payload.get("lines"), list):
+        return None
+    # Maps from before "ear" was written: one without a Whisper model was made without it.
+    ear = payload.get("ear") or ("heard" if payload.get("model") else "missing")
+    if ear == "missing" and ear_installed():
         return None
     return payload
 
@@ -792,6 +925,7 @@ def map_json(track: CapturedTrack, result: LyricMap, **extra: Any) -> dict[str, 
         "offsetSource": result.offset_source,
         "wordsTotal": result.words_total,
         "wordsHeard": result.words_heard,
+        "wordsAligned": result.aligned,
         "note": result.note,
         "audioBytes": _audio_stamp(track),
         "createdAt": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
@@ -830,14 +964,19 @@ def map_track(track: CapturedTrack, *, progress: ProgressFn | None = None) -> di
     detected = model = None
     duration_ms = track.duration_ms
     whisper_ran = False
+    # heard | missing (not installed: made again once it is) | failed (kept, or it would retry forever)
+    ear = "heard"
+    stem: dict[str, Any] = {}
     try:
         sung, detected, model, duration_ms = hear(
-            track.path, language=language, progress=progress, duration_ms=track.duration_ms
+            track.path, language=language, progress=progress, duration_ms=track.duration_ms, stem=stem
         )
         whisper_ran = True
     except ImportError as exc:
+        ear = "missing"
         print(f"lyric_map: Whisper is not installed ({exc}); timing from LRC lines only", file=sys.stderr, flush=True)
     except Exception as exc:
+        ear = "failed"
         print(f"lyric_map: Whisper failed: {exc}", file=sys.stderr, flush=True)
     if not whisper_ran and reference is None:
         raise LyricMapError(
@@ -847,6 +986,14 @@ def map_track(track: CapturedTrack, *, progress: ProgressFn | None = None) -> di
     if progress:
         progress(92, "align")
     result = build_map(reference, sung, duration_ms=duration_ms, whisper_ran=whisper_ran)
+    voice = stem.get("voice")
+    if voice is not None and reference is not None and result.source not in ("whisper", "none"):
+        if progress:
+            progress(94, "time")
+        try:
+            result = refine_with_voice(result, voice, detected or language)
+        except Exception as exc:  # no model for the language, offline first run: keep Whisper's times
+            print(f"lyric_map: forced alignment skipped ({exc})", file=sys.stderr, flush=True)
     payload = map_json(
         track,
         result,
@@ -854,6 +1001,7 @@ def map_track(track: CapturedTrack, *, progress: ProgressFn | None = None) -> di
         synced=reference.synced if reference else False,
         language=detected or language,
         model=model,
+        ear=ear,
         durationMs=duration_ms,
     )
     _write_map(track, payload)

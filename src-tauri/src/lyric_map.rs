@@ -6,6 +6,7 @@
 
 use serde::Serialize;
 use serde_json::Value;
+use std::sync::Mutex;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 
@@ -13,6 +14,9 @@ use crate::song_capture::{run_one_shot, ProgressSink};
 
 const MAP_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const LOOKUP_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// One heavy whole-song job (lyrics, or singer separation) at a time: two at once split the CPU/GPU and both take twice as long.
+pub(crate) static MAP_QUEUE: Mutex<()> = Mutex::new(());
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -37,6 +41,7 @@ pub async fn map_track_lyrics(
         if cached_only {
             return run_one_shot("lyric_map.py", "--lookup", &body, LOOKUP_TIMEOUT, None);
         }
+        let _turn = MAP_QUEUE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let sink: ProgressSink = Box::new(move |progress, stage| {
             let payload = LyricsProgress {
                 id: id.clone(),
